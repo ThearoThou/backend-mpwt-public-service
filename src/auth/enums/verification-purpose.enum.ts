@@ -1,0 +1,5 @@
+export enum VerificationPurpose {
+  REGISTER_ACCOUNT = 'REGISTER_ACCOUNT',
+  RESET_PASSWORD = 'RESET_PASSWORD',
+  CHANGE_PHONE = 'CHANGE_PHONE',
+}
