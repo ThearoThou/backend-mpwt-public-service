@@ -35,7 +35,7 @@ $ npm install
 
 1. Copy `.env.example` to `.env`.
 2. Enter your local PostgreSQL credentials in `.env` and manually create the
-   `mpwt_vehicle_inspection` database.
+   `mpwt_vehicle_inspection_renewal` database.
 3. Never commit `.env` or a real password.
 
 TypeORM synchronization is disabled. Database schema changes are controlled by
