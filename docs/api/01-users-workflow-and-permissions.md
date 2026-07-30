@@ -39,6 +39,9 @@ Approved first-release decisions:
 - Payment is at the inspection station. No online payment gateway is in scope.
 - A `PENDING` payment is created when an appointment is booked, and payment must
   be `CONFIRMED` before an inspection result is recorded.
+- A manually `REJECTED` `PAY_AT_STATION` payment does not block the application:
+  the same payment record may later be confirmed while preserving its rejection
+  history. A `CONFIRMED` payment is final for first-release payment actions.
 - Appointment rescheduling cancels the existing appointment and creates a new
   appointment; `slot_id` is never changed in place.
 - `INSPECTION_FAILED`, `COMPLETED`, and `CANCELLED` are terminal application
@@ -74,7 +77,7 @@ Approved first-release decisions:
 
 | Role | Responsibilities and allowed work | Forbidden work | Data scope and record effects |
 |---|---|---|---|
-| `CITIZEN` | Register, verify an identifier, manage their own profile, use local/mock vehicle data, submit an application, upload replacement documents, book or cancel an eligible appointment, reschedule by cancelling and creating a new appointment, view own payment/inspection/sticker progress, and mark own notifications read. | Cannot review documents, change application workflow status directly, manage stations/slots, confirm payment, record inspection, issue stickers, view another citizen's data, or view audit logs. | Own records only, determined through `renewal_applications.citizen_id` and related application ownership. Submission, document replacement, booking, cancellation, and workflow-relevant changes create timeline events, audit records, and appropriate in-app notifications. Citizens never delete historical records. |
+| `CITIZEN` | Register, verify an identifier, manage their own profile, use local/mock vehicle data, submit an application, upload replacement documents, book or cancel an eligible appointment, reschedule by cancelling and creating a new appointment, view own payment/inspection/sticker progress, and mark own notifications read. | Cannot review documents, change application workflow status directly, manage stations/slots, confirm payment, record inspection, issue stickers, view another citizen's data, or view audit logs. | Own records only, determined through `renewal_applications.citizen_id` and related application ownership. Submission, booking, cancellation, and workflow-relevant changes create their approved timeline/audit/notification effects. Document replacement creates its timeline and audit effects only; it has no approved notification type. Citizens never delete historical records. |
 | `ADMIN` | Manage stations and slots, review applications/documents, request corrections, mark applications ready, manage appointment outcomes, confirm/reject station payment, record inspection, prepare/issue stickers, send announcements, and view audit logs. | Cannot act as `STAFF`, expose audit data to citizens, delete historical government-service records, or bypass ownership/consistency checks. | May read all operational records. Admin workflow actions create timeline events, audit records, and citizen notifications when the action matters to the applicant. Admin does not need an `admin_profiles` model. |
 | `STAFF` | Reserved only. | No login, authorization policy, UI, or workflow action is defined in the first release. | Must be denied until a future approved scope defines responsibilities. |
 
@@ -102,7 +105,7 @@ present an otherwise valid JWT.
 
 | Flow | Approved behavior |
 |---|---|
-| Citizen registration | Validate phone or email and password, create a `CITIZEN` user in `PENDING_VERIFICATION`, create the one-to-one citizen profile, and create a hashed `REGISTER_ACCOUNT` code for the chosen destination. |
+| Citizen registration | Validate phone or email and password, create a `CITIZEN` user in `PENDING_VERIFICATION`, create the one-to-one citizen profile, and create a hashed `REGISTER_ACCOUNT` code for the chosen destination. When both identifiers are supplied, `verificationIdentifier` selects one submitted normalized phone or email destination; it is required in that case. |
 | Phone or email verification | Match a non-expired, unused hashed code, enforce the attempt limit, mark the code used, populate the matching verification timestamp, and set the citizen account to `ACTIVE` immediately. No administrator approval is required. |
 | Verification delivery | SMS/email delivery is not implemented. In local development only, the plaintext code may be returned as a development-only response field or written to a safe development log. It must never be stored in plaintext or exposed by production-style responses. |
 | Citizen login | Accept either phone or email as the login identifier, verify the password hash, require `ACTIVE`, update `last_login_at`, and issue an access-token-only JWT. |
@@ -147,7 +150,7 @@ or notification.
 | 5 | `UNDER_REVIEW` → `READY_FOR_INSPECTION` | Admin accepts review | Current versions exist for `VEHICLE_REGISTRATION_CARD`, `PREVIOUS_INSPECTION_CERTIFICATE`, and `NATIONAL_ID`; all three are `APPROVED`; none is `PENDING` or `REJECTED`. Set `ready_for_inspection_at`. | `DOCUMENTS_APPROVED` and `READY_FOR_INSPECTION`; matching notifications; audit approval. | No normal reverse transition. |
 | 6 | `READY_FOR_INSPECTION` → `INSPECTION_FAILED` | Admin records completed failed inspection | Appointment belongs to the application; payment is `CONFIRMED`; inspection is completed with `FAIL`; failure reason, recorder, and completion time are recorded. | `INSPECTION_FAILED`; `INSPECTION_FAILED` notification; audit result. | No. `INSPECTION_FAILED` is terminal. |
 | 7 | `READY_FOR_INSPECTION` → `COMPLETED` | System after admin issues sticker | A completed inspection has `PASS`; the application sticker is `ISSUED`; set `completed_at`. | `STICKER_ISSUED` then `APPLICATION_COMPLETED`; `APPLICATION_COMPLETED` notification; audit issuance/completion. | No. `COMPLETED` is terminal. |
-| 8 | Eligible non-final status → `CANCELLED` | Citizen or admin cancels | Citizen: owns the application; status is `SUBMITTED`, `CORRECTION_REQUIRED`, or `READY_FOR_INSPECTION`; payment is not `CONFIRMED`; no inspection is `COMPLETED`. Admin: application is non-final and inspection is not completed; a cancellation reason is required. Set `cancelled_at`, `cancelled_by_user_id`, and `cancellation_reason`. | `APPLICATION_CANCELLED`; `APPLICATION_CANCELLED` notification; audit cancellation. | No. `CANCELLED` is terminal. |
+| 8 | Eligible non-final status → `CANCELLED` | Citizen or admin cancels | Citizen: owns the application; status is `SUBMITTED`, `CORRECTION_REQUIRED`, or `READY_FOR_INSPECTION`; payment is not `CONFIRMED`; no inspection is `COMPLETED`. Admin: application is non-final and inspection is not completed; a cancellation reason is required. Set application `cancelled_at`, `cancelled_by_user_id`, and `cancellation_reason`; if a scheduled appointment exists, cancel it with the same fields and release capacity in the same transaction. An admin cancellation after confirmed payment retains that payment unchanged as immutable history, without reversal or refund. | Application: `APPLICATION_CANCELLED`, matching notification, audit. Scheduled appointment when present: `APPOINTMENT_CANCELLED`, matching notification, audit. | No. `CANCELLED` is terminal. |
 
 `READY_FOR_INSPECTION` remains the application status while a citizen books an
 appointment, pays at the station, and awaits inspection. There are no separate
@@ -176,10 +179,9 @@ transition returns any of them to an active status.
 - The database enforces one current document per application/type, unique
   version numbers, positive versions, and positive file sizes. Replacement must
   be transactional.
-- Citizens may view approved portions of document history for their own
-  application according to the final presentation policy; admins may view all
-  versions for review and audit. Historical versions remain stored and are not
-  deleted.
+- Citizens may view only the current version of each document type for their
+  own application. Admins may view all versions for review and audit.
+  Historical versions remain stored and are not deleted.
 - A document status is not silently edited backward. A new replacement version
   is the normal route for changed content.
 
@@ -199,8 +201,9 @@ transition returns any of them to an active status.
   An admin may cancel a scheduled appointment for an operational reason.
   Cancellation records `cancelled_at`, `cancelled_by_user_id`, and
   `cancellation_reason`.
-- Admins mark attendance outcomes as `COMPLETED` or `NO_SHOW`. A cancelled or
-  no-show appointment no longer consumes scheduled capacity.
+- Admins may mark an eligible appointment `NO_SHOW`. `COMPLETED` is set only
+  when the related inspection is completed in the same transaction. A cancelled
+  or no-show appointment no longer consumes scheduled capacity.
 - Rescheduling cancels the current appointment and creates a new appointment in
   one transaction. `slot_id` must never be changed in place because the original
   slot history must be preserved.
@@ -216,16 +219,29 @@ transition returns any of them to an active status.
   as `PENDING`, and uses the approved amount and currency constraints.
 - An admin at the station confirms payment by setting `CONFIRMED`,
   `confirmed_at`, `confirmed_by_user_id`, and `receipt_number`.
+- Confirmation accepts a `PENDING` or previously manually `REJECTED`
+  `PAY_AT_STATION` payment. It never creates a second payment record and keeps
+  any existing `rejected_at`, `rejected_by_user_id`, and `rejection_reason`.
+- Confirmation creates `PAYMENT_CONFIRMED` timeline and notification records
+  plus an audit record. The earlier rejection and later confirmation are both
+  retained in audit history.
 - A `CONFIRMED` payment is required before an inspection result can be recorded.
 - `REJECTED` means the manual station payment was refused or rejected by the
-  station employee. The actor, rejection time, and reason must be recorded.
+  station employee. The actor, rejection time, and reason must be recorded; it
+  creates an audit record only, with no `PAYMENT_FAILED` timeline or
+  notification. A rejected payment cannot be rejected again, but may later be
+  confirmed. The application remains `READY_FOR_INSPECTION` until confirmation
+  and inspection proceed.
 - `FAILED` is reserved for future technical or external-provider failures and
   is not used in the first-release manual payment workflow.
 - Provider fields remain null for first-release `PAY_AT_STATION` payments.
 - Citizens may view their own payment details but cannot edit payment status,
   amounts, invoice data, receipt data, or provider fields.
-- Payment records are retained and never deleted. Exceptional correction after
-  confirmation requires an approved administrative procedure and audit record.
+- Payment records are retained and never deleted. A confirmed payment cannot be
+  confirmed or rejected again in the first release.
+- If an admin cancels an application after payment is `CONFIRMED`, the confirmed
+  payment remains an immutable historical record and its status does not change.
+  It is not reversed, deleted, or automatically refunded.
 
 ## 8. Inspection and sticker workflow
 
@@ -265,15 +281,15 @@ transition returns any of them to an active status.
 
 | Resource | CITIZEN: list/view/create/update/delete | ADMIN: list/view/create/update/delete |
 |---|---|---|
-| User profile | Own only / registration creates user / update own permitted profile fields / no delete | All users / bootstrap provisions admin / manage permitted account status / no delete |
-| Citizen profile | Own only / created with registration / update own permitted fields / no delete | All / controlled internal correction / no delete |
-| Vehicle | Own/linked local mock only / create or select for own request / limited correction subject to snapshot rules / no delete | All / manage or correct local records / no delete |
+| User profile | Own only / registration creates user / view through current-user response / no direct update or delete | All users / list and view / bootstrap provisions admin / manage only permitted account status / no delete |
+| Citizen profile | Own only / created with registration / update through the dedicated citizen-profile route / no delete | No first-release profile-management endpoint / no delete |
+| Vehicle | Own/linked local mock only / list, view, or create for own request / no update or delete | List/view all local records / no create, update, or delete endpoint |
 | Renewal application | Own only / create by submission / cancellation only under approved conditions; no direct workflow-status edit / no delete | All / no citizen-owned creation / review, transition, and cancel under approved rules / no delete |
 | Application document | Own application / upload initial or replacement version / replacement only, not in-place history edit / no delete | All / review current versions and view history / no binary or history delete |
 | Inspection station | View/list active stations / — / — / — | All / create / update active details or status / no delete |
 | Appointment slot | View/list eligible open slots / — / — / — | All / create / update capacity/status / no delete; close or cancel |
-| Appointment | Own only / create booking, cancel before start, reschedule by cancel-and-create / no in-place slot update / no delete | All / create through approved operational flow / mark outcome, cancel, or assist rescheduling / no delete |
-| Payment | Own only / created automatically with booking / no edit / no delete | All / creation is workflow-driven / confirm or reject; exceptional correction requires policy / no delete |
+| Appointment | Own only / create booking, cancel before start, reschedule by cancel-and-create / no in-place slot update / no delete | All / list/view, cancel, or mark `NO_SHOW`; inspection completion alone sets `COMPLETED` / no delete |
+| Payment | Own only / created automatically with booking / no edit / no delete | All / creation is workflow-driven / confirm a `PENDING` or `REJECTED` payment, reject `PENDING` only / no delete |
 | Inspection | Own application result only / — / — / no delete | All / create or record / complete result after confirmed payment / no delete |
 | Sticker | Own application status/certificate only / — / — / no delete | All / create or prepare / mark ready and issue / no delete |
 | Notification | Own only / — / mark read only / no delete | All operational notifications / create announcement / delivery correction if needed / no broad delete |
@@ -293,11 +309,10 @@ approved enum values:
 - `PAYMENT_PENDING` is created when appointment booking creates the payment.
 - `PAYMENT_CONFIRMED` is created when station payment is confirmed.
 - Database status `REJECTED` has no dedicated timeline enum. The exact
-  citizen-facing wording or mapping is a non-blocking implementation decision;
-  no new enum value may be invented.
+  workflow rule is audit only, with no new timeline or notification enum value.
+  Citizen-facing wording is a presentation detail only.
 - `PAYMENT_FAILED` is reserved for the future technical/provider failure flow
-  unless a later approved mapping explicitly uses it for rejected manual
-  payment.
+  and is never used for rejected manual station payment.
 - Timeline metadata may contain non-sensitive operational context. It must not
   contain password hashes, verification-code values/hashes, or internal audit
   details.
@@ -307,16 +322,18 @@ approved enum values:
 - First release creates `IN_APP` notifications only. `EMAIL` and `SMS` are not
   sent.
 - Notifications are created for citizen-visible milestones with an approved
-  `notification_type`, including corrections, document approval, appointment
-  changes, payment pending/confirmation, inspection outcomes, sticker ready,
-  completion, cancellation, and announcements.
+  `notification_type`, including correction requests (not correction
+  resubmission), document approval, appointment changes, payment
+  pending/confirmation, inspection outcomes, sticker ready, completion,
+  cancellation, and announcements.
 - The recipient is the application citizen or an appropriate audience for a
-  `SYSTEM_ANNOUNCEMENT`. Citizens can read only their own notifications and
-  mark them read.
+  `SYSTEM_ANNOUNCEMENT`. A `SYSTEM_ANNOUNCEMENT` is sent to every `ACTIVE`
+  citizen only; there is no audience selection, targeting, or scheduling.
+  Citizens can read only their own notifications and mark them read.
 - No notification enum exists for correction resubmission, sticker issued, or
   rejected manual payment. These actions must not invent new notification
-  types; exact citizen-facing handling for rejected payment remains a
-  non-blocking implementation detail.
+  types. Correction resubmission creates its timeline and audit effects only;
+  rejected manual payment creates its audit effect only.
 
 ## 12. Audit-log rules
 
@@ -340,10 +357,11 @@ approved enum values:
 | Document replacement | Insert the new version, switch `is_current`, link `replaces_document_id`, and create workflow/audit effects together. |
 | Appointment booking and payment creation | Lock/check slot capacity, verify `OPEN`, enforce one scheduled appointment, create the appointment, create the one `PENDING` payment if it does not exist, and create timeline/notification/audit effects atomically. |
 | Appointment cancellation or rescheduling | Change the current appointment to `CANCELLED`, create the replacement appointment when rescheduling, preserve history, release scheduled capacity, and record effects together. |
-| Payment confirmation or rejection | Change payment state and actor/timestamps, assign receipt data on confirmation, and create timeline/notification/audit effects atomically. |
+| Payment confirmation | Accept only `PENDING` or `REJECTED` `PAY_AT_STATION` payment, preserve any rejection fields, set confirmation fields/receipt, and create `PAYMENT_CONFIRMED` timeline, notification, and audit effects atomically. |
+| Payment rejection | Accept only `PENDING` `PAY_AT_STATION` payment, set rejection fields, and create the rejection audit effect only; no `PAYMENT_FAILED` timeline or notification is created. |
 | Inspection completion | Verify appointment/application consistency and confirmed payment, complete inspection, update application status, create or prepare sticker when passed, and record effects together. |
 | Sticker issuance | Record issuance/pickup fields, set `ISSUED`, complete the application only when `PASS` exists, and create timeline/notification/audit effects together. |
-| Application cancellation | Validate actor-specific cancellation rules, cancel a scheduled appointment where required, update application cancellation fields, and create timeline/notification/audit effects atomically. |
+| Application cancellation | Validate actor-specific cancellation rules and lock the application. If a `SCHEDULED` appointment exists, set it `CANCELLED`, record its cancellation fields, release capacity, and create `APPOINTMENT_CANCELLED` timeline, notification, and audit effects. Then cancel the application and create `APPLICATION_CANCELLED` timeline, notification, and audit effects. When an admin cancels after confirmed payment, retain the payment unchanged as immutable history; do not reverse, delete, or refund it. If no scheduled appointment exists, create only the application effects. Roll back all effects together on failure. |
 
 ## 14. Remaining business and implementation decisions
 
@@ -358,13 +376,12 @@ No blocking business decisions remain for Task 4B.
    invoice numbers, receipt numbers, sticker numbers, and certificate numbers.
 3. Exact timing for sticker number, certificate number, and certificate-file
    assignment beyond their required uniqueness.
-4. Notification wording, announcement audience selection, rejected-payment
-   presentation, and in-app delivery retry bookkeeping.
-5. Whether citizens can see every historical document version or only current
-   and rejected/approved versions relevant to them.
-6. Retention duration and exceptional administrative correction procedures for
+4. Notification wording and in-app delivery retry bookkeeping. Announcement
+   audience is fixed to all active citizens. Rejected-payment retry behavior is
+   approved; only its citizen-facing wording remains a presentation detail.
+5. Retention duration and exceptional administrative correction procedures for
    immutable operational records.
-7. Whether the local development verification code is returned in a dedicated
+6. Whether the local development verification code is returned in a dedicated
    optional response field or written only to a safe development log.
 
 ### C. Explicitly out of scope for the first release
@@ -377,6 +394,8 @@ No blocking business decisions remain for Task 4B.
 6. OAuth, social login, biometric login, and identity-provider integration.
 7. Server-side application drafts.
 8. Reinspection or reopening an `INSPECTION_FAILED` application.
+9. Payment refunds and reversals, including refund endpoints, reversal
+   endpoints, refund tables, and new refund/payment statuses.
 
 ## 15. First-release scope limitations
 
