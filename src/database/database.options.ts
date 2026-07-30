@@ -39,10 +39,7 @@ export function createDatabaseOptions(
     password: environment.DB_PASSWORD,
     database: environment.DB_NAME,
     entities: databaseEntities,
-    migrations: [
-      join(process.cwd(), 'src', 'database', 'migrations', '*.ts'),
-      join(process.cwd(), 'dist', 'database', 'migrations', '*.js'),
-    ],
+    migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
     synchronize: false,
     dropSchema: false,
     migrationsRun: false,
