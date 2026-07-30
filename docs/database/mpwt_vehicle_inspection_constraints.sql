@@ -59,12 +59,20 @@ CREATE UNIQUE INDEX uq_provider_transaction
 ON payments (provider_name, provider_transaction_id)
 WHERE provider_transaction_id IS NOT NULL;
 
--- 9. Guarantee that an inspection appointment belongs to the same application.
-ALTER TABLE appointments
-ADD CONSTRAINT uq_appointments_id_application
-UNIQUE (id, application_id);
+-- 9. Provider name is required when a provider transaction ID exists.
+ALTER TABLE payments
+ADD CONSTRAINT chk_payments_provider_name_required
+CHECK (
+  provider_transaction_id IS NULL
+  OR provider_name IS NOT NULL
+);
+
+-- 10. Guarantee that an inspection appointment belongs to the same application.
+-- The supporting UNIQUE (id, application_id) constraint on appointments
+-- is already created by the InitialSchema migration and must not be recreated.
 
 ALTER TABLE inspections
 ADD CONSTRAINT fk_inspections_appointment_application
 FOREIGN KEY (appointment_id, application_id)
-REFERENCES appointments (id, application_id);
+REFERENCES appointments (id, application_id)
+ON DELETE RESTRICT;
