@@ -1,6 +1,7 @@
 export interface EnvironmentVariables {
   NODE_ENV: string;
   PORT: number;
+  API_PREFIX: string;
   DB_HOST: string;
   DB_PORT: number;
   DB_USERNAME: string;
@@ -98,6 +99,7 @@ export function validateEnvironment(
   return {
     NODE_ENV: optionalString(environment, 'NODE_ENV', 'development'),
     PORT: port(environment, 'PORT', 3000),
+    API_PREFIX: optionalString(environment, 'API_PREFIX', '/api/v1'),
     DB_HOST: requiredString(environment, 'DB_HOST'),
     DB_PORT: port(environment, 'DB_PORT'),
     DB_USERNAME: requiredString(environment, 'DB_USERNAME'),
