@@ -1,14 +1,15 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { RefreshSession } from './entities/refresh-session.entity';
 import { VerificationCode } from './entities/verification-code.entity';
 import { AuthController } from './auth.controller';
+import { AuthSecurityModule } from './auth-security.module';
 import { AuthService } from './auth.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([VerificationCode, RefreshSession])],
+  imports: [TypeOrmModule.forFeature([VerificationCode]), AuthSecurityModule],
   controllers: [AuthController],
   providers: [AuthService],
+  exports: [AuthSecurityModule],
 })
 export class AuthModule {}
