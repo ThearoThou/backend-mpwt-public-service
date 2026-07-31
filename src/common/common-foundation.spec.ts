@@ -64,7 +64,7 @@ describe('common foundation', () => {
     const json = jest.fn();
     const host = {
       switchToHttp: () => ({
-        getRequest: () => ({ originalUrl: '/api/v1/example' }),
+        getRequest: () => ({ originalUrl: '/api/example' }),
         getResponse: () => ({ status, json }),
       }),
     } as unknown as ArgumentsHost;
@@ -98,7 +98,7 @@ describe('common foundation', () => {
             rule: 'max',
           },
         ],
-        path: '/api/v1/example',
+        path: '/api/example',
       }),
     );
   });
@@ -153,9 +153,9 @@ describe('common foundation', () => {
   });
 
   it('normalizes the API prefix to the NestJS form', () => {
-    expect(normalizeApiPrefix('/api/v1')).toBe('api/v1');
-    expect(normalizeApiPrefix('api/v1')).toBe('api/v1');
-    expect(normalizeApiPrefix(undefined)).toBe('api/v1');
+    expect(normalizeApiPrefix('/api')).toBe('api');
+    expect(normalizeApiPrefix('api')).toBe('api');
+    expect(normalizeApiPrefix(undefined)).toBe('api');
   });
 
   it('extracts only safe request context fields', () => {

@@ -205,7 +205,7 @@ export function validateEnvironment(
   return {
     NODE_ENV,
     PORT: port(environment, 'PORT', 3000),
-    API_PREFIX: optionalString(environment, 'API_PREFIX', '/api/v1'),
+    API_PREFIX: optionalString(environment, 'API_PREFIX', '/api'),
     DB_HOST: requiredString(environment, 'DB_HOST'),
     DB_PORT: port(environment, 'DB_PORT'),
     DB_USERNAME: requiredString(environment, 'DB_USERNAME'),

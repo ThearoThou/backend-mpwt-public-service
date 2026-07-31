@@ -36,7 +36,7 @@ describe('common foundation (e2e)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication<App>();
-    configureApiApplication(app, '/api/v1');
+    configureApiApplication(app, '/api');
     await app.init();
   });
 
@@ -46,11 +46,14 @@ describe('common foundation (e2e)', () => {
 
   it('applies the API prefix and uses the approved validation error response', async () => {
     const success = await request(app.getHttpServer())
-      .get('/api/v1/foundation-probe')
+      .get('/api/foundation-probe')
       .expect(200);
     const validationError = await request(app.getHttpServer())
-      .get('/api/v1/foundation-probe?limit=101')
+      .get('/api/foundation-probe?limit=101')
       .expect(400);
+    const legacyPrefix = await request(app.getHttpServer())
+      .get('/api/v1/foundation-probe')
+      .expect(404);
     const root = await request(app.getHttpServer()).get('/').expect(404);
 
     expect(success.body).toEqual({
@@ -61,7 +64,11 @@ describe('common foundation (e2e)', () => {
       code: 'VALIDATION_ERROR',
       message: 'Request validation failed',
       details: [expect.objectContaining({ field: 'limit', rule: 'max' })],
-      path: '/api/v1/foundation-probe?limit=101',
+      path: '/api/foundation-probe?limit=101',
+    });
+    expect(legacyPrefix.body).toMatchObject({
+      statusCode: 404,
+      code: 'RESOURCE_NOT_FOUND',
     });
     expect(root.body).toMatchObject({
       statusCode: 404,

@@ -1,4 +1,4 @@
-const DEFAULT_API_PREFIX = '/api/v1';
+const DEFAULT_API_PREFIX = '/api';
 
 export function normalizeApiPrefix(prefix: string | undefined): string {
   const normalized = (prefix ?? DEFAULT_API_PREFIX)

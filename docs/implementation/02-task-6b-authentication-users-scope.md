@@ -113,8 +113,8 @@ Cleanup jobs may use the expiry index later; no cleanup endpoint is added.
   production.
 - `SameSite` is `lax` by default; validation permits only `lax` or `strict`.
 - Derive the path from `API_PREFIX` and constrain it to the auth path where
-  practical (normally `<API_PREFIX>/auth`); do not duplicate a cookie path in
-  environment configuration.
+  practical (with `API_PREFIX=/api`, normally `/api/auth`); do not duplicate a
+  cookie path in environment configuration.
 - A rotated cookie's expiry/max-age uses only the remaining time until the
   row's original fixed `expiresAt`.
 - Logout always clears the same cookie attributes/path even if no valid session
