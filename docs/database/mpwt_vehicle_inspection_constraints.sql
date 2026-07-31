@@ -76,3 +76,49 @@ ADD CONSTRAINT fk_inspections_appointment_application
 FOREIGN KEY (appointment_id, application_id)
 REFERENCES appointments (id, application_id)
 ON DELETE RESTRICT;
+
+-- 11. Refresh-session credential integrity. Raw refresh tokens are never stored.
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_token_hash_not_blank
+CHECK (btrim(token_hash) <> '');
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_expires_after_created
+CHECK (expires_at > created_at);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_last_used_after_created
+CHECK (last_used_at IS NULL OR last_used_at >= created_at);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_revoked_after_created
+CHECK (revoked_at IS NULL OR revoked_at >= created_at);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_reuse_detected_after_created
+CHECK (reuse_detected_at IS NULL OR reuse_detected_at >= created_at);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_reuse_requires_revocation
+CHECK (reuse_detected_at IS NULL OR revoked_at IS NOT NULL);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT chk_refresh_sessions_revocation_reason_pair
+CHECK (
+  (revoked_at IS NULL AND revocation_reason IS NULL)
+  OR (revoked_at IS NOT NULL AND revocation_reason IS NOT NULL)
+);
+
+ALTER TABLE refresh_sessions
+ADD CONSTRAINT fk_refresh_sessions_user
+FOREIGN KEY (user_id)
+REFERENCES users (id)
+ON DELETE CASCADE;
+
+-- The primary key supports session lookup by signed session ID.
+CREATE INDEX idx_refresh_sessions_user_active
+ON refresh_sessions (user_id, expires_at)
+WHERE revoked_at IS NULL;
+
+CREATE INDEX idx_refresh_sessions_expires_at
+ON refresh_sessions (expires_at);

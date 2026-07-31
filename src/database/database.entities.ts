@@ -3,6 +3,7 @@ import { AuditLog } from '../activity/entities/audit-log.entity';
 import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
 import { VerificationCode } from '../auth/entities/verification-code.entity';
+import { RefreshSession } from '../auth/entities/refresh-session.entity';
 import { Inspection } from '../inspections/entities/inspection.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { Payment } from '../payments/entities/payment.entity';
@@ -18,6 +19,7 @@ export const databaseEntities = [
   User,
   CitizenProfile,
   VerificationCode,
+  RefreshSession,
   Vehicle,
   RenewalApplication,
   ApplicationDocument,

@@ -13,6 +13,7 @@ import { RenewalApplication } from '../../applications/entities/renewal-applicat
 import { ApplicationTimelineEvent } from '../../activity/entities/application-timeline-event.entity';
 import { AuditLog } from '../../activity/entities/audit-log.entity';
 import { VerificationCode } from '../../auth/entities/verification-code.entity';
+import { RefreshSession } from '../../auth/entities/refresh-session.entity';
 import { Inspection } from '../../inspections/entities/inspection.entity';
 import { Payment } from '../../payments/entities/payment.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
@@ -98,6 +99,11 @@ export class User {
     { cascade: false },
   )
   verificationCodes!: VerificationCode[];
+
+  @OneToMany(() => RefreshSession, (refreshSession) => refreshSession.user, {
+    cascade: false,
+  })
+  refreshSessions!: RefreshSession[];
 
   @OneToMany(() => Vehicle, (vehicle) => vehicle.linkedCitizen, {
     cascade: false,

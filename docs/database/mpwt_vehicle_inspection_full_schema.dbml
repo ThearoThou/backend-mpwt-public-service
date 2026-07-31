@@ -201,6 +201,29 @@ Table verification_codes {
   Note: 'Store a hashed OTP, never the plain code. user_id may be null during account registration.'
 }
 
+Table refresh_sessions {
+  id uuid [pk]
+
+  user_id uuid [not null]
+  token_hash varchar(255) [not null]
+
+  expires_at timestamptz [not null]
+  last_used_at timestamptz
+  revoked_at timestamptz
+  revocation_reason varchar(100)
+  reuse_detected_at timestamptz
+
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, expires_at) [name: 'idx_refresh_sessions_user_active']
+    expires_at [name: 'idx_refresh_sessions_expires_at']
+  }
+
+  Note: 'Stores only a hidden refresh-token hash. The primary key supports signed session-ID lookup. idx_refresh_sessions_user_active is partial where revoked_at IS NULL; expiration cleanup uses idx_refresh_sessions_expires_at. User deletion cascades these security-credential rows. PostgreSQL checks require a nonblank hash, expiry after creation, all recorded moments not before creation, reuse detection only after revocation, and revoked_at/revocation_reason as a pair.'
+}
+
 Table vehicles {
   id uuid [pk]
 
@@ -578,6 +601,7 @@ Table audit_logs {
 Ref: citizen_profiles.user_id - users.id
 
 Ref: verification_codes.user_id > users.id
+Ref: refresh_sessions.user_id > users.id [delete: cascade]
 
 Ref: vehicles.linked_citizen_id > users.id
 
@@ -652,7 +676,16 @@ Ref: audit_logs.application_id > renewal_applications.id
 //     FOREIGN KEY (appointment_id, application_id)
 //     REFERENCES appointments (id, application_id).
 //
-// 12. NestJS service validation:
+// 12. Refresh sessions:
+//     - token_hash must not be blank.
+//     - expires_at must be after created_at.
+//     - last_used_at, revoked_at, and reuse_detected_at, when present, must not
+//       be before created_at.
+//     - reuse_detected_at requires revoked_at.
+//     - revoked_at and revocation_reason are present together or absent together.
+//     - the active-user index is partial: (user_id, expires_at) WHERE revoked_at IS NULL.
+//
+// 13. NestJS service validation:
 //     - CORRECTION_REQUIRED requires current_correction_reason.
 //     - CANCELLED application requires cancellation fields.
 //     - REJECTED document requires rejection_reason.

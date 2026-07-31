@@ -8,8 +8,8 @@ an API contract, endpoint list, DTO, controller, service, guard, or database
 rule.
 
 The source of truth reviewed for this document is the approved DBML,
-PostgreSQL constraint document, 15 TypeORM entities, 18 enum definitions, and
-the NestJS module structure. The current modules group work into auth, users,
+PostgreSQL constraint document, 16 TypeORM entities, 18 enum definitions, and
+three approved migrations. The current modules group work into auth, users,
 vehicles, applications, scheduling, payments, inspections, stickers,
 notifications, activity, files, and admin areas.
 
@@ -27,8 +27,12 @@ Approved first-release decisions:
 - Citizens may log in with either phone or email.
 - A successfully verified citizen becomes `ACTIVE` immediately; administrator
   approval is not required.
-- Authentication uses access-token-only JWTs in the first release. Refresh
-  tokens and server-side token revocation are out of scope.
+- Authentication uses 30-minute Bearer access tokens plus fixed seven-day,
+  rotating refresh sessions. Refresh credentials are HttpOnly cookies and their
+  server-side records contain only token hashes.
+- Every access token is bound to one refresh session and contains `sub` (user
+  ID), `role` (user role), `sid` (refresh-session ID), and `typ: 'access'`.
+  `sid` is an identifier, not a secret.
 - Verification codes are stored only as hashes. SMS and email delivery are not
   implemented; a plaintext development code may be exposed only in a local
   development response or safe development log.
@@ -98,7 +102,11 @@ present an otherwise valid JWT.
 - Verification codes have a destination, purpose, hidden `code_hash`, expiry,
   usage timestamp, and attempt count. They can be associated with a user or
   have a null `user_id` during registration.
-- There is no session, refresh-token, OAuth, token-revocation, outbound-delivery,
+- Refresh sessions have a user foreign key, hidden token hash, fixed expiry,
+  usage/revocation/reuse timestamps, and revocation reason. User deletion may
+  cascade-delete these credential records; it does not imply a public
+  user-delete route.
+- There is no OAuth, social-login, biometric, external-identity, outbound-delivery,
   or administrator-approval table.
 
 ### B. Approved minimum first-release behavior
@@ -106,14 +114,16 @@ present an otherwise valid JWT.
 | Flow | Approved behavior |
 |---|---|
 | Citizen registration | Validate phone or email and password, create a `CITIZEN` user in `PENDING_VERIFICATION`, create the one-to-one citizen profile, and create a hashed `REGISTER_ACCOUNT` code for the chosen destination. When both identifiers are supplied, `verificationIdentifier` selects one submitted normalized phone or email destination; it is required in that case. |
-| Phone or email verification | Match a non-expired, unused hashed code, enforce the attempt limit, mark the code used, populate the matching verification timestamp, and set the citizen account to `ACTIVE` immediately. No administrator approval is required. |
+| Phone or email verification | Match a non-expired, unused hashed code, enforce the attempt limit, mark the code used, populate the matching verification timestamp, set the citizen account to `ACTIVE`, create one refresh-session record, return an access token bound to that session in `AuthTokenResponse`, and set the refresh cookie. No administrator approval is required. |
 | Verification delivery | SMS/email delivery is not implemented. In local development only, the plaintext code may be returned as a development-only response field or written to a safe development log. It must never be stored in plaintext or exposed by production-style responses. |
-| Citizen login | Accept either phone or email as the login identifier, verify the password hash, require `ACTIVE`, update `last_login_at`, and issue an access-token-only JWT. |
-| Admin login | Apply the same credential/status checks, require `role = ADMIN`, and issue an access-token-only JWT. Admin accounts are created through a controlled one-time bootstrap process, not public registration. |
-| Logout | Remove the access token on the client. Server-side revocation and refresh-token invalidation are out of scope. |
+| Citizen login | Accept either phone or email as the login identifier, verify the password hash, require `ACTIVE`, update `last_login_at`, create one refresh session for the device/browser, return a 30-minute-maximum access token bound to that session, and set the fixed-seven-day refresh cookie. Multiple devices/browsers may hold separate sessions. |
+| Admin login | Apply the same credential/status checks, require `role = ADMIN`, and create the same per-device refresh session/access-token pair. Admin accounts are created through a controlled one-time bootstrap process, not public registration. |
+| Refresh | Authenticate a refresh credential from its HttpOnly cookie, lock the matching session, verify signature/session ID/user/hash/fixed expiry/revocation, require `ACTIVE`, rotate the token for that same row, update usage data, preserve the original `expires_at`, and return a replacement access token bound to that session in `AuthTokenResponse` plus a rotated cookie. Its expiry never exceeds that session's `expires_at`. Any invalid, missing, expired, revoked, or reused refresh credential returns the same safe `AUTH_TOKEN_INVALID` response. Reuse of a rotated token revokes the affected session and immediately blocks its bound access tokens. |
+| Logout | Use the refresh cookie when present to revoke only its matching current session, immediately blocking access tokens bound to that session, then clear the cookie. It is idempotent: missing, expired, invalid, or already-revoked cookies are cleared without exposing session existence. Logging out one device/browser does not affect another active session. |
 | Current-user profile | Return the authenticated user's own user and applicable citizen-profile data. Exclude password and verification-code hashes. |
 | Password-reset request | Create a hashed `RESET_PASSWORD` code for the matched phone or email without revealing whether an account exists. |
-| Password-reset completion | Verify the reset code, replace `password_hash`, and mark the code used. Existing access tokens cannot be centrally revoked in the first-release token model. |
+| Password-reset completion | Verify the reset code, replace `password_hash`, mark the code used, and revoke every active refresh session for that user, immediately blocking all access tokens bound to those sessions. It does not create a replacement session. |
+| Account disable | When an administrator changes a user to `DISABLED`, revoke every active refresh session inside the same user-status transaction, immediately blocking all access tokens bound to those sessions. Returning a user to `ACTIVE` never restores or creates sessions. |
 
 ### C. Authentication implementation constraints
 
@@ -122,9 +132,25 @@ present an otherwise valid JWT.
   attempt-limited.
 - The initial administrator is provisioned by a controlled bootstrap process.
 - There is no public administrator-registration endpoint.
-- Refresh-token persistence, token rotation, server-side revocation, OAuth,
-  social login, biometric login, and identity-provider integration are outside
-  the first-release scope.
+- Session IDs are never returned as separate JSON response properties. The
+  non-secret `sid` is intentionally contained inside signed access-token and
+  refresh-token JWT claims.
+- Raw refresh tokens, refresh-cookie values, token hashes, revocation data, and
+  standalone session IDs are never returned in JSON or included in audit data.
+- Every access token carries `sub`, `role`, `sid`, and `typ: 'access'`; `sid`
+  is the non-secret refresh-session identifier. For every protected request,
+  the future access-token guard verifies the JWT signature and expiry,
+  `typ = 'access'`, that the user still exists and is `ACTIVE`, that `sid`
+  belongs to that user, and that the refresh session is neither revoked nor
+  expired.
+- Access tokens have a maximum 30-minute lifetime. When issuing an access
+  token near the fixed seven-day session deadline, its expiry must be no later
+  than that refresh session's `expires_at`.
+- Refresh rotation never extends the initial seven-day session deadline. There
+  is no refresh-session listing, device-management UI/route, or logout-all
+  route in the first release.
+- Passport, OAuth, social login, biometric login, and external identity-provider
+  integration are outside the first-release scope.
 
 ## 4. Renewal application workflow
 
@@ -353,6 +379,12 @@ approved enum values:
 
 | Operation | Transaction boundary and reason |
 |---|---|
+| Verification plus session creation | Lock the eligible registration code/user, consume the code, activate and timestamp the user, create one refresh-session row, and prepare the `AuthTokenResponse`/cookie only after the transaction succeeds. |
+| Login plus session creation | Verify credentials and `ACTIVE` status, update `last_login_at`, create one refresh-session row, and issue the response/cookie as one unit so login cannot partially update the user or create a session. |
+| Refresh rotation | Lock the refresh-session row by its signed session ID; verify the signature, user, hidden hash, fixed expiry, and revocation state; rotate its hash and usage data without moving `expires_at`. Reused rotated credentials revoke that affected session in this transaction. |
+| Current-session logout | Revoke only the cookie's matching refresh session when it is valid and always clear the cookie; failures never disclose token/session existence. |
+| Password-reset completion | Consume the eligible reset code, replace the password hash, and revoke every active refresh session for the user together. |
+| Account disable | In the existing user-status transaction, set `DISABLED`, revoke every active refresh session, and create the approved audit effect together. |
 | Application submission | Create application, snapshots, all three initial documents, timeline, notification, and audit together; prevent a partial submission or active-application race. |
 | Document replacement | Insert the new version, switch `is_current`, link `replaces_document_id`, and create workflow/audit effects together. |
 | Appointment booking and payment creation | Lock/check slot capacity, verify `OPEN`, enforce one scheduled appointment, create the appointment, create the one `PENDING` payment if it does not exist, and create timeline/notification/audit effects atomically. |
@@ -390,8 +422,9 @@ No blocking business decisions remain for Task 4B.
 2. External MPWT vehicle-registry integration.
 3. Online gateway, bank QR, or card payment processing.
 4. Email/SMS verification or notification delivery.
-5. Refresh-token persistence, token rotation, and server-side token revocation.
-6. OAuth, social login, biometric login, and identity-provider integration.
+5. Refresh-session listing/device management, logout-all, and restoring revoked
+   sessions after account activation.
+6. OAuth, Passport, social login, biometric login, and identity-provider integration.
 7. Server-side application drafts.
 8. Reinspection or reopening an `INSPECTION_FAILED` application.
 9. Payment refunds and reversals, including refund endpoints, reversal
@@ -402,8 +435,12 @@ No blocking business decisions remain for Task 4B.
 - This is a local/mock vehicle-data workflow, not a production registry
   integration.
 - The service has no application draft state and no online payment gateway.
-- Authentication uses short-lived access-token-only JWTs; logout is client-side
-  and issued tokens are not centrally revocable.
+- Authentication uses session-bound, 30-minute-maximum Bearer access tokens
+  and seven-day fixed refresh sessions. Refresh cookies are HttpOnly,
+  hash-backed server-side, rotated without extending expiry, and can be
+  revoked only by the approved current-session, password-reset,
+  account-disable, and token-reuse rules; each revocation immediately blocks
+  access tokens bound to the affected session or sessions.
 - Verification and notifications do not use real SMS or email delivery.
 - Notifications are in-app only, and audit logs remain entirely internal.
 - Historical application, document, payment, appointment, inspection, sticker,

@@ -4,7 +4,7 @@
 
 This document defines the documentation-only REST contract for the first release of the MPWT Vehicle Inspection Renewal Service. It is not an implementation specification for controllers, DTO classes, authentication, storage, or database changes.
 
-The workflow and permission source of truth is [Task 4A — users, workflow, and permissions](01-users-workflow-and-permissions.md). Data shapes and constraints are derived from `docs/database/mpwt_vehicle_inspection_full_schema.dbml`, `docs/database/mpwt_vehicle_inspection_constraints.sql`, the 15 current TypeORM entities and their enums. The existing NestJS modules establish the bounded domains only; this document does not add modules or routes in code.
+The workflow and permission source of truth is [Task 4A — users, workflow, and permissions](01-users-workflow-and-permissions.md). Data shapes and constraints are derived from `docs/database/mpwt_vehicle_inspection_full_schema.dbml`, `docs/database/mpwt_vehicle_inspection_constraints.sql`, the 16 current TypeORM entities, 18 enums, and three migrations. The existing NestJS modules establish the bounded domains only; this document does not add modules or routes in code.
 
 No inconsistency was found between Task 4A, the approved schema, and the current entities that affects an endpoint below. When a format or limit is absent from those sources, it is explicitly left as a non-blocking implementation constant.
 
@@ -12,7 +12,9 @@ No inconsistency was found between Task 4A, the approved schema, and the current
 
 - Base route is `/api/v1`. All normal bodies are UTF-8 JSON; only document submission and correction replacement use `multipart/form-data`.
 - Internal path identifiers are UUIDs. `referenceNumber` is the public application identifier for citizen display and lookup.
-- Access-token-only Bearer JWT authentication is used. There are no refresh tokens, token-revocation storage, `GET /auth/me`, or server logout endpoint; logout is client-side token removal. The sole current-user route is `GET /users/me`.
+- Authentication uses a session-bound, maximum-30-minute Bearer access token plus a fixed seven-day refresh session. Every access token contains `sub` (user ID), `role` (user role), `sid` (refresh-session ID), and `typ: 'access'`; `sid` is an identifier, not a secret. The raw refresh token exists only in an HttpOnly cookie; PostgreSQL keeps only its hash. Every refresh rotates the credential without extending the original session `expiresAt`, and an access token issued near that deadline must expire no later than `expiresAt`. There is no `GET /auth/me`; the sole current-user route is `GET /users/me`.
+- Login and successful account verification each create one per-device/browser refresh session. Logout revokes only the current session and immediately blocks its bound access tokens; password-reset confirmation and disabling a user revoke all active user sessions and immediately block all access tokens bound to them; reuse of a rotated token revokes the affected session and immediately blocks its access tokens. Logging out one device/browser does not affect another active device/browser session. There is no session-management/listing route, device-management UI, or logout-all route.
+- No Passport, OAuth, social login, biometric login, or external identity provider is in scope.
 - Citizens authenticate with one phone or email identifier. Registration accepts phone, email, or both, but at least one is required. Successful verification activates the citizen.
 - Verification codes are stored as hashes. A plaintext `developmentCode` can appear only in a local-development response; it is never persisted or returned in production-style responses.
 - `CITIZEN` and `ADMIN` are the only first-release API roles. `STAFF` remains reserved without endpoints. The initial admin is a controlled bootstrap concern, never public registration.
@@ -30,9 +32,10 @@ No inconsistency was found between Task 4A, the approved schema, and the current
 | Successful response | `{ "data": ... }`; use the listed success status. A successful empty collection is `200` with `data: []`. |
 | Paginated response | `{ "data": [...], "meta": { "page": 1, "limit": 20, "total": 100, "totalPages": 5 } }`. |
 | Error response | `{ "statusCode", "code", "message", "details?", "timestamp", "path" }`, with `application/json`. `details` is an array of safe field-level validation errors. |
-| Properties | camelCase in the API. Database snake_case, entity internals, raw entities, raw SQL errors, stack traces, password hashes, verification-code hashes, access tokens, private storage keys, and internal paths are never returned. |
+| Properties | camelCase in the API. Database snake_case, entity internals, raw entities, raw SQL errors, stack traces, password hashes, verification-code hashes, refresh-token hashes, raw refresh tokens, refresh-cookie values, revocation data, standalone session IDs, access tokens except the approved `AuthTokenResponse`, private storage keys, and internal paths are never returned. The non-secret `sid` is intentionally contained inside signed access-token and refresh-token JWT claims, never as a separate JSON response property. |
 | Dates and moments | Date-only values are `YYYY-MM-DD`; moments are ISO 8601 date-time strings with offset/UTC, sourced from PostgreSQL `timestamptz` values. |
-| Authentication | Protected calls use `Authorization: Bearer <access-token>`. A disabled user is rejected even when the JWT is structurally valid. |
+| Authentication | Protected calls use `Authorization: Bearer <access-token>`. The future access-token guard verifies JWT signature and expiry, `typ = 'access'`, that the user still exists and is `ACTIVE`, that `sid` belongs to that user, and that the refresh session is neither revoked nor expired. Login, verification, and refresh return `AuthTokenResponse`; refresh credentials are never JSON fields. |
+| Refresh cookie | Always `HttpOnly`; `Secure` is required in production; `SameSite=Lax` by default (only `lax` or `strict` are approved). Derive its path from `API_PREFIX` and limit it to the auth path where practical. Its expiry is the remaining fixed session lifetime, never a renewed seven days. |
 | Not found/conflict | An unavailable resource returns a stable not-found code. Unique/state/capacity conflicts return the specific `409` code where available, otherwise `CONFLICT`. |
 | Write safety | Unknown and server-managed fields are rejected. Requests do not mass assign roles, statuses, hash fields, snapshots, timestamps, foreign keys, or audit fields. |
 
@@ -40,7 +43,7 @@ No inconsistency was found between Task 4A, the approved schema, and the current
 
 Public means no token. `CITIZEN` routes additionally enforce ownership. `ADMIN` routes are role restricted and may access the relevant system-wide records. The shared station/slot discovery routes and current-user route accept authenticated citizens and admins as stated in the inventory.
 
-Invalid credentials and missing, invalid, or expired JWTs use `401` without revealing a password, code, account existence, or token parsing detail. An inactive or disabled account uses `403`, as do authorization and ownership failures; protected existence is not disclosed merely to distinguish an unowned resource from a missing one. All state-changing actions use the authenticated actor for `...ByUserId`, timeline actor, notification/audit effects where the workflow requires them.
+Invalid, missing, expired, revoked, or reused access/refresh credentials use `401 AUTH_TOKEN_INVALID` without revealing a password, code, account existence, token parsing, row, hash, expiry, revocation, or reuse detail. Refresh first validates the signed refresh credential, locks its matching session, verifies user/hash/session/fixed expiry/revocation, and requires `ACTIVE`; a disabled account uses `403 AUTH_ACCOUNT_DISABLED`. Protected access-token requests also reload/check the active user. Authorization and ownership failures use `403`; protected existence is not disclosed merely to distinguish an unowned resource from a missing one. All state-changing actions use the authenticated actor for `...ByUserId`, timeline actor, notification/audit effects where the workflow requires them.
 
 ## 5. Pagination, filtering, and sorting
 
@@ -64,7 +67,7 @@ All list routes in the inventory are pageable unless expressly a small applicati
 
 ## 6. Endpoint inventory
 
-**Counts:** 75 endpoints total: 6 public, 4 authenticated shared, 28 citizen-only, and 37 admin-only. There are 2 multipart endpoints, 24 transactional endpoints, 70 essential endpoints, and 5 optional convenience endpoints. A shared endpoint is counted once, not once per role.
+**Counts:** 77 endpoints total: 6 public, 2 refresh-cookie/session, 4 authenticated shared, 28 citizen-only, and 37 admin-only. There are 2 multipart endpoints, 27 transactional operations, 72 essential endpoints, and 5 optional convenience endpoints. A shared endpoint is counted once, not once per role.
 
 `Tx` denotes an explicit transactional unit. `C` means citizen ownership; `A` means an administrator's system-wide access; `self` means the authenticated user only.
 
@@ -73,9 +76,11 @@ All list routes in the inventory are pageable unless expressly a small applicati
 | Auth | `POST /auth/register` | Public | JSON | `RegisterRequest` → `RegistrationResponse` | 201 | Yes | Essential |
 | Auth | `POST /auth/verify` | Public | JSON | `VerifyAccountRequest` → `AuthTokenResponse` | 200 | Yes | Essential |
 | Auth | `POST /auth/resend-verification` | Public | JSON | `ResendVerificationRequest` → `RegistrationResponse` | 202 | No | Essential |
-| Auth | `POST /auth/login` | Public | JSON | `LoginRequest` → `AuthTokenResponse` | 200 | No | Essential |
+| Auth | `POST /auth/login` | Public | JSON | `LoginRequest` → `AuthTokenResponse` + refresh cookie | 200 | Yes | Essential |
 | Auth | `POST /auth/password-reset/request` | Public | JSON | `PasswordResetRequest` → `RegistrationResponse` | 202 | No | Essential |
 | Auth | `POST /auth/password-reset/confirm` | Public | JSON | `PasswordResetConfirmRequest` → `RegistrationResponse` | 200 | Yes | Essential |
+| Auth | `POST /auth/refresh` | Refresh cookie/session | Cookie, no JSON body | none → `AuthTokenResponse` + rotated refresh cookie | 200 | Yes | Essential |
+| Auth | `POST /auth/logout` | Refresh cookie/session when available | Cookie, no JSON body | none → safe message response; clears refresh cookie | 200 | Yes | Essential |
 | Users/profile | `GET /users/me` | CITIZEN or ADMIN / self | JSON | none → `CurrentUserResponse` | 200 | No | Essential |
 | Users/profile | `PATCH /users/me/citizen-profile` | CITIZEN / self | JSON | `UpdateCitizenProfileRequest` → `CitizenProfileResponse` | 200 | No | Essential |
 | Admin users | `GET /admin/users` | ADMIN | JSON | query → `UserSummary[]` page | 200 | No | Essential |
@@ -153,13 +158,15 @@ There are no generic status PATCH routes, deletion routes, registry routes, dire
 | Endpoint | Request and validation | Response / errors | Security and rate limit |
 | --- | --- | --- | --- |
 | Register | `RegisterRequest`: password plus phone and/or email, citizen profile fields, and `verificationIdentifier` when both identifiers are supplied. Require one normalized identifier; reject duplicate identifiers and any role/status input. | `201 RegistrationResponse`; `USER_IDENTIFIER_CONFLICT`, `VALIDATION_ERROR`. | Rate limit by client/IP and normalized identifier. Creates a pending citizen and hashed registration code; no public admin creation. |
-| Verify | `VerifyAccountRequest`: destination/identifier and code. The endpoint selects `REGISTER_ACCOUNT` internally. | `200 AuthTokenResponse`; invalid/expired/exhausted-code errors. Successful code activation produces access token. | Rate limit; compare only hashes. `developmentCode` is never accepted as an authorization bypass. |
+| Verify | `VerifyAccountRequest`: destination/identifier and code. The endpoint selects `REGISTER_ACCOUNT` internally. | `200 AuthTokenResponse` plus refresh cookie; invalid/expired/exhausted-code errors. Successful code activation creates one refresh session and access token. | Rate limit; compare only hashes. `developmentCode` is never accepted as an authorization bypass. |
 | Resend verification | `ResendVerificationRequest`: identifier. The endpoint selects `REGISTER_ACCOUNT` internally. | `202 RegistrationResponse`, uniformly safe where practical. | Rate limit. Creates/replaces only permitted verification-code state; delivery is not implemented. |
-| Login | `LoginRequest`: a single `identifier` and password. | `200 AuthTokenResponse`; `AUTH_INVALID_CREDENTIALS`, `AUTH_ACCOUNT_NOT_ACTIVE`, or `AUTH_ACCOUNT_DISABLED`. | Rate limit; accept normalized phone or email. Matched account must be ACTIVE. |
+| Login | `LoginRequest`: a single `identifier` and password. | `200 AuthTokenResponse` plus refresh cookie; `AUTH_INVALID_CREDENTIALS`, `AUTH_ACCOUNT_NOT_ACTIVE`, or `AUTH_ACCOUNT_DISABLED`. | Rate limit; accept normalized phone or email. Matched account must be ACTIVE. Login and session creation are transactional. |
 | Password reset request | `PasswordResetRequest`: identifier. | Always `202 RegistrationResponse` with a generic message. | Rate limit and prevent account enumeration. No plaintext code outside local development behavior. |
-| Password reset confirm | `PasswordResetConfirmRequest`: identifier, code, new password. The endpoint selects `RESET_PASSWORD` internally. | `200 RegistrationResponse`; code errors or `VALIDATION_ERROR`. | Rate limit; code is hash checked and marked used atomically with password hash replacement. |
+| Password reset confirm | `PasswordResetConfirmRequest`: identifier, code, new password. The endpoint selects `RESET_PASSWORD` internally. | `200 RegistrationResponse`; code errors or `VALIDATION_ERROR`. | Rate limit; code is hash checked and marked used atomically with password hash replacement and all active user-session revocations. No replacement session is created. |
+| Refresh | No JSON request body; authenticate only with the refresh cookie. | `200 AuthTokenResponse` and rotated refresh cookie; invalid/missing/expired/revoked/reused credentials return `401 AUTH_TOKEN_INVALID`; disabled account returns `AUTH_ACCOUNT_DISABLED`. | Transactionally lock and validate the signed session ID, user, hidden hash, fixed expiry, and revocation state; rotate the same row and update usage without extending `expiresAt`. Do not disclose which validation failed. |
+| Logout | No JSON request body; uses the refresh cookie when available. | `200` safe message response and cleared refresh cookie. | Transactionally revoke only the matching current session when valid. Always clear the cookie and remain idempotent without disclosing whether it was missing, expired, revoked, invalid, or reused. |
 
-`RegistrationResponse` does not disclose a password, hash, or code. In local development only, a separately documented `DevelopmentVerificationResponse` may be included as `data.development` to aid local testing; it contains an ephemeral `developmentCode` and may expose its approved `VerificationPurpose` value. It must be omitted outside local development. Logout is entirely client-side token removal; no REST endpoint, server session, revocation list, or invalidation storage exists.
+`RegistrationResponse` does not disclose a password, hash, or code. In local development only, a separately documented `DevelopmentVerificationResponse` may be included as `data.development` to aid local testing; it contains an ephemeral `developmentCode` and may expose its approved `VerificationPurpose` value. It must be omitted outside local development. `AuthTokenResponse` contains only the approved access-token response fields. The non-secret `sid` is intentionally inside the signed access-token JWT (and inside the signed refresh-token JWT); it is never a separate JSON response property. Raw refresh tokens, refresh-cookie values, token hashes, revocation data, and standalone session IDs are never returned in JSON.
 
 ## 8. User and profile contracts
 
@@ -254,7 +261,7 @@ All models are contract models, not direct TypeORM entities. `R` denotes require
 
 | Model | Fields (API type; R/N; source; visibility) |
 | --- | --- |
-| `AuthTokenResponse` | `accessToken` string R (issued JWT; caller only), `tokenType` literal `Bearer` R, `expiresIn` integer R (auth policy; caller only), `user` `UserSummary` R. |
+| `AuthTokenResponse` | `accessToken` string R (session-bound JWT with a maximum 30-minute lifetime; caller only), `tokenType` literal `Bearer` R, `expiresIn` integer R (actual remaining access-token seconds, at most `1800`; caller only), `user` `UserSummary` R. The HTTP response also sets a refresh cookie where the authentication contract says so; no cookie value, raw refresh token, token hash, revocation data, or standalone session ID is a model field. |
 | `RegistrationResponse` | `message` string R (workflow), `verificationRequired` boolean R (workflow), `destinationHint` string N (masked identifier; caller only), `development` `DevelopmentVerificationResponse` N (local development only). |
 | `DevelopmentVerificationResponse` | `developmentCode` string R (ephemeral verification output; local development only), `purpose` `VerificationPurpose` R. Never stored in or returned from production-style responses. |
 | `UserSummary` | `id` UUID R, `phone` string N, `email` string N, `role` `UserRole` R, `status` `UserStatus` R, `phoneVerifiedAt` date-time N, `emailVerifiedAt` date-time N, `createdAt`/`updatedAt` date-time R (users). Own/admin only; no hashes or code records. |
@@ -292,6 +299,7 @@ All DTOs reject unspecified, entity-only, role/status (unless explicitly permitt
 | `LoginRequest` | `identifier` string R (normalized phone or email) and `password` string R. |
 | `PasswordResetRequest` | `identifier` string R normalized; generic response regardless of account existence. |
 | `PasswordResetConfirmRequest` | `identifier`, `code`, `newPassword` strings R. Reject `purpose`; the endpoint selects `RESET_PASSWORD`. |
+| Refresh/logout | No request DTO: both routes have no JSON body and use only the refresh cookie when present. |
 | `UpdateCitizenProfileRequest` | `nameKh`, `nameEn`, `nationalIdNumber`, and `address` strings O, normalized/trimmed as appropriate. Reject `userId`, `profileImageKey`, phone/email, identity status, role, audit/timestamps. Profile-image upload is not a first-release route. |
 | `UpdateUserStatusRequest` | `status` enum R, exactly `ACTIVE` or `DISABLED`; reject role and all authentication fields. |
 | `CreateVehicleRequest` | Registration, chassis, plate, and approved local/mock vehicle descriptive fields R/O as schema requires; trim/canonicalize identifiers. Reject client `linkedCitizenId`; the citizen-ownership rule sets it server-side. |
@@ -346,7 +354,7 @@ The approved list contains **55 named codes** (not 56: the supplied categories t
 | Authentication | `AUTH_INVALID_CREDENTIALS` | 401 | Login credentials are invalid. |
 | Authentication | `AUTH_ACCOUNT_NOT_ACTIVE` | 403 | Account exists but is not active. |
 | Authentication | `AUTH_ACCOUNT_DISABLED` | 403 | A disabled account attempts authentication or protected use. |
-| Authentication | `AUTH_TOKEN_INVALID` | 401 | Token is missing, invalid, or expired. |
+| Authentication | `AUTH_TOKEN_INVALID` | 401 | An access or refresh credential is missing, invalid, expired, revoked, or reused. The response never identifies which case occurred. |
 | Authentication | `AUTH_VERIFICATION_CODE_INVALID` | 400 | Code/purpose/destination does not validate. |
 | Authentication | `AUTH_VERIFICATION_CODE_EXPIRED` | 400 | Code expired. |
 | Authentication | `AUTH_VERIFICATION_ATTEMPTS_EXCEEDED` | 429 | Code attempt allowance exceeded. |
@@ -401,12 +409,13 @@ The approved list contains **55 named codes** (not 56: the supplied categories t
 
 ## 24. Security rules
 
-- Verify JWT integrity/expiry, role, active/non-disabled user status, and ownership before data read or mutation. Admin routes never grant citizen access by query parameter.
-- Hash passwords securely; never select/serialize `passwordHash`. Store/compare verification codes as hashes and never return them except the narrowly approved local-development `developmentCode` behavior.
+- For every protected request, verify access-token signature and expiry, `typ = 'access'`, that the user still exists and is `ACTIVE`, that its non-secret `sid` belongs to that user, and that the refresh session is neither revoked nor expired; then enforce role and ownership before data read or mutation. Admin routes never grant citizen access by query parameter. Refresh validation additionally locks the session row and verifies the signed session ID, user, hidden hash, fixed expiry, and revocation state.
+- Hash passwords securely; never select/serialize `passwordHash`. Store/compare verification codes and refresh tokens as hashes and never return them except the narrowly approved local-development `developmentCode` behavior. Raw refresh tokens exist only in HttpOnly cookies and are never stored in PostgreSQL.
 - Authorize every document/certificate download before storage access. Return a controlled stream/download and never an internal path/key.
 - Redact audit old/new values and never return code, password/token, private file, or sensitive authentication data. Do not log access tokens or plaintext codes.
 - Allowlist query filters and sort fields. Reject mass-assignment fields and use explicit transition endpoints rather than generic status changes.
-- Rate-limit register, verify, resend verification, login, password-reset request, and password-reset confirm by suitable client/identifier dimensions. Prevent account enumeration on reset request.
+- Rate-limit register, verify, resend verification, login, refresh, logout, password-reset request, and password-reset confirm by suitable client/identifier dimensions. Prevent account enumeration on reset request.
+- Refresh cookies are always HttpOnly, use `Secure=true` in production, default to `SameSite=Lax`, and derive the auth-scoped cookie path from `API_PREFIX`. Rotation preserves the original fixed session deadline; its new cookie expiry is only the remaining lifetime.
 - Return stable JSON errors without raw entities, SQL errors, stack traces, or implementation infrastructure details. Do not create broad DELETE APIs.
 
 ## 25. Transaction and concurrency mapping
@@ -416,9 +425,12 @@ Every row is all-or-nothing: failure rolls back created/updated domain rows, tim
 | Operation | Reads / locks and constraints | Creates / updates / effects |
 | --- | --- | --- |
 | Register | Read normalized user identifiers; unique phone/email constraints. | Create citizen/user/profile and hashed verification record atomically. |
-| Verify registration | Lock eligible verification code and user; check hash, expiry, unused state, attempts. | Mark code used, increment attempt state as needed, activate citizen, set verification time, issue token only after committed state. |
-| Reset confirm | Lock eligible reset code/user; check hash/expiry/unused. | Replace password hash and consume code atomically. |
-| Admin user status | Lock user and validate `ACTIVE`/`DISABLED` transition. | Update status; create audit effect. |
+| Verify registration | Lock eligible verification code and user; check hash, expiry, unused state, attempts. | Mark code used, increment attempt state as needed, activate citizen, set verification time, and create one refresh session before issuing the response/cookie after commit. |
+| Login | Resolve the normalized identifier, verify password hash and `ACTIVE` status. | Update `lastLoginAt` and create one refresh session in the same transaction before returning the access-token response/cookie. |
+| Refresh | Lock the signed session-ID row; validate token signature, user, hidden hash, fixed expiry, and revocation state. | Rotate the token hash for the same row and update `lastUsedAt` without changing `expiresAt`; token reuse marks reuse time and revokes only that session. |
+| Logout | Validate/lock the refresh-session row only when a cookie can be matched. | Revoke only that current session when valid and always clear the cookie; invalid/missing/expired/revoked cookies remain non-disclosing/idempotent. |
+| Reset confirm | Lock eligible reset code/user; check hash/expiry/unused. | Replace password hash, consume code, and revoke all active refresh sessions atomically; do not create a session. |
+| Admin user status | Lock user and validate `ACTIVE`/`DISABLED` transition. | Update status; when disabling, revoke all active refresh sessions in the same transaction and create audit effect. Activating does not restore sessions. |
 | Application submission | Lock/read citizen-owned vehicle; enforce `uq_active_application_per_vehicle`. | Create application/reference/snapshots, 3 current document rows, submitted timeline, notification, audit. |
 | Correction resubmission | Lock application/current documents; enforce correction status and `uq_current_document_per_type`. | Mark old current rows false; insert replacement versions/current rows; update application workflow; `CORRECTION_RESUBMITTED` timeline and audit only—no notification. |
 | Citizen/admin application cancellation | Lock application; check allowed state, confirmed payment, completed inspection, actor/reason, and any scheduled appointment. | If scheduled appointment exists, cancel it, set cancellation fields, release capacity, and create `APPOINTMENT_CANCELLED` timeline/notification/audit. Then set application cancellation fields/status and create `APPLICATION_CANCELLED` timeline/notification/audit. For an admin cancellation after confirmed payment, preserve that payment unchanged as immutable history; no reversal, deletion, automatic refund, refund table, or refund/reversal endpoint is involved. With no scheduled appointment, create only application effects. |
@@ -438,15 +450,15 @@ Every row is all-or-nothing: failure rolls back created/updated domain rows, tim
 
 ## 26. Open non-blocking implementation details
 
-The following must be finalized before coding their affected validation/storage behavior, but do not block route definition: application reference-number, invoice-number, receipt-number, sticker-number, and certificate-number formats; exact file MIME allowlist and maximum size; free-text limits; password minimum policy; JWT lifetime; storage provider/key format; vehicle edits after application snapshot creation; notification wording; audit-value redaction mechanics; record retention duration; exceptional administrative correction procedure; and whether local-development verification code is returned, safely logged, or both. The rejected-payment retry/record-preservation behavior and confirmed-payment handling on admin cancellation are approved and are not open decisions.
+The following must be finalized before coding their affected validation/storage behavior, but do not block route definition: application reference-number, invoice-number, receipt-number, sticker-number, and certificate-number formats; exact file MIME allowlist and maximum size; free-text limits; password policy and approved Argon2id parameters; JWT key-rotation operational procedure; storage provider/key format; vehicle edits after application snapshot creation; notification wording; audit-value redaction mechanics; record retention duration; exceptional administrative correction procedure; and whether local-development verification code is returned, safely logged, or both. The session-bound access-token claim set, 30-minute maximum access lifetime, seven-day fixed refresh-session lifetime, cookie protections, rejected-payment retry/record-preservation behavior, and confirmed-payment handling on admin cancellation are approved and are not open decisions.
 
 ## 27. First-release exclusions
 
-Excluded: refresh tokens/rotation/revocation, OAuth/social/biometric/external identity, external vehicle registry, online/QR/card/provider payment, payment refunds and reversals (including refund/reversal endpoints, refund tables, and new refund/payment statuses), email/SMS delivery, STAFF endpoints, server-side drafts, reinspection, reopening terminal applications, targeted or scheduled announcements, broad analytics, hard deletes, citizen audit access, arbitrary status PATCH endpoints, seed-data endpoints, migration endpoints, and schema-synchronization endpoints.
+Excluded: refresh-session listing/device management, logout-all, restoration of revoked sessions, Passport, OAuth/social/biometric/external identity, external vehicle registry, online/QR/card/provider payment, payment refunds and reversals (including refund/reversal endpoints, refund tables, and new refund/payment statuses), email/SMS delivery, STAFF endpoints, server-side drafts, reinspection, reopening terminal applications, targeted or scheduled announcements, broad analytics, hard deletes, citizen audit access, arbitrary status PATCH endpoints, seed-data endpoints, migration endpoints, and schema-synchronization endpoints.
 
 ## 28. Proposed implementation order
 
-1. **Essential foundation:** shared response/error conventions, validation, rate-limit policy, JWT authentication/authorization, ownership checks, current user, and profile.
+1. **Essential foundation:** shared response/error conventions, validation, rate-limit policy, access-token and refresh-session authentication/authorization, cookie handling, ownership checks, current user, and profile.
 2. **Essential citizen workflow:** vehicles; multipart application submission/list/detail; documents and correction replacement; station/slot discovery; appointments; payment viewing; inspection/sticker viewing; notifications.
 3. **Essential admin workflow:** user status/listing; application and document review; stations/slots; appointments; payment decisions; inspections; stickers; audit-log reads.
 4. **Optional convenience:** read-only admin dashboard summary after the core workflows are tested.
