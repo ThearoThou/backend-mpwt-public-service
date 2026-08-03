@@ -140,6 +140,34 @@ export class RefreshSessionService {
     return this.repository(manager).save(session);
   }
 
+  async revokeLockedSession(
+    session: RefreshSession,
+    reason: RefreshSessionRevocationReason,
+    manager: EntityManager,
+    now = new Date(),
+  ): Promise<RefreshSession | null> {
+    if (!this.isActive(session, now)) {
+      return null;
+    }
+
+    session.revokedAt = now;
+    session.revocationReason = reason;
+
+    return manager.getRepository(RefreshSession).save(session);
+  }
+
+  async markLockedTokenReuseAndRevoke(
+    session: RefreshSession,
+    manager: EntityManager,
+    now = new Date(),
+  ): Promise<RefreshSession> {
+    session.reuseDetectedAt = now;
+    session.revokedAt ??= now;
+    session.revocationReason ??= RefreshSessionRevocationReason.TOKEN_REUSE;
+
+    return manager.getRepository(RefreshSession).save(session);
+  }
+
   async revokeCurrentSession(
     sessionId: string,
     userId: string,
