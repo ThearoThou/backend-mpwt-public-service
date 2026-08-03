@@ -18,6 +18,10 @@ export interface EnvironmentVariables {
   VERIFICATION_CODE_TTL_SECONDS: number;
   VERIFICATION_CODE_MAX_ATTEMPTS: number;
   EXPOSE_DEVELOPMENT_VERIFICATION_CODE: boolean;
+  ADMIN_BOOTSTRAP_ENABLED: boolean;
+  ADMIN_BOOTSTRAP_PHONE: string | undefined;
+  ADMIN_BOOTSTRAP_EMAIL: string | undefined;
+  ADMIN_BOOTSTRAP_PASSWORD: string | undefined;
 }
 
 function requiredString(
@@ -42,6 +46,23 @@ function optionalString(
 
   if (value === undefined) {
     return defaultValue;
+  }
+
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Environment variable ${name} must be a non-empty string.`);
+  }
+
+  return value.trim();
+}
+
+function optionalEnvironmentString(
+  environment: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  const value = environment[name];
+
+  if (value === undefined) {
+    return undefined;
   }
 
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -186,11 +207,52 @@ export function validateEnvironment(
     'REFRESH_COOKIE_SECURE',
     false,
   );
+  const ADMIN_BOOTSTRAP_ENABLED = boolean(
+    environment,
+    'ADMIN_BOOTSTRAP_ENABLED',
+    false,
+  );
+  const ADMIN_BOOTSTRAP_PHONE = optionalEnvironmentString(
+    environment,
+    'ADMIN_BOOTSTRAP_PHONE',
+  );
+  const ADMIN_BOOTSTRAP_EMAIL = optionalEnvironmentString(
+    environment,
+    'ADMIN_BOOTSTRAP_EMAIL',
+  );
+  const ADMIN_BOOTSTRAP_PASSWORD = optionalEnvironmentString(
+    environment,
+    'ADMIN_BOOTSTRAP_PASSWORD',
+  );
 
   if (NODE_ENV === 'production' && !REFRESH_COOKIE_SECURE) {
     throw new Error(
       'Environment variable REFRESH_COOKIE_SECURE must be true in production.',
     );
+  }
+
+  if (ADMIN_BOOTSTRAP_ENABLED) {
+    if (ADMIN_BOOTSTRAP_EMAIL === undefined) {
+      throw new Error(
+        'Environment variable ADMIN_BOOTSTRAP_EMAIL is required when ADMIN_BOOTSTRAP_ENABLED is true.',
+      );
+    }
+
+    if (ADMIN_BOOTSTRAP_PASSWORD === undefined) {
+      throw new Error(
+        'Environment variable ADMIN_BOOTSTRAP_PASSWORD is required when ADMIN_BOOTSTRAP_ENABLED is true.',
+      );
+    }
+
+    if (
+      ADMIN_BOOTSTRAP_PASSWORD.length < 8 ||
+      ADMIN_BOOTSTRAP_PASSWORD.length > 128 ||
+      /^<[^>]+>$/.test(ADMIN_BOOTSTRAP_PASSWORD)
+    ) {
+      throw new Error(
+        'Environment variable ADMIN_BOOTSTRAP_PASSWORD must be a non-placeholder password from 8 to 128 characters.',
+      );
+    }
   }
 
   const JWT_ACCESS_SECRET = requiredSecret(environment, 'JWT_ACCESS_SECRET');
@@ -246,5 +308,9 @@ export function validateEnvironment(
       'EXPOSE_DEVELOPMENT_VERIFICATION_CODE',
       false,
     ),
+    ADMIN_BOOTSTRAP_ENABLED,
+    ADMIN_BOOTSTRAP_PHONE,
+    ADMIN_BOOTSTRAP_EMAIL,
+    ADMIN_BOOTSTRAP_PASSWORD,
   };
 }

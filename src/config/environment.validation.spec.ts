@@ -23,6 +23,7 @@ describe('environment validation', () => {
       VERIFICATION_CODE_TTL_SECONDS: 300,
       VERIFICATION_CODE_MAX_ATTEMPTS: 5,
       EXPOSE_DEVELOPMENT_VERIFICATION_CODE: false,
+      ADMIN_BOOTSTRAP_ENABLED: false,
     });
   });
 
@@ -64,5 +65,35 @@ describe('environment validation', () => {
         REFRESH_COOKIE_SECURE: 'false',
       }),
     ).toThrow('REFRESH_COOKIE_SECURE');
+  });
+
+  it('requires safe bootstrap credentials only when controlled bootstrap is enabled', () => {
+    expect(() =>
+      validateEnvironment({
+        ...validEnvironment,
+        ADMIN_BOOTSTRAP_ENABLED: 'true',
+      }),
+    ).toThrow('ADMIN_BOOTSTRAP_EMAIL');
+
+    expect(() =>
+      validateEnvironment({
+        ...validEnvironment,
+        ADMIN_BOOTSTRAP_ENABLED: 'true',
+        ADMIN_BOOTSTRAP_EMAIL: 'admin@example.com',
+        ADMIN_BOOTSTRAP_PASSWORD: '<replace-with-a-strong-password>',
+      }),
+    ).toThrow('ADMIN_BOOTSTRAP_PASSWORD');
+
+    expect(
+      validateEnvironment({
+        ...validEnvironment,
+        ADMIN_BOOTSTRAP_ENABLED: 'true',
+        ADMIN_BOOTSTRAP_EMAIL: 'admin@example.com',
+        ADMIN_BOOTSTRAP_PASSWORD: 'bootstrap-password',
+      }),
+    ).toMatchObject({
+      ADMIN_BOOTSTRAP_ENABLED: true,
+      ADMIN_BOOTSTRAP_EMAIL: 'admin@example.com',
+    });
   });
 });

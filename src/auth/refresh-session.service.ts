@@ -218,6 +218,42 @@ export class RefreshSessionService {
     return activeSessions.length;
   }
 
+  async revokeAllActiveSessionsLocked(
+    userId: string,
+    reason: RefreshSessionRevocationReason,
+    manager: EntityManager,
+    now = new Date(),
+  ): Promise<number> {
+    const repository = manager.getRepository(RefreshSession);
+    const sessions = await repository.find({
+      where: { userId, revokedAt: IsNull() },
+      lock: { mode: 'pessimistic_write' },
+      select: {
+        id: true,
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+        revocationReason: true,
+      },
+    });
+    const activeSessions = sessions.filter((session) =>
+      this.isActive(session, now),
+    );
+
+    if (activeSessions.length === 0) {
+      return 0;
+    }
+
+    for (const session of activeSessions) {
+      session.revokedAt = now;
+      session.revocationReason = reason;
+    }
+
+    await repository.save(activeSessions);
+
+    return activeSessions.length;
+  }
+
   async markTokenReuseAndRevoke(
     sessionId: string,
     userId: string,

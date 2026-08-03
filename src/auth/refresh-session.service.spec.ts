@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import type { Repository } from 'typeorm';
+import { IsNull, type Repository } from 'typeorm';
 
 import { UserRole } from '../users/enums/user-role.enum';
 import { AuthHashingService } from './auth-hashing.service';
@@ -52,7 +52,7 @@ function createSession(
 function createRepository(): jest.Mocked<
   Pick<
     Repository<RefreshSession>,
-    'create' | 'save' | 'findOne' | 'findOneBy' | 'findBy'
+    'create' | 'save' | 'findOne' | 'findOneBy' | 'findBy' | 'find'
   >
 > {
   return {
@@ -63,6 +63,7 @@ function createRepository(): jest.Mocked<
     findOne: jest.fn(),
     findOneBy: jest.fn(),
     findBy: jest.fn(),
+    find: jest.fn(),
   };
 }
 
@@ -247,6 +248,44 @@ describe('RefreshSessionService', () => {
       RefreshSessionRevocationReason.PASSWORD_RESET,
     );
     expect(expired.revokedAt).toBeNull();
+  });
+
+  it('locks active session rows when account disabling revokes them', async () => {
+    const active = createSession();
+    const lockedRepository = {
+      find: jest.fn().mockResolvedValue([active]),
+      save: jest.fn().mockResolvedValue([active]),
+    };
+    const manager = {
+      getRepository: jest.fn(() => lockedRepository),
+    };
+
+    await expect(
+      service.revokeAllActiveSessionsLocked(
+        USER_ID,
+        RefreshSessionRevocationReason.ACCOUNT_DISABLED,
+        manager as never,
+        NOW,
+      ),
+    ).resolves.toBe(1);
+
+    expect(manager.getRepository).toHaveBeenCalledWith(RefreshSession);
+    expect(lockedRepository.find).toHaveBeenCalledWith({
+      where: { userId: USER_ID, revokedAt: IsNull() },
+      lock: { mode: 'pessimistic_write' },
+      select: {
+        id: true,
+        userId: true,
+        expiresAt: true,
+        revokedAt: true,
+        revocationReason: true,
+      },
+    });
+    expect(active).toMatchObject({
+      revokedAt: NOW,
+      revocationReason: RefreshSessionRevocationReason.ACCOUNT_DISABLED,
+    });
+    expect(repository.find).not.toHaveBeenCalled();
   });
 
   it('marks token reuse and revokes only the affected session', async () => {

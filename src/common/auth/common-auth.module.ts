@@ -9,6 +9,6 @@ import { RolesGuard } from './roles.guard';
 @Module({
   imports: [TypeOrmModule.forFeature([User]), AuthSecurityModule],
   providers: [AccessTokenGuard, RolesGuard],
-  exports: [AccessTokenGuard, RolesGuard],
+  exports: [AccessTokenGuard, RolesGuard, AuthSecurityModule],
 })
 export class CommonAuthModule {}

@@ -1,19 +1,10 @@
 import { VerificationPurpose } from './enums/verification-purpose.enum';
-import { User } from '../users/entities/user.entity';
-import { UserRole } from '../users/enums/user-role.enum';
-import { UserStatus } from '../users/enums/user-status.enum';
+import {
+  mapUserSummary,
+  type UserSummaryResponse,
+} from '../users/user-response.mapper';
 
-export interface UserSummaryResponse {
-  id: string;
-  phone: string | null;
-  email: string | null;
-  role: UserRole;
-  status: UserStatus;
-  phoneVerifiedAt: Date | null;
-  emailVerifiedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export { mapUserSummary, type UserSummaryResponse };
 
 export interface AuthTokenResponse {
   accessToken: string;
@@ -29,20 +20,6 @@ export interface RegistrationResponse {
   development?: {
     developmentCode: string;
     purpose: VerificationPurpose;
-  };
-}
-
-export function mapUserSummary(user: User): UserSummaryResponse {
-  return {
-    id: user.id,
-    phone: user.phone,
-    email: user.email,
-    role: user.role,
-    status: user.status,
-    phoneVerifiedAt: user.phoneVerifiedAt,
-    emailVerifiedAt: user.emailVerifiedAt,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
   };
 }
 
