@@ -15,6 +15,11 @@ Enum user_status {
   DISABLED
 }
 
+Enum vehicle_plate_category {
+  PROVINCE
+  PERSONALIZED_CAMBODIA
+}
+
 Enum verification_purpose {
   REGISTER_ACCOUNT
   RESET_PASSWORD
@@ -231,7 +236,8 @@ Table vehicles {
 
   registration_number varchar(50) [not null, unique]
   plate_number varchar(30) [not null]
-  plate_province varchar(100) [not null]
+  plate_category vehicle_plate_category [not null]
+  plate_province varchar(100)
   plate_type varchar(50) [not null]
 
   vehicle_type varchar(50) [not null]
@@ -254,11 +260,7 @@ Table vehicles {
   created_at timestamptz [not null, default: `now()`]
   updated_at timestamptz [not null, default: `now()`]
 
-  indexes {
-    (plate_province, plate_type, plate_number) [unique]
-  }
-
-  Note: 'VALID, EXPIRING_SOON, EXPIRED, days remaining, and days expired are calculated from inspection_expiry_date.'
+  Note: 'VALID, EXPIRING_SOON, EXPIRED, days remaining, and days expired are calculated from inspection_expiry_date. PROVINCE requires a non-null plate_province selected from the 25 canonical Khmer capital/province labels; plate_number uses 2A-3146 or 2AB-3146; PostgreSQL partial unique index uq_vehicles_province_plate_identity applies (plate_province, plate_number) only where plate_category = PROVINCE. plate_type is not part of PROVINCE identity: the same plate number may exist in different provinces, but may not be duplicated in the same province by changing plate_type. PERSONALIZED_CAMBODIA requires plate_province NULL; plate_number is nationally unique and plate_type does not affect identity; PostgreSQL partial unique index uq_vehicles_personalized_plate_number applies only where plate_category = PERSONALIZED_CAMBODIA. chk_vehicles_plate_province_category enforces the category/province consistency. កម្ពុជា is a derived API display label, never stored in plate_province. Partial indexes are documented here because DBML cannot safely model their WHERE predicates as unconditional unique indexes.'
 }
 
 Table renewal_applications {

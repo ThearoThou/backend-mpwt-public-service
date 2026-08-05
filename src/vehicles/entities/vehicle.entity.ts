@@ -2,7 +2,6 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -12,9 +11,9 @@ import {
 
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
 import { User } from '../../users/entities/user.entity';
+import { VehiclePlateCategory } from '../enums/vehicle-plate-category.enum';
 
 @Entity({ name: 'vehicles' })
-@Index(['plateProvince', 'plateType', 'plateNumber'], { unique: true })
 export class Vehicle {
   @PrimaryGeneratedColumn('uuid', { name: 'id' })
   id!: string;
@@ -33,8 +32,21 @@ export class Vehicle {
   @Column({ name: 'plate_number', type: 'varchar', length: 30 })
   plateNumber!: string;
 
-  @Column({ name: 'plate_province', type: 'varchar', length: 100 })
-  plateProvince!: string;
+  @Column({
+    name: 'plate_category',
+    type: 'enum',
+    enum: VehiclePlateCategory,
+    enumName: 'vehicle_plate_category',
+  })
+  plateCategory!: VehiclePlateCategory;
+
+  @Column({
+    name: 'plate_province',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  plateProvince!: string | null;
 
   @Column({ name: 'plate_type', type: 'varchar', length: 50 })
   plateType!: string;

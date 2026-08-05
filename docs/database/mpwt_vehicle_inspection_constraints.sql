@@ -1,5 +1,30 @@
 -- MPWT Vehicle Inspection Renewal Service
 -- PostgreSQL constraints that are not fully represented visually in DBML.
+-- Reference SQL synchronized with TypeORM migrations. The migrations are the
+-- executable source of truth; do not execute this file in addition to them
+-- without first checking whether these objects already exist.
+
+-- Vehicle plate-category constraints are implemented by
+-- 1785380837522-AddVehiclePlateCategories.ts and corrected by
+-- 1785380837523-RemovePlateTypeFromProvincePlateUniqueness.ts. Together they replace the former
+-- unconditional (plate_province, plate_type, plate_number) unique index.
+CREATE UNIQUE INDEX uq_vehicles_province_plate_identity
+ON vehicles (plate_province, plate_number)
+WHERE plate_category = 'PROVINCE'::vehicle_plate_category;
+
+CREATE UNIQUE INDEX uq_vehicles_personalized_plate_number
+ON vehicles (plate_number)
+WHERE plate_category = 'PERSONALIZED_CAMBODIA'::vehicle_plate_category;
+
+ALTER TABLE vehicles
+ADD CONSTRAINT chk_vehicles_plate_province_category
+CHECK (
+  (plate_category = 'PROVINCE'::vehicle_plate_category AND plate_province IS NOT NULL)
+  OR (
+    plate_category = 'PERSONALIZED_CAMBODIA'::vehicle_plate_category
+    AND plate_province IS NULL
+  )
+);
 
 -- 1. A user must have at least one login identifier.
 ALTER TABLE users

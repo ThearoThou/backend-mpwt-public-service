@@ -1,0 +1,4 @@
+export enum VehiclePlateCategory {
+  PROVINCE = 'PROVINCE',
+  PERSONALIZED_CAMBODIA = 'PERSONALIZED_CAMBODIA',
+}
