@@ -5,6 +5,7 @@ import { RenewalApplication } from '../applications/entities/renewal-application
 import { VerificationCode } from '../auth/entities/verification-code.entity';
 import { RefreshSession } from '../auth/entities/refresh-session.entity';
 import { Inspection } from '../inspections/entities/inspection.entity';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { Payment } from '../payments/entities/payment.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
@@ -14,6 +15,7 @@ import { Sticker } from '../stickers/entities/sticker.entity';
 import { CitizenProfile } from '../users/entities/citizen-profile.entity';
 import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { VehicleClassificationHistory } from '../vehicles/entities/vehicle-classification-history.entity';
 
 export const databaseEntities = [
   User,
@@ -21,6 +23,8 @@ export const databaseEntities = [
   VerificationCode,
   RefreshSession,
   Vehicle,
+  VehicleClassificationHistory,
+  InspectionVehicleCategory,
   RenewalApplication,
   ApplicationDocument,
   InspectionStation,

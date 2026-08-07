@@ -267,3 +267,16 @@ export class ListAdminVehiclesQueryDto extends VehiclePaginationQueryDto {
   @Validate(VehicleCreatedRangeConstraint)
   createdTo?: string;
 }
+
+export class ClassifyVehicleRequestDto {
+  @IsUUID('4')
+  inspectionCategoryId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  @Transform(trimString)
+  reason!: string;
+}
+
+export class VehicleClassificationHistoryQueryDto extends BasePaginationQueryDto {}

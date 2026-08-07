@@ -1,6 +1,7 @@
 import { Vehicle } from './entities/vehicle.entity';
 import { CAMBODIAN_PLATE_DISPLAY_LABEL_KH } from './cambodian-capital-provinces';
 import { VehiclePlateCategory } from './enums/vehicle-plate-category.enum';
+import { VehicleClass } from './enums/vehicle-class.enum';
 
 export interface VehicleResponse {
   id: string;
@@ -12,6 +13,9 @@ export interface VehicleResponse {
   plateDisplayLabelKh: string;
   plateType: string;
   vehicleType: string;
+  vehicleClass: VehicleClass | null;
+  inspectionCategoryId: string | null;
+  classificationVerifiedAt: Date | null;
   make: string;
   model: string;
   manufactureYear: number | null;
@@ -41,6 +45,9 @@ export function mapVehicle(vehicle: Vehicle): VehicleResponse {
         : (vehicle.plateProvince ?? ''),
     plateType: vehicle.plateType,
     vehicleType: vehicle.vehicleType,
+    vehicleClass: vehicle.vehicleClass ?? null,
+    inspectionCategoryId: vehicle.inspectionCategoryId ?? null,
+    classificationVerifiedAt: vehicle.classificationVerifiedAt ?? null,
     make: vehicle.make,
     model: vehicle.model,
     manufactureYear: vehicle.manufactureYear,

@@ -1,13 +1,17 @@
 import { getMetadataArgsStorage } from 'typeorm';
 
 import { RefreshSession } from '../auth/entities/refresh-session.entity';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { User } from '../users/entities/user.entity';
+import { VehicleClassificationHistory } from '../vehicles/entities/vehicle-classification-history.entity';
 import { databaseEntities } from './database.entities';
 
 describe('database entity registry', () => {
-  it('registers the approved 16 entities, including refresh sessions', () => {
-    expect(databaseEntities).toHaveLength(16);
+  it('registers the approved 18 entities, including Phase 1A entities', () => {
+    expect(databaseEntities).toHaveLength(18);
     expect(databaseEntities).toContain(RefreshSession);
+    expect(databaseEntities).toContain(InspectionVehicleCategory);
+    expect(databaseEntities).toContain(VehicleClassificationHistory);
   });
 
   it('maps the refresh-session credential metadata without a raw token field', () => {

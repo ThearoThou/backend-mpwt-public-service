@@ -8,6 +8,7 @@ import { ConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { FilesModule } from './files/files.module';
 import { InspectionsModule } from './inspections/inspections.module';
+import { InspectionCategoriesModule } from './inspection-categories/inspection-categories.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PaymentsModule } from './payments/payments.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
@@ -22,6 +23,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     AuthModule,
     UsersModule,
     VehiclesModule,
+    InspectionCategoriesModule,
     ApplicationsModule,
     SchedulingModule,
     PaymentsModule,

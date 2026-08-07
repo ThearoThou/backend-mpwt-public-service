@@ -12,6 +12,7 @@ import {
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
 import { User } from '../../users/entities/user.entity';
 import { VehiclePlateCategory } from '../enums/vehicle-plate-category.enum';
+import { VehicleClass } from '../enums/vehicle-class.enum';
 
 @Entity({ name: 'vehicles' })
 export class Vehicle {
@@ -53,6 +54,32 @@ export class Vehicle {
 
   @Column({ name: 'vehicle_type', type: 'varchar', length: 50 })
   vehicleType!: string;
+
+  @Column({
+    name: 'vehicle_class',
+    type: 'enum',
+    enum: VehicleClass,
+    enumName: 'vehicle_class',
+    nullable: true,
+  })
+  vehicleClass!: VehicleClass | null;
+
+  @Column({ name: 'inspection_category_id', type: 'uuid', nullable: true })
+  inspectionCategoryId!: string | null;
+
+  @Column({
+    name: 'classification_verified_at',
+    type: 'timestamptz',
+    nullable: true,
+  })
+  classificationVerifiedAt!: Date | null;
+
+  @Column({
+    name: 'classification_verified_by',
+    type: 'uuid',
+    nullable: true,
+  })
+  classificationVerifiedBy!: string | null;
 
   @Column({ name: 'make', type: 'varchar', length: 100 })
   make!: string;
