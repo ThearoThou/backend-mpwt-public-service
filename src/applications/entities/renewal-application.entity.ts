@@ -22,6 +22,7 @@ import { Sticker } from '../../stickers/entities/sticker.entity';
 import { ApplicationStatus } from '../enums/application-status.enum';
 import { ApplicationDocument } from './application-document.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
+import { RenewalApplicationStatusHistory } from './renewal-application-status-history.entity';
 
 @Entity({ name: 'renewal_applications' })
 @Index('idx_renewal_applications_citizen_submitted_at', [
@@ -42,8 +43,9 @@ export class RenewalApplication {
     type: 'varchar',
     length: 50,
     unique: true,
+    nullable: true,
   })
-  referenceNumber!: string;
+  referenceNumber!: string | null;
 
   @Column({ name: 'citizen_id', type: 'uuid' })
   citizenId!: string;
@@ -56,15 +58,15 @@ export class RenewalApplication {
     type: 'enum',
     enum: ApplicationStatus,
     enumName: 'application_status',
-    default: ApplicationStatus.SUBMITTED,
+    default: ApplicationStatus.DRAFT,
   })
   status!: ApplicationStatus;
 
-  @Column({ name: 'applicant_snapshot', type: 'jsonb' })
-  applicantSnapshot!: Record<string, unknown>;
+  @Column({ name: 'applicant_snapshot', type: 'jsonb', nullable: true })
+  applicantSnapshot!: Record<string, unknown> | null;
 
-  @Column({ name: 'vehicle_snapshot', type: 'jsonb' })
-  vehicleSnapshot!: Record<string, unknown>;
+  @Column({ name: 'vehicle_snapshot', type: 'jsonb', nullable: true })
+  vehicleSnapshot!: Record<string, unknown> | null;
 
   @Column({ name: 'current_correction_reason', type: 'text', nullable: true })
   currentCorrectionReason!: string | null;
@@ -72,9 +74,9 @@ export class RenewalApplication {
   @Column({
     name: 'submitted_at',
     type: 'timestamptz',
-    default: () => 'now()',
+    nullable: true,
   })
-  submittedAt!: Date;
+  submittedAt!: Date | null;
 
   @Column({ name: 'review_started_at', type: 'timestamptz', nullable: true })
   reviewStartedAt!: Date | null;
@@ -136,6 +138,13 @@ export class RenewalApplication {
     eager: false,
   })
   documents!: ApplicationDocument[];
+
+  @OneToMany(
+    () => RenewalApplicationStatusHistory,
+    (history) => history.application,
+    { cascade: false, eager: false },
+  )
+  statusHistory!: RenewalApplicationStatusHistory[];
 
   @OneToMany(() => Appointment, (appointment) => appointment.application, {
     cascade: false,

@@ -2,6 +2,7 @@ import { ApplicationTimelineEvent } from '../activity/entities/application-timel
 import { AuditLog } from '../activity/entities/audit-log.entity';
 import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { VerificationCode } from '../auth/entities/verification-code.entity';
 import { RefreshSession } from '../auth/entities/refresh-session.entity';
 import { Inspection } from '../inspections/entities/inspection.entity';
@@ -26,6 +27,7 @@ export const databaseEntities = [
   VehicleClassificationHistory,
   InspectionVehicleCategory,
   RenewalApplication,
+  RenewalApplicationStatusHistory,
   ApplicationDocument,
   InspectionStation,
   AppointmentSlot,

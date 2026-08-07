@@ -15,9 +15,9 @@ import { createPaginationMeta } from './pagination/pagination-meta';
 import { getRequestContext } from './request-context/request-context';
 
 describe('common foundation', () => {
-  it('contains exactly 60 unique approved API error codes', () => {
-    expect(API_ERROR_CODES).toHaveLength(60);
-    expect(new Set(API_ERROR_CODES).size).toBe(60);
+  it('contains exactly 61 unique approved API error codes', () => {
+    expect(API_ERROR_CODES).toHaveLength(61);
+    expect(new Set(API_ERROR_CODES).size).toBe(61);
   });
 
   it('keeps DomainException fields explicit and safe', () => {

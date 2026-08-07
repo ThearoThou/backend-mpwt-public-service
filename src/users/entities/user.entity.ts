@@ -10,6 +10,7 @@ import {
 
 import { ApplicationDocument } from '../../applications/entities/application-document.entity';
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../../applications/entities/renewal-application-status-history.entity';
 import { ApplicationTimelineEvent } from '../../activity/entities/application-timeline-event.entity';
 import { AuditLog } from '../../activity/entities/audit-log.entity';
 import { VerificationCode } from '../../auth/entities/verification-code.entity';
@@ -123,6 +124,13 @@ export class User {
     { cascade: false },
   )
   cancelledRenewalApplications!: RenewalApplication[];
+
+  @OneToMany(
+    () => RenewalApplicationStatusHistory,
+    (history) => history.changedByUser,
+    { cascade: false },
+  )
+  changedRenewalApplicationStatusHistory?: RenewalApplicationStatusHistory[];
 
   @OneToMany(
     () => ApplicationDocument,
