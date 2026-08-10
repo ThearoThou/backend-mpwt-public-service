@@ -71,6 +71,9 @@ export class RenewalApplication {
   @Column({ name: 'current_correction_reason', type: 'text', nullable: true })
   currentCorrectionReason!: string | null;
 
+  @Column({ name: 'current_rejection_reason', type: 'text', nullable: true })
+  currentRejectionReason!: string | null;
+
   @Column({
     name: 'submitted_at',
     type: 'timestamptz',

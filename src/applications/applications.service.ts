@@ -96,6 +96,7 @@ export class ApplicationsService {
         'application.vehicleId',
         'application.status',
         'application.currentCorrectionReason',
+        'application.currentRejectionReason',
         'application.submittedAt',
         'application.reviewStartedAt',
         'application.readyForInspectionAt',

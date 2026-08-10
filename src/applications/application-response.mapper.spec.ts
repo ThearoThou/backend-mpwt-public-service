@@ -11,6 +11,7 @@ describe('application response mappers', () => {
       vehicleId: 'vehicle-id',
       status: ApplicationStatus.DRAFT,
       currentCorrectionReason: null,
+      currentRejectionReason: null,
       submittedAt: null,
       reviewStartedAt: null,
       readyForInspectionAt: null,
@@ -28,6 +29,7 @@ describe('application response mappers', () => {
     expect(mapped).toEqual(
       expect.objectContaining({
         referenceNumber: null,
+        currentRejectionReason: null,
         submittedAt: null,
         status: ApplicationStatus.DRAFT,
       }),
@@ -68,6 +70,7 @@ describe('application response mappers', () => {
       vehicleSnapshot: { secret: true },
       cancelledByUserId: 'c',
       currentCorrectionReason: null,
+      currentRejectionReason: 'The inspection result was rejected.',
       reviewStartedAt: null,
       readyForInspectionAt: null,
       completedAt: null,
@@ -78,6 +81,9 @@ describe('application response mappers', () => {
     } as never);
     expect(mapped.referenceNumber).toMatch(/^VIR-/);
     expect(mapped.submittedAt).toBeInstanceOf(Date);
+    expect(mapped.currentRejectionReason).toBe(
+      'The inspection result was rejected.',
+    );
     expect(mapped).not.toHaveProperty('applicantSnapshot');
     expect(mapped).not.toHaveProperty('vehicleSnapshot');
     expect(mapped).not.toHaveProperty('cancelledByUserId');
@@ -96,6 +102,7 @@ describe('application response mappers', () => {
       vehicleSnapshot: { secret: true },
       cancelledByUserId: 'c',
       currentCorrectionReason: null,
+      currentRejectionReason: null,
       reviewStartedAt: null,
       readyForInspectionAt: null,
       completedAt: null,
@@ -107,6 +114,7 @@ describe('application response mappers', () => {
 
     expect(mapped.referenceNumber).toBe('VIR-20260810-A3F7C92D18BE');
     expect(mapped.submittedAt).toBe(submittedAt);
+    expect(mapped.currentRejectionReason).toBeNull();
     expect(mapped).not.toHaveProperty('applicantSnapshot');
     expect(mapped).not.toHaveProperty('vehicleSnapshot');
     expect(mapped).not.toHaveProperty('cancelledByUserId');
