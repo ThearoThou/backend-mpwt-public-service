@@ -9,6 +9,8 @@ import { RenewalApplicationStatusHistory } from './entities/renewal-application-
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { AdminApplicationsController } from './admin-applications.controller';
 import { AdminApplicationsService } from './admin-applications.service';
+import { AdminApplicationDocumentsController } from './admin-application-documents.controller';
+import { AdminApplicationDocumentsService } from './admin-application-documents.service';
 import { ApplicationDocumentsController } from './application-documents.controller';
 import { ApplicationsService } from './applications.service';
 import { CitizenApplicationsController } from './citizen-applications.controller';
@@ -29,11 +31,13 @@ import { ApplicationDocumentsService } from './application-documents.service';
   controllers: [
     CitizenApplicationsController,
     AdminApplicationsController,
+    AdminApplicationDocumentsController,
     ApplicationDocumentsController,
   ],
   providers: [
     ApplicationsService,
     AdminApplicationsService,
+    AdminApplicationDocumentsService,
     ApplicationWorkflowService,
     ApplicationDocumentsService,
   ],
