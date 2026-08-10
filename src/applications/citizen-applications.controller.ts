@@ -27,6 +27,7 @@ import { type RenewalApplicationResponse } from './application-response.mapper';
 import type { RenewalApplicationStatusHistoryResponse } from './application-status-history-response.mapper';
 import { ApplicationWorkflowService } from './application-workflow.service';
 import {
+  CancelRenewalApplicationRequestDto,
   CreateRenewalApplicationDraftRequestDto,
   ListCitizenApplicationsQueryDto,
   RenewalApplicationStatusHistoryQueryDto,
@@ -51,6 +52,36 @@ export class CitizenApplicationsController {
       await this.applicationWorkflowService.createDraft(
         actor.userId,
         input.vehicleId,
+      ),
+    );
+  }
+
+  @Post(':applicationId/submit') async submit(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return createDataResponse(
+      await this.applicationWorkflowService.submit(actor.userId, id),
+    );
+  }
+  @Post(':applicationId/resubmit') async resubmit(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return createDataResponse(
+      await this.applicationWorkflowService.resubmit(actor.userId, id),
+    );
+  }
+  @Post(':applicationId/cancel') async cancel(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() input: CancelRenewalApplicationRequestDto,
+  ) {
+    return createDataResponse(
+      await this.applicationWorkflowService.cancel(
+        actor.userId,
+        id,
+        input.reason,
       ),
     );
   }

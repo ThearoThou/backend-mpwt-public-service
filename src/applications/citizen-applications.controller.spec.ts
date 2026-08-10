@@ -64,6 +64,82 @@ describe('CitizenApplicationsController', () => {
       query,
     );
   });
+
+  it('forwards submit, resubmit, and cancel transitions', async () => {
+    const workflow = {
+      createDraft: jest.fn(),
+      submit: jest.fn().mockResolvedValue({}),
+      resubmit: jest.fn().mockResolvedValue({}),
+      cancel: jest.fn().mockResolvedValue({}),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      workflow as never,
+    );
+    await controller.submit(actor(), APPLICATION_ID);
+    await controller.resubmit(actor(), APPLICATION_ID);
+    await controller.cancel(actor(), APPLICATION_ID, { reason: 'trimmed' });
+    expect(workflow.submit).toHaveBeenCalledWith(CITIZEN_ID, APPLICATION_ID);
+    expect(workflow.resubmit).toHaveBeenCalledWith(CITIZEN_ID, APPLICATION_ID);
+    expect(workflow.cancel).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+      'trimmed',
+    );
+  });
+
+  it('forwards the authenticated citizen and route ID for submit and returns data', async () => {
+    const serviceResult = { id: APPLICATION_ID, status: 'SUBMITTED' };
+    const workflow = {
+      submit: jest.fn().mockResolvedValue(serviceResult),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      workflow as never,
+    );
+
+    await expect(controller.submit(actor(), APPLICATION_ID)).resolves.toEqual({
+      data: serviceResult,
+    });
+    expect(workflow.submit).toHaveBeenCalledWith(CITIZEN_ID, APPLICATION_ID);
+  });
+
+  it('forwards the authenticated citizen and route ID for resubmit and returns data', async () => {
+    const serviceResult = { id: APPLICATION_ID, status: 'SUBMITTED' };
+    const workflow = {
+      resubmit: jest.fn().mockResolvedValue(serviceResult),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      workflow as never,
+    );
+
+    await expect(controller.resubmit(actor(), APPLICATION_ID)).resolves.toEqual(
+      { data: serviceResult },
+    );
+    expect(workflow.resubmit).toHaveBeenCalledWith(CITIZEN_ID, APPLICATION_ID);
+  });
+
+  it('forwards the cancellation DTO for the authenticated citizen and returns data', async () => {
+    const serviceResult = { id: APPLICATION_ID, status: 'CANCELLED' };
+    const input = { reason: 'No longer required' };
+    const workflow = {
+      cancel: jest.fn().mockResolvedValue(serviceResult),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      workflow as never,
+    );
+
+    await expect(
+      controller.cancel(actor(), APPLICATION_ID, input),
+    ).resolves.toEqual({ data: serviceResult });
+    expect(workflow.cancel).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+      input.reason,
+    );
+  });
 });
 
 function actor(): AuthenticatedActor {

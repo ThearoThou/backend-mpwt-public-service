@@ -55,4 +55,60 @@ describe('application response mappers', () => {
       createdAt: new Date('2026-08-07T00:00:00.000Z'),
     });
   });
+
+  it('exposes submitted reference fields but excludes persistence snapshots', () => {
+    const mapped = mapRenewalApplication({
+      id: 'id',
+      referenceNumber: 'VIR-20260810-A3F7C92D18BE',
+      citizenId: 'c',
+      vehicleId: 'v',
+      status: ApplicationStatus.SUBMITTED,
+      submittedAt: new Date(),
+      applicantSnapshot: { secret: true },
+      vehicleSnapshot: { secret: true },
+      cancelledByUserId: 'c',
+      currentCorrectionReason: null,
+      reviewStartedAt: null,
+      readyForInspectionAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      cancellationReason: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    expect(mapped.referenceNumber).toMatch(/^VIR-/);
+    expect(mapped.submittedAt).toBeInstanceOf(Date);
+    expect(mapped).not.toHaveProperty('applicantSnapshot');
+    expect(mapped).not.toHaveProperty('vehicleSnapshot');
+    expect(mapped).not.toHaveProperty('cancelledByUserId');
+  });
+
+  it('exposes submitted fields but not persistence-only fields for a cancelled application', () => {
+    const submittedAt = new Date('2026-08-10T00:00:00.000Z');
+    const mapped = mapRenewalApplication({
+      id: 'id',
+      referenceNumber: 'VIR-20260810-A3F7C92D18BE',
+      citizenId: 'c',
+      vehicleId: 'v',
+      status: ApplicationStatus.CANCELLED,
+      submittedAt,
+      applicantSnapshot: { secret: true },
+      vehicleSnapshot: { secret: true },
+      cancelledByUserId: 'c',
+      currentCorrectionReason: null,
+      reviewStartedAt: null,
+      readyForInspectionAt: null,
+      completedAt: null,
+      cancelledAt: new Date('2026-08-10T01:00:00.000Z'),
+      cancellationReason: 'No longer required',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+
+    expect(mapped.referenceNumber).toBe('VIR-20260810-A3F7C92D18BE');
+    expect(mapped.submittedAt).toBe(submittedAt);
+    expect(mapped).not.toHaveProperty('applicantSnapshot');
+    expect(mapped).not.toHaveProperty('vehicleSnapshot');
+    expect(mapped).not.toHaveProperty('cancelledByUserId');
+  });
 });

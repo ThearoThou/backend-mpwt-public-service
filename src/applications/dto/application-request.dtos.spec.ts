@@ -4,7 +4,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
-import { CreateRenewalApplicationDraftRequestDto } from './application-request.dtos';
+import {
+  CancelRenewalApplicationRequestDto,
+  CreateRenewalApplicationDraftRequestDto,
+} from './application-request.dtos';
 
 describe('CreateRenewalApplicationDraftRequestDto', () => {
   it('accepts a UUID vehicle ID', async () => {
@@ -42,5 +45,51 @@ describe('CreateRenewalApplicationDraftRequestDto', () => {
         { type: 'body', metatype: CreateRenewalApplicationDraftRequestDto },
       ),
     ).rejects.toBeDefined();
+  });
+});
+
+describe('CancelRenewalApplicationRequestDto', () => {
+  it('accepts a normal reason string', async () => {
+    const input = plainToInstance(CancelRenewalApplicationRequestDto, {
+      reason: 'No longer required',
+    });
+
+    expect(await validate(input)).toHaveLength(0);
+    expect(input.reason).toBe('No longer required');
+  });
+
+  it('accepts omission and normalizes reason values', async () => {
+    const omitted = plainToInstance(CancelRenewalApplicationRequestDto, {});
+    const trimmed = plainToInstance(CancelRenewalApplicationRequestDto, {
+      reason: ' reason ',
+    });
+    const blank = plainToInstance(CancelRenewalApplicationRequestDto, {
+      reason: '   ',
+    });
+    expect(await validate(omitted)).toHaveLength(0);
+    expect(await validate(trimmed)).toHaveLength(0);
+    expect(trimmed.reason).toBe('reason');
+    expect(blank.reason).toBeNull();
+  });
+  it('rejects non-string and overlong reasons', async () => {
+    expect(
+      await validate(
+        plainToInstance(CancelRenewalApplicationRequestDto, { reason: 1 }),
+      ),
+    ).not.toHaveLength(0);
+    expect(
+      await validate(
+        plainToInstance(CancelRenewalApplicationRequestDto, {
+          reason: 'x'.repeat(501),
+        }),
+      ),
+    ).not.toHaveLength(0);
+  });
+  it('accepts exactly 500 characters after trimming', async () => {
+    const input = plainToInstance(CancelRenewalApplicationRequestDto, {
+      reason: ` ${'x'.repeat(500)} `,
+    });
+    expect(await validate(input)).toHaveLength(0);
+    expect(input.reason).toHaveLength(500);
   });
 });
