@@ -12,6 +12,9 @@ dist/
 # Test coverage
 coverage/
 
+# Private runtime uploads
+storage/private/
+
 # Logs
 *.log
 npm-debug.log*
