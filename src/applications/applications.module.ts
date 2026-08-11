@@ -11,6 +11,8 @@ import { AdminApplicationsController } from './admin-applications.controller';
 import { AdminApplicationsService } from './admin-applications.service';
 import { AdminApplicationDocumentsController } from './admin-application-documents.controller';
 import { AdminApplicationDocumentsService } from './admin-application-documents.service';
+import { AdminApplicationReviewController } from './admin-application-review.controller';
+import { AdminApplicationReviewService } from './admin-application-review.service';
 import { ApplicationDocumentsController } from './application-documents.controller';
 import { ApplicationsService } from './applications.service';
 import { CitizenApplicationsController } from './citizen-applications.controller';
@@ -32,12 +34,14 @@ import { ApplicationDocumentsService } from './application-documents.service';
     CitizenApplicationsController,
     AdminApplicationsController,
     AdminApplicationDocumentsController,
+    AdminApplicationReviewController,
     ApplicationDocumentsController,
   ],
   providers: [
     ApplicationsService,
     AdminApplicationsService,
     AdminApplicationDocumentsService,
+    AdminApplicationReviewService,
     ApplicationWorkflowService,
     ApplicationDocumentsService,
   ],

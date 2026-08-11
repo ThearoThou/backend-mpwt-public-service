@@ -141,6 +141,33 @@ describe('ApplicationDocumentsService upload preflight', () => {
     ).rejects.toMatchObject({ code: 'DOCUMENT_FILE_INVALID' });
     expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [DocumentStatus.REJECTED, true],
+    [DocumentStatus.APPROVED, false],
+    [null, true],
+  ])(
+    'allows correction-required upload only for a rejected or missing current document',
+    async (currentStatus, allowed) => {
+      const fixture = correctionUploadFixture(currentStatus);
+      const upload = fixture.service.upload(
+        citizenId,
+        applicationId,
+        DocumentType.CITIZEN_ID_CARD,
+        file(),
+      );
+
+      if (allowed) {
+        await expect(upload).resolves.toBeDefined();
+        expect(fixture.files.saveApplicationDocument).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(upload).rejects.toMatchObject({
+          code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED',
+        });
+        expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 function dataSource(application: unknown) {
   return {
@@ -166,7 +193,6 @@ function uploadFixture() {
   const applications = { findOne: jest.fn().mockResolvedValue(application) };
   const documents = {
     findOne: jest.fn().mockResolvedValue(null),
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     create: jest.fn((x: Record<string, unknown>) => ({
       id: 'new-id',
       ...x,
@@ -183,7 +209,6 @@ function uploadFixture() {
   };
   const source = {
     getRepository: jest.fn(() => applications),
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return
     transaction: jest.fn((callback: (value: typeof manager) => unknown) =>
       callback(manager),
     ),
@@ -199,5 +224,59 @@ function uploadFixture() {
     files,
     documents,
     source,
+  };
+}
+
+function correctionUploadFixture(currentStatus: DocumentStatus | null) {
+  const application = {
+    id: applicationId,
+    citizenId,
+    status: ApplicationStatus.CORRECTION_REQUIRED,
+  };
+  const current =
+    currentStatus === null
+      ? null
+      : {
+          id: 'current-document-id',
+          applicationId,
+          documentType: DocumentType.CITIZEN_ID_CARD,
+          isCurrent: true,
+          versionNumber: 1,
+          status: currentStatus,
+        };
+  const applications = { findOne: jest.fn().mockResolvedValue(application) };
+  const documents = {
+    findOne: jest.fn().mockResolvedValue(current),
+    create: jest.fn((input: Record<string, unknown>) => ({
+      id: 'new-document-id',
+      ...input,
+      uploadedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    save: jest.fn((value) => Promise.resolve(value)),
+  };
+  const manager = {
+    getRepository: jest.fn((entity) =>
+      entity === RenewalApplication ? applications : documents,
+    ),
+  };
+  const source = {
+    getRepository: jest.fn((entity) =>
+      entity === RenewalApplication ? applications : documents,
+    ),
+    transaction: jest.fn((callback: (value: typeof manager) => unknown) =>
+      callback(manager),
+    ),
+  };
+  const files = {
+    saveApplicationDocument: jest
+      .fn()
+      .mockResolvedValue({ storageKey: 'new-key' }),
+    deleteIfExists: jest.fn(),
+  };
+  return {
+    service: new ApplicationDocumentsService(source as never, files as never),
+    files,
   };
 }

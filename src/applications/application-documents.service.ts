@@ -48,7 +48,7 @@ export class ApplicationDocumentsService {
     file: UploadedApplicationFile | undefined,
   ): Promise<ApplicationDocumentResponse> {
     const extension = this.validateFile(file);
-    await this.assertUploadPreflight(citizenId, applicationId);
+    await this.assertUploadPreflight(citizenId, applicationId, documentType);
     const stored = await this.filesService.saveApplicationDocument(
       applicationId,
       file!.buffer,
@@ -171,6 +171,17 @@ export class ApplicationDocumentsService {
         'A current document of this type already exists',
       );
     }
+    if (
+      current !== null &&
+      application.status === ApplicationStatus.CORRECTION_REQUIRED &&
+      current.status !== DocumentStatus.REJECTED
+    ) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
+        HttpStatus.CONFLICT,
+        'Only rejected documents can be replaced while correction is required',
+      );
+    }
     if (current !== null) {
       current.isCurrent = false;
       await documents.save(current);
@@ -216,6 +227,7 @@ export class ApplicationDocumentsService {
   private async assertUploadPreflight(
     citizenId: string,
     applicationId: string,
+    documentType: DocumentType,
   ): Promise<void> {
     const application = await this.dataSource
       .getRepository(RenewalApplication)
@@ -233,6 +245,18 @@ export class ApplicationDocumentsService {
         HttpStatus.CONFLICT,
         'Document upload is not allowed for the current application status',
       );
+    }
+    if (application.status === ApplicationStatus.CORRECTION_REQUIRED) {
+      const current = await this.dataSource
+        .getRepository(ApplicationDocument)
+        .findOne({ where: { applicationId, documentType, isCurrent: true } });
+      if (current !== null && current.status !== DocumentStatus.REJECTED) {
+        throw new DomainException(
+          ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
+          HttpStatus.CONFLICT,
+          'Only rejected documents can be replaced while correction is required',
+        );
+      }
     }
   }
   private isDocumentUniqueConflict(error: unknown): boolean {
