@@ -1,6 +1,8 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 
+import { AuditLog } from '../activity/entities/audit-log.entity';
+import { AuditActorType } from '../activity/enums/audit-actor-type.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import {
@@ -8,6 +10,8 @@ import {
   type AdminApplicationDetailResponse,
 } from './admin-application-response.mapper';
 import { RequestApplicationCorrectionDto } from './dto/request-application-correction.dto';
+import { RejectApplicationDto } from './dto/reject-application.dto';
+import { ReopenApplicationDto } from './dto/reopen-application.dto';
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
@@ -35,6 +39,26 @@ export class AdminApplicationReviewService {
   ): Promise<AdminApplicationDetailResponse> {
     return this.dataSource.transaction((manager) =>
       this.requestCorrectionWithManager(manager, adminId, applicationId, input),
+    );
+  }
+
+  async reject(
+    adminId: string,
+    applicationId: string,
+    input: RejectApplicationDto,
+  ): Promise<AdminApplicationDetailResponse> {
+    return this.dataSource.transaction((manager) =>
+      this.rejectWithManager(manager, adminId, applicationId, input.reason),
+    );
+  }
+
+  async reopen(
+    adminId: string,
+    applicationId: string,
+    input: ReopenApplicationDto,
+  ): Promise<AdminApplicationDetailResponse> {
+    return this.dataSource.transaction((manager) =>
+      this.reopenWithManager(manager, adminId, applicationId, input.reason),
     );
   }
 
@@ -129,6 +153,89 @@ export class AdminApplicationReviewService {
     return mapAdminApplicationDetail(application);
   }
 
+  private async rejectWithManager(
+    manager: EntityManager,
+    adminId: string,
+    applicationId: string,
+    reason: string,
+  ): Promise<AdminApplicationDetailResponse> {
+    const application = await this.lockSubmittedApplication(
+      manager,
+      applicationId,
+    );
+    if (application.status !== ApplicationStatus.UNDER_REVIEW) {
+      throw this.invalidTransition();
+    }
+    application.status = ApplicationStatus.REJECTED;
+    application.currentCorrectionReason = null;
+    application.currentRejectionReason = reason;
+    await manager.getRepository(RenewalApplication).save(application);
+    await this.writeHistory(
+      manager,
+      application.id,
+      ApplicationStatus.UNDER_REVIEW,
+      ApplicationStatus.REJECTED,
+      adminId,
+    );
+    await this.writeAudit(manager, {
+      actorUserId: adminId,
+      applicationId: application.id,
+      action: 'APPLICATION_REJECTED',
+      description: 'Administrator rejected a renewal application.',
+      oldValues: {
+        status: ApplicationStatus.UNDER_REVIEW,
+        currentRejectionReason: null,
+      },
+      newValues: {
+        status: ApplicationStatus.REJECTED,
+        currentRejectionReason: reason,
+      },
+    });
+    return mapAdminApplicationDetail(application);
+  }
+
+  private async reopenWithManager(
+    manager: EntityManager,
+    adminId: string,
+    applicationId: string,
+    reason: string,
+  ): Promise<AdminApplicationDetailResponse> {
+    const application = await this.lockSubmittedApplication(
+      manager,
+      applicationId,
+    );
+    if (application.status !== ApplicationStatus.REJECTED) {
+      throw this.invalidTransition();
+    }
+    const previousRejectionReason = application.currentRejectionReason;
+    application.status = ApplicationStatus.UNDER_REVIEW;
+    application.currentRejectionReason = null;
+    await manager.getRepository(RenewalApplication).save(application);
+    await this.writeHistory(
+      manager,
+      application.id,
+      ApplicationStatus.REJECTED,
+      ApplicationStatus.UNDER_REVIEW,
+      adminId,
+    );
+    await this.writeAudit(manager, {
+      actorUserId: adminId,
+      applicationId: application.id,
+      action: 'APPLICATION_REOPENED',
+      description: 'Administrator reopened a rejected renewal application.',
+      oldValues: {
+        status: ApplicationStatus.REJECTED,
+        currentRejectionReason: previousRejectionReason,
+      },
+      newValues: {
+        status: ApplicationStatus.UNDER_REVIEW,
+        currentRejectionReason: null,
+        reopenReason: reason,
+      },
+    });
+    return mapAdminApplicationDetail(application);
+  }
+
   private async lockSubmittedApplication(
     manager: EntityManager,
     applicationId: string,
@@ -163,6 +270,35 @@ export class AdminApplicationReviewService {
         previousStatus,
         newStatus,
         changedByUserId: adminId,
+      }),
+    );
+  }
+
+  private async writeAudit(
+    manager: EntityManager,
+    input: {
+      actorUserId: string;
+      applicationId: string;
+      action: 'APPLICATION_REJECTED' | 'APPLICATION_REOPENED';
+      description: string;
+      oldValues: Record<string, unknown>;
+      newValues: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const audits = manager.getRepository(AuditLog);
+    await audits.save(
+      audits.create({
+        actorType: AuditActorType.USER,
+        actorUserId: input.actorUserId,
+        applicationId: input.applicationId,
+        action: input.action,
+        entityType: 'RENEWAL_APPLICATION',
+        entityId: input.applicationId,
+        description: input.description,
+        oldValues: input.oldValues,
+        newValues: input.newValues,
+        ipAddress: null,
+        userAgent: null,
       }),
     );
   }

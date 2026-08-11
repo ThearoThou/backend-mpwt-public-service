@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
+import { AuditLog } from '../activity/entities/audit-log.entity';
 import { AdminApplicationReviewService } from './admin-application-review.service';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
@@ -124,6 +125,105 @@ describe('AdminApplicationReviewService', () => {
     expect(fixture.applications.save).not.toHaveBeenCalled();
     expect(fixture.history.save).not.toHaveBeenCalled();
   });
+
+  it('rejects an under-review application with history and audit in the same transaction', async () => {
+    const reviewStartedAt = new Date('2026-08-10T00:00:00.000Z');
+    const fixture = createFixture({
+      status: ApplicationStatus.UNDER_REVIEW,
+      reviewStartedAt,
+      currentCorrectionReason: 'old correction',
+    });
+
+    await fixture.service.reject(ADMIN_ID, APPLICATION_ID, {
+      reason: 'Rejected after review.',
+    });
+
+    expect(fixture.application.status).toBe(ApplicationStatus.REJECTED);
+    expect(fixture.application.currentCorrectionReason).toBeNull();
+    expect(fixture.application.currentRejectionReason).toBe(
+      'Rejected after review.',
+    );
+    expect(fixture.application.reviewStartedAt).toBe(reviewStartedAt);
+    expect(fixture.history.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousStatus: ApplicationStatus.UNDER_REVIEW,
+        newStatus: ApplicationStatus.REJECTED,
+        changedByUserId: ADMIN_ID,
+      }),
+    );
+    expect(fixture.audits.create).toHaveBeenCalledWith({
+      actorType: 'USER',
+      actorUserId: ADMIN_ID,
+      applicationId: APPLICATION_ID,
+      action: 'APPLICATION_REJECTED',
+      entityType: 'RENEWAL_APPLICATION',
+      entityId: APPLICATION_ID,
+      description: 'Administrator rejected a renewal application.',
+      oldValues: {
+        status: ApplicationStatus.UNDER_REVIEW,
+        currentRejectionReason: null,
+      },
+      newValues: {
+        status: ApplicationStatus.REJECTED,
+        currentRejectionReason: 'Rejected after review.',
+      },
+      ipAddress: null,
+      userAgent: null,
+    });
+    expect(fixture.audits.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopens a rejected application while preserving submission and review data', async () => {
+    const reviewStartedAt = new Date('2026-08-10T00:00:00.000Z');
+    const submittedAt = new Date('2026-08-09T00:00:00.000Z');
+    const fixture = createFixture({
+      status: ApplicationStatus.REJECTED,
+      reviewStartedAt,
+      submittedAt,
+      currentRejectionReason: 'Original rejection reason',
+      referenceNumber: 'VIR-20260809-ABCDEF123456',
+    });
+
+    await fixture.service.reopen(ADMIN_ID, APPLICATION_ID, {
+      reason: 'Reconsidered.',
+    });
+
+    expect(fixture.application.status).toBe(ApplicationStatus.UNDER_REVIEW);
+    expect(fixture.application.currentRejectionReason).toBeNull();
+    expect(fixture.application.reviewStartedAt).toBe(reviewStartedAt);
+    expect(fixture.application.submittedAt).toBe(submittedAt);
+    expect(fixture.application.referenceNumber).toBe(
+      'VIR-20260809-ABCDEF123456',
+    );
+    expect(fixture.audits.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'APPLICATION_REOPENED',
+        oldValues: {
+          status: ApplicationStatus.REJECTED,
+          currentRejectionReason: 'Original rejection reason',
+        },
+        newValues: {
+          status: ApplicationStatus.UNDER_REVIEW,
+          currentRejectionReason: null,
+          reopenReason: 'Reconsidered.',
+        },
+      }),
+    );
+  });
+
+  it.each([ApplicationStatus.SUBMITTED, ApplicationStatus.REJECTED])(
+    'rejects invalid reject transition from %s without history or audit',
+    async (status) => {
+      const fixture = createFixture({ status });
+      await expect(
+        fixture.service.reject(ADMIN_ID, APPLICATION_ID, { reason: 'reason' }),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      });
+      expect(fixture.history.save).not.toHaveBeenCalled();
+      expect(fixture.audits.save).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function createFixture(overrides: Record<string, unknown> = {}) {
@@ -169,13 +269,19 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     create: jest.fn((input: Record<string, unknown>) => input),
     save: jest.fn().mockResolvedValue(undefined),
   };
+  const audits = {
+    create: jest.fn((input: Record<string, unknown>) => input),
+    save: jest.fn().mockResolvedValue(undefined),
+  };
   const manager = {
     getRepository: jest.fn((entity: unknown) =>
       entity === RenewalApplication
         ? applications
         : entity === ApplicationDocument
           ? documents
-          : history,
+          : entity === AuditLog
+            ? audits
+            : history,
     ),
   };
   const dataSource = {
@@ -193,6 +299,7 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     applications,
     documents,
     history,
+    audits,
     application,
     currentDocuments,
   };

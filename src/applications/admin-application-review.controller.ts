@@ -16,6 +16,8 @@ import { createDataResponse } from '../common/http/api-response';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminApplicationReviewService } from './admin-application-review.service';
 import { RequestApplicationCorrectionDto } from './dto/request-application-correction.dto';
+import { RejectApplicationDto } from './dto/reject-application.dto';
+import { ReopenApplicationDto } from './dto/reopen-application.dto';
 
 @Controller('admin/applications')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -48,6 +50,38 @@ export class AdminApplicationReviewController {
   ) {
     return createDataResponse(
       await this.adminApplicationReviewService.requestCorrection(
+        actor.userId,
+        applicationId,
+        input,
+      ),
+    );
+  }
+
+  @Post(':applicationId/reject')
+  async reject(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+    @Body() input: RejectApplicationDto,
+  ) {
+    return createDataResponse(
+      await this.adminApplicationReviewService.reject(
+        actor.userId,
+        applicationId,
+        input,
+      ),
+    );
+  }
+
+  @Post(':applicationId/reopen')
+  async reopen(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+    @Body() input: ReopenApplicationDto,
+  ) {
+    return createDataResponse(
+      await this.adminApplicationReviewService.reopen(
         actor.userId,
         applicationId,
         input,
