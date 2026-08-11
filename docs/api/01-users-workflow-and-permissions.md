@@ -1,454 +1,190 @@
-# Users, Workflow, and Permissions
+# Users, workflow, and permissions
 
-## 1. Scope and approved decisions
+## Scope and source of truth
 
-This document is the Task 4A design baseline for the MPWT Vehicle Inspection
-Renewal Service. It describes intended first-release behavior; it does not add
-an API contract, endpoint list, DTO, controller, service, guard, or database
-rule.
+This document describes the backend that is currently implemented through
+Phases 2, 3, and 4. The source of truth is the NestJS controllers, DTOs,
+services, entities, migrations, and automated tests. It deliberately does not
+describe planned payment, inspection, sticker, cancellation, rescheduling, or
+reinspection features as though they already exist.
 
-The source of truth reviewed for this document is the approved DBML,
-PostgreSQL constraint document, 16 TypeORM entities, 18 enum definitions, and
-three approved migrations. The current modules group work into auth, users,
-vehicles, applications, scheduling, payments, inspections, stickers,
-notifications, activity, files, and admin areas.
+The API prefix is configured by `API_PREFIX` and defaults to `/api`. Protected
+routes use an active-session Bearer access token. The global validation pipe
+transforms validated DTO fields, rejects unknown fields, and returns the shared
+error envelope on validation failure.
 
-Approved first-release decisions:
+## Actors and access
 
-- `CITIZEN` is the public role and `ADMIN` is the internal role.
-- `STAFF` is reserved and is not available in the first release.
-- Both citizen and admin web interfaces are required.
-- Vehicle data is local/mock; there is no external vehicle-registry
-  integration.
-- There are no server-side application drafts. A submitted application is the
-  first persisted application state.
-- A vehicle can have only one active application at a time.
-- Applications use a public `reference_number` in addition to their UUID.
-- Citizens may log in with either phone or email.
-- A successfully verified citizen becomes `ACTIVE` immediately; administrator
-  approval is not required.
-- Authentication uses 30-minute Bearer access tokens plus fixed seven-day,
-  rotating refresh sessions. Refresh credentials are HttpOnly cookies and their
-  server-side records contain only token hashes.
-- Every access token is bound to one refresh session and contains `sub` (user
-  ID), `role` (user role), `sid` (refresh-session ID), and `typ: 'access'`.
-  `sid` is an identifier, not a secret.
-- Verification codes are stored only as hashes. SMS and email delivery are not
-  implemented; a plaintext development code may be exposed only in a local
-  development response or safe development log.
-- All three approved document types are mandatory and must have an approved
-  current version before an application becomes `READY_FOR_INSPECTION`.
-- A citizen may book only for their own `READY_FOR_INSPECTION` application and
-  an eligible `OPEN` slot with remaining capacity.
-- Payment is at the inspection station. No online payment gateway is in scope.
-- A `PENDING` payment is created when an appointment is booked, and payment must
-  be `CONFIRMED` before an inspection result is recorded.
-- A manually `REJECTED` `PAY_AT_STATION` payment does not block the application:
-  the same payment record may later be confirmed while preserving its rejection
-  history. A `CONFIRMED` payment is final for first-release payment actions.
-- Appointment rescheduling cancels the existing appointment and creates a new
-  appointment; `slot_id` is never changed in place.
-- `INSPECTION_FAILED`, `COMPLETED`, and `CANCELLED` are terminal application
-  statuses. Reinspection is not implemented in the first release.
-- Notifications are in-app only. `EMAIL` and `SMS` remain reserved channels.
-- Application timeline events are citizen-facing; audit logs are internal and
-  must never be exposed to citizens.
+| Actor     | Implemented access                                                                                                                                                                                                                                                                               |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CITIZEN` | Manages their profile and vehicles; creates and progresses only their own renewal applications; uploads/downloads their own application documents; sees active stations and selectable dates; sets a DRAFT preference; and selects a replacement station/date when required.                     |
+| `ADMIN`   | Lists and reads submitted applications and their document/status-history records; starts reviews, requests corrections, rejects, reopens, and performs review-pass; manages daily station capacities; manages users, vehicles, and inspection categories through their implemented admin routes. |
+| `STAFF`   | Present in the role enum but has no implemented route or permission policy.                                                                                                                                                                                                                      |
 
-### Workflow enum inventory
+Citizens cannot use admin routes or operate on another citizen's application.
+Admins cannot use the citizen-only scheduling discovery or application mutation
+routes. Ownership is checked in the application/document services, not supplied
+by a caller-controlled request field.
 
-| Enum | Approved values | Workflow use |
-|---|---|---|
-| `user_role` | `CITIZEN`, `ADMIN`, `STAFF` | Access scope; `STAFF` is reserved. |
-| `user_status` | `PENDING_VERIFICATION`, `ACTIVE`, `DISABLED` | Account availability. |
-| `verification_purpose` | `REGISTER_ACCOUNT`, `RESET_PASSWORD`, `CHANGE_PHONE` | Hashed verification-code purpose. |
-| `application_status` | `SUBMITTED`, `UNDER_REVIEW`, `CORRECTION_REQUIRED`, `READY_FOR_INSPECTION`, `INSPECTION_FAILED`, `COMPLETED`, `CANCELLED` | Renewal lifecycle. |
-| `document_type` | `VEHICLE_REGISTRATION_CARD`, `PREVIOUS_INSPECTION_CERTIFICATE`, `NATIONAL_ID` | All three are mandatory in the first release. |
-| `document_status` | `PENDING`, `APPROVED`, `REJECTED` | Document review outcome. |
-| `appointment_slot_status` | `OPEN`, `CLOSED`, `CANCELLED` | Slot availability. |
-| `appointment_status` | `SCHEDULED`, `COMPLETED`, `CANCELLED`, `NO_SHOW` | Appointment lifecycle. |
-| `payment_method` | `PAY_AT_STATION`, `BANK_QR`, `BANK_CARD` | First release uses `PAY_AT_STATION`; other values are reserved. |
-| `payment_status` | `PENDING`, `CONFIRMED`, `FAILED`, `REJECTED` | `REJECTED` is used for manual station refusal; `FAILED` is reserved for future technical/provider failure. |
-| `inspection_status` | `PENDING`, `COMPLETED` | Inspection recording lifecycle. |
-| `inspection_result` | `PASS`, `FAIL` | Nullable until an inspection is completed. |
-| `sticker_status` | `NOT_READY`, `READY_FOR_PICKUP`, `ISSUED` | Sticker/certificate lifecycle. |
-| `notification_channel` | `IN_APP`, `EMAIL`, `SMS` | First release writes `IN_APP` only. |
-| `notification_delivery_status` | `PENDING`, `SENT`, `FAILED` | Delivery bookkeeping. |
-| `notification_type` | `APPLICATION_SUBMITTED`, `REVIEW_STARTED`, `CORRECTION_REQUIRED`, `DOCUMENTS_APPROVED`, `PAYMENT_PENDING`, `PAYMENT_CONFIRMED`, `PAYMENT_FAILED`, `APPOINTMENT_SCHEDULED`, `APPOINTMENT_CANCELLED`, `APPOINTMENT_REMINDER`, `APPOINTMENT_NO_SHOW`, `READY_FOR_INSPECTION`, `INSPECTION_PASSED`, `INSPECTION_FAILED`, `STICKER_READY`, `APPLICATION_COMPLETED`, `APPLICATION_CANCELLED`, `SYSTEM_ANNOUNCEMENT` | Citizen notification vocabulary. |
-| `timeline_event_type` | `APPLICATION_SUBMITTED`, `REVIEW_STARTED`, `CORRECTION_REQUIRED`, `CORRECTION_RESUBMITTED`, `DOCUMENTS_APPROVED`, `PAYMENT_PENDING`, `PAYMENT_CONFIRMED`, `PAYMENT_FAILED`, `APPOINTMENT_SCHEDULED`, `APPOINTMENT_CANCELLED`, `APPOINTMENT_NO_SHOW`, `READY_FOR_INSPECTION`, `INSPECTION_PASSED`, `INSPECTION_FAILED`, `STICKER_PREPARING`, `STICKER_READY`, `STICKER_ISSUED`, `APPLICATION_COMPLETED`, `APPLICATION_CANCELLED` | Citizen-facing application history. |
-| `audit_actor_type` | `USER`, `SYSTEM` | Internal audit attribution. |
+## Authentication and users
 
-## 2. Actors and roles
+The implemented authentication model remains unchanged:
 
-| Role | Responsibilities and allowed work | Forbidden work | Data scope and record effects |
-|---|---|---|---|
-| `CITIZEN` | Register, verify an identifier, manage their own profile, use local/mock vehicle data, submit an application, upload replacement documents, book or cancel an eligible appointment, reschedule by cancelling and creating a new appointment, view own payment/inspection/sticker progress, and mark own notifications read. | Cannot review documents, change application workflow status directly, manage stations/slots, confirm payment, record inspection, issue stickers, view another citizen's data, or view audit logs. | Own records only, determined through `renewal_applications.citizen_id` and related application ownership. Submission, booking, cancellation, and workflow-relevant changes create their approved timeline/audit/notification effects. Document replacement creates its timeline and audit effects only; it has no approved notification type. Citizens never delete historical records. |
-| `ADMIN` | Manage stations and slots, review applications/documents, request corrections, mark applications ready, manage appointment outcomes, confirm/reject station payment, record inspection, prepare/issue stickers, send announcements, and view audit logs. | Cannot act as `STAFF`, expose audit data to citizens, delete historical government-service records, or bypass ownership/consistency checks. | May read all operational records. Admin workflow actions create timeline events, audit records, and citizen notifications when the action matters to the applicant. Admin does not need an `admin_profiles` model. |
-| `STAFF` | Reserved only. | No login, authorization policy, UI, or workflow action is defined in the first release. | Must be denied until a future approved scope defines responsibilities. |
+- Public registration creates a `CITIZEN` account. Verification activates it.
+- Login accepts a normalized phone number or email and requires an active
+  account.
+- Access tokens are session-bound Bearer tokens. Refresh credentials are held
+  in an HttpOnly cookie; refresh and logout do not accept a JSON body.
+- Password reset, logout, and disabling a user revoke the applicable active
+  refresh session(s). A token whose session is revoked, expired, or belongs to
+  a non-active user cannot access protected routes.
+- `GET /api/users/me` is available to active citizens and admins. Only a
+  citizen can update their own citizen profile.
 
-`ACTIVE` is required before a user may perform normal authenticated actions.
-`PENDING_VERIFICATION` may perform only the verification flow. A successful
-registration verification immediately sets a citizen to `ACTIVE`. `DISABLED`
-users may not authenticate or continue workflow actions, including when they
-present an otherwise valid JWT.
+The public auth routes are documented in the REST contract. The initial admin
+is created only by the configured bootstrap process, never public registration.
 
-## 3. Authentication workflow
+### Authentication and session safeguards
 
-### A. Facts directly supported by the schema
-
-- A user has a role, status, nullable unique phone/email fields, and a hidden
-  `password_hash`.
-- The database requires at least one of phone or email.
-- `phone_verified_at` and `email_verified_at` can be recorded independently.
-- Verification codes have a destination, purpose, hidden `code_hash`, expiry,
-  usage timestamp, and attempt count. They can be associated with a user or
-  have a null `user_id` during registration.
-- Refresh sessions have a user foreign key, hidden token hash, fixed expiry,
-  usage/revocation/reuse timestamps, and revocation reason. User deletion may
-  cascade-delete these credential records; it does not imply a public
-  user-delete route.
-- There is no OAuth, social-login, biometric, external-identity, outbound-delivery,
-  or administrator-approval table.
-
-### B. Approved minimum first-release behavior
-
-| Flow | Approved behavior |
-|---|---|
-| Citizen registration | Validate phone or email and password, create a `CITIZEN` user in `PENDING_VERIFICATION`, create the one-to-one citizen profile, and create a hashed `REGISTER_ACCOUNT` code for the chosen destination. When both identifiers are supplied, `verificationIdentifier` selects one submitted normalized phone or email destination; it is required in that case. |
-| Phone or email verification | Match a non-expired, unused hashed code, enforce the attempt limit, mark the code used, populate the matching verification timestamp, set the citizen account to `ACTIVE`, create one refresh-session record, return an access token bound to that session in `AuthTokenResponse`, and set the refresh cookie. No administrator approval is required. |
-| Verification delivery | SMS/email delivery is not implemented. In local development only, the plaintext code may be returned as a development-only response field or written to a safe development log. It must never be stored in plaintext or exposed by production-style responses. |
-| Citizen login | Accept either phone or email as the login identifier, verify the password hash, require `ACTIVE`, update `last_login_at`, create one refresh session for the device/browser, return a 30-minute-maximum access token bound to that session, and set the fixed-seven-day refresh cookie. Multiple devices/browsers may hold separate sessions. |
-| Admin login | Apply the same credential/status checks, require `role = ADMIN`, and create the same per-device refresh session/access-token pair. Admin accounts are created through a controlled one-time bootstrap process, not public registration. |
-| Refresh | Authenticate a refresh credential from its HttpOnly cookie, lock the matching session, verify signature/session ID/user/hash/fixed expiry/revocation, require `ACTIVE`, rotate the token for that same row, update usage data, preserve the original `expires_at`, and return a replacement access token bound to that session in `AuthTokenResponse` plus a rotated cookie. Its expiry never exceeds that session's `expires_at`. Any invalid, missing, expired, revoked, or reused refresh credential returns the same safe `AUTH_TOKEN_INVALID` response. Reuse of a rotated token revokes the affected session and immediately blocks its bound access tokens. |
-| Logout | Use the refresh cookie when present to revoke only its matching current session, immediately blocking access tokens bound to that session, then clear the cookie. It is idempotent: missing, expired, invalid, or already-revoked cookies are cleared without exposing session existence. Logging out one device/browser does not affect another active session. |
-| Current-user profile | Return the authenticated user's own user and applicable citizen-profile data. Exclude password and verification-code hashes. |
-| Password-reset request | Create a hashed `RESET_PASSWORD` code for the matched phone or email without revealing whether an account exists. |
-| Password-reset completion | Verify the reset code, replace `password_hash`, mark the code used, and revoke every active refresh session for that user, immediately blocking all access tokens bound to those sessions. It does not create a replacement session. |
-| Account disable | When an administrator changes a user to `DISABLED`, revoke every active refresh session inside the same user-status transaction, immediately blocking all access tokens bound to those sessions. Returning a user to `ACTIVE` never restores or creates sessions. |
-
-### C. Authentication implementation constraints
-
-- The login identifier must match exactly one user.
+- A user has `CITIZEN`, `ADMIN`, or reserved `STAFF` role and is
+  `PENDING_VERIFICATION`, `ACTIVE`, or `DISABLED`. Normal protected work
+  requires `ACTIVE`.
+- A user must have at least one unique normalized phone number or email.
+  `phoneVerifiedAt` and `emailVerifiedAt` are recorded independently.
+- Registration creates a `PENDING_VERIFICATION` citizen, citizen profile, and
+  a hashed `REGISTER_ACCOUNT` verification code. When both phone and email are
+  supplied, `verificationIdentifier` selects the submitted destination.
 - Verification codes are purpose-specific, expiring, single-use, and
-  attempt-limited.
-- The initial administrator is provisioned by a controlled bootstrap process.
-- There is no public administrator-registration endpoint.
-- Session IDs are never returned as separate JSON response properties. The
-  non-secret `sid` is intentionally contained inside signed access-token and
-  refresh-token JWT claims.
-- Raw refresh tokens, refresh-cookie values, token hashes, revocation data, and
-  standalone session IDs are never returned in JSON or included in audit data.
-- Every access token carries `sub`, `role`, `sid`, and `typ: 'access'`; `sid`
-  is the non-secret refresh-session identifier. For every protected request,
-  the future access-token guard verifies the JWT signature and expiry,
-  `typ = 'access'`, that the user still exists and is `ACTIVE`, that `sid`
-  belongs to that user, and that the refresh session is neither revoked nor
-  expired.
-- Access tokens have a maximum 30-minute lifetime. When issuing an access
-  token near the fixed seven-day session deadline, its expiry must be no later
-  than that refresh session's `expires_at`.
-- Refresh rotation never extends the initial seven-day session deadline. There
-  is no refresh-session listing, device-management UI/route, or logout-all
-  route in the first release.
-- Passport, OAuth, social login, biometric login, and external identity-provider
-  integration are outside the first-release scope.
+  attempt-limited. They are stored only as hashes. Local development may expose
+  a development code only when explicitly configured; production-style
+  responses do not expose plaintext codes.
+- Verification creates an active account and a refresh session. Login requires
+  valid credentials and an active account, then creates a separate session for
+  that browser/device.
+- Access tokens contain `sub`, `role`, `sid`, and `typ: 'access'`. `sid` is a
+  non-secret session identifier. The guard verifies signature, expiry, token
+  type, active user, session ownership, and that the backing refresh session is
+  neither revoked nor expired.
+- Refresh rotation locks and validates the session, rotates the stored token
+  hash without extending the original expiry, and returns a replacement access
+  token plus cookie. Reuse of a rotated refresh token revokes that session.
+- Logout revokes only the current refresh session and clears the cookie.
+  Password reset revokes all active sessions for that user. Disabling a user
+  also revokes all active sessions in the same transaction; reactivation does
+  not restore a session.
+- Raw refresh tokens, password hashes, verification-code hashes, and
+  revocation metadata are not returned in JSON. There is no public admin
+  registration, OAuth, social login, biometric login, or external identity
+  provider integration.
 
-## 4. Renewal application workflow
+## Renewal application lifecycle
 
-There is no persisted draft. A citizen submits a complete request as a new
-`SUBMITTED` application containing immutable applicant and vehicle snapshots.
-The application remains the source of public lifecycle status; appointment,
-payment, inspection, and sticker records provide the detailed operational
-state.
+### Status enum
 
-### Application transitions
+`application_status` contains the following persisted values:
 
-The first release contains exactly eight application transitions. A rejected
-transition must leave all statuses and related records unchanged, return a
-domain validation or authorization error, and create no success timeline event
-or notification.
+`DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `CORRECTION_REQUIRED`,
+`APPOINTMENT_SELECTION_REQUIRED`, `APPROVED`, `REJECTED`,
+`REINSPECTION_REQUIRED`, `CANCELLED`, and `COMPLETED`.
 
-| # | Current → target | Actor and trigger | Preconditions and records updated | Timeline / notification / audit | Reversible |
-|---:|---|---|---|---|---|
-| 1 | New request → `SUBMITTED` | Citizen submits | Authenticated active citizen; local/mock vehicle is within their permitted scope; one-active-application rule passes; snapshots and all three initial required documents are stored. | `APPLICATION_SUBMITTED`; `APPLICATION_SUBMITTED` notification; audit submission. | No draft to return to. Cancellation is a separate transition. |
-| 2 | `SUBMITTED` → `UNDER_REVIEW` | Admin starts review | Application is in the review queue and is not final. Set `review_started_at`. | `REVIEW_STARTED`; `REVIEW_STARTED` notification; audit review action. | No direct reverse transition. |
-| 3 | `UNDER_REVIEW` → `CORRECTION_REQUIRED` | Admin requests corrections | At least one reason is recorded in `current_correction_reason`; one or more current documents are rejected or otherwise require correction. | `CORRECTION_REQUIRED`; `CORRECTION_REQUIRED` notification; audit reason and decision. | Yes, through corrected resubmission. |
-| 4 | `CORRECTION_REQUIRED` → `SUBMITTED` | Citizen resubmits corrections | Citizen owns the application; required replacements are uploaded as new current versions with `PENDING` status. Clear or supersede the current correction reason as part of the transaction. | `CORRECTION_RESUBMITTED`; no dedicated notification to the same citizen; audit replacement and resubmission. | Yes, admin can request another correction. |
-| 5 | `UNDER_REVIEW` → `READY_FOR_INSPECTION` | Admin accepts review | Current versions exist for `VEHICLE_REGISTRATION_CARD`, `PREVIOUS_INSPECTION_CERTIFICATE`, and `NATIONAL_ID`; all three are `APPROVED`; none is `PENDING` or `REJECTED`. Set `ready_for_inspection_at`. | `DOCUMENTS_APPROVED` and `READY_FOR_INSPECTION`; matching notifications; audit approval. | No normal reverse transition. |
-| 6 | `READY_FOR_INSPECTION` → `INSPECTION_FAILED` | Admin records completed failed inspection | Appointment belongs to the application; payment is `CONFIRMED`; inspection is completed with `FAIL`; failure reason, recorder, and completion time are recorded. | `INSPECTION_FAILED`; `INSPECTION_FAILED` notification; audit result. | No. `INSPECTION_FAILED` is terminal. |
-| 7 | `READY_FOR_INSPECTION` → `COMPLETED` | System after admin issues sticker | A completed inspection has `PASS`; the application sticker is `ISSUED`; set `completed_at`. | `STICKER_ISSUED` then `APPLICATION_COMPLETED`; `APPLICATION_COMPLETED` notification; audit issuance/completion. | No. `COMPLETED` is terminal. |
-| 8 | Eligible non-final status → `CANCELLED` | Citizen or admin cancels | Citizen: owns the application; status is `SUBMITTED`, `CORRECTION_REQUIRED`, or `READY_FOR_INSPECTION`; payment is not `CONFIRMED`; no inspection is `COMPLETED`. Admin: application is non-final and inspection is not completed; a cancellation reason is required. Set application `cancelled_at`, `cancelled_by_user_id`, and `cancellation_reason`; if a scheduled appointment exists, cancel it with the same fields and release capacity in the same transaction. An admin cancellation after confirmed payment retains that payment unchanged as immutable history, without reversal or refund. | Application: `APPLICATION_CANCELLED`, matching notification, audit. Scheduled appointment when present: `APPOINTMENT_CANCELLED`, matching notification, audit. | No. `CANCELLED` is terminal. |
+The presence of an enum value is not an endpoint contract. In particular,
+there is currently no implemented route that transitions an application to
+`REINSPECTION_REQUIRED` or `COMPLETED`, and Phase 4 adds no rescheduling,
+cancellation, or reinspection behavior for scheduled daily-capacity
+appointments.
 
-`READY_FOR_INSPECTION` remains the application status while a citizen books an
-appointment, pays at the station, and awaits inspection. There are no separate
-application enum values for scheduled appointment or payment confirmation.
+### Implemented transitions
 
-`INSPECTION_FAILED`, `COMPLETED`, and `CANCELLED` are terminal. No first-release
-transition returns any of them to an active status.
+| From                                                                             | To                               | Actor / operation             | Implemented rule                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------------------------------------------------------- | -------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New                                                                              | `DRAFT`                          | Citizen creates application   | The vehicle must exist, belong to the citizen, and have no unfinished application. Reference number and snapshots are initially `null`; a `null → DRAFT` status-history row is written.                                                                                                                                                                     |
+| `DRAFT`                                                                          | `SUBMITTED`                      | Citizen submits               | All three current required documents must exist and none may be rejected; a citizen profile and vehicle must exist; a preferred active, future, open, non-full station/date must be selected. Submission creates snapshots and reference number, revalidates the preference, and writes history. It does **not** reserve capacity or create an appointment. |
+| `CORRECTION_REQUIRED`                                                            | `SUBMITTED`                      | Citizen resubmits             | Required current documents must exist and no required document may remain rejected. The service validates the existing submission data and writes history.                                                                                                                                                                                                  |
+| `SUBMITTED`                                                                      | `UNDER_REVIEW`                   | Admin starts review           | Sets `reviewStartedAt` if it has not been set, clears current correction/rejection reason fields, and writes history.                                                                                                                                                                                                                                       |
+| `UNDER_REVIEW`                                                                   | `CORRECTION_REQUIRED`            | Admin requests correction     | The request names one or more document types and a reason. Current named documents become `REJECTED`; other current documents become `APPROVED`; correction reason and history are recorded.                                                                                                                                                                |
+| `UNDER_REVIEW`                                                                   | `REJECTED`                       | Admin rejects                 | Requires a reason; records current rejection reason, history, and an audit row.                                                                                                                                                                                                                                                                             |
+| `REJECTED`                                                                       | `UNDER_REVIEW`                   | Admin reopens                 | Requires a reason; clears the rejection reason and records history and an audit row.                                                                                                                                                                                                                                                                        |
+| `UNDER_REVIEW`                                                                   | `APPROVED`                       | Admin review-pass             | Atomically reserves the stored preferred daily capacity, creates one `SCHEDULED` appointment using `daily_capacity_id`, updates status, and writes history.                                                                                                                                                                                                 |
+| `UNDER_REVIEW`                                                                   | `APPOINTMENT_SELECTION_REQUIRED` | Admin review-pass fallback    | If the preferred capacity cannot be reserved, writes the fallback status and history only. It creates no appointment and does not change the capacity counter.                                                                                                                                                                                              |
+| `APPOINTMENT_SELECTION_REQUIRED`                                                 | `APPROVED`                       | Citizen appointment selection | Atomically reserves the citizen's selected daily capacity, replaces the stored preference, creates one `SCHEDULED` daily-capacity appointment, updates status, and writes history.                                                                                                                                                                          |
+| `DRAFT`, `SUBMITTED`, `CORRECTION_REQUIRED`, or `APPOINTMENT_SELECTION_REQUIRED` | `CANCELLED`                      | Citizen cancellation          | The citizen may cancel only their own application in one of these states. The optional reason and history are recorded. No Phase 4 daily-capacity release or appointment cancellation is implemented by this operation.                                                                                                                                     |
 
-## 5. Document workflow
+Every listed state-changing service executes in a database transaction and
+rejects an invalid source state with `APPLICATION_INVALID_TRANSITION`. There is
+no standalone admin “approve” endpoint that merely changes status: the only
+approval operation is review-pass and it owns reservation, appointment,
+application transition, and history in one transaction.
 
-- All three current document types are mandatory:
-  `VEHICLE_REGISTRATION_CARD`, `PREVIOUS_INSPECTION_CERTIFICATE`, and
-  `NATIONAL_ID`.
-- A citizen uploads documents for an application they own. `uploaded_by_user_id`
-  preserves who uploaded each version.
-- Current document status starts as `PENDING`. An admin changes it to
-  `APPROVED` or `REJECTED`, recording reviewer, review time, and rejection
-  reason where applicable.
-- An application may become `READY_FOR_INSPECTION` only when one current version
-  exists for every mandatory type, all three current versions are `APPROVED`,
-  and none is `PENDING` or `REJECTED`.
-- A rejected document is corrected by creating a new row with the same
-  application/document type, a higher `version_number`, `is_current = true`,
-  and `replaces_document_id` pointing at the previous version. The replaced row
-  becomes `is_current = false`.
-- The database enforces one current document per application/type, unique
-  version numbers, positive versions, and positive file sizes. Replacement must
-  be transactional.
-- Citizens may view only the current version of each document type for their
-  own application. Admins may view all versions for review and audit.
-  Historical versions remain stored and are not deleted.
-- A document status is not silently edited backward. A new replacement version
-  is the normal route for changed content.
+## Documents
 
-## 6. Appointment workflow
+The required document enum is exactly:
 
-- Admins create and maintain inspection stations, slots, capacity, and slot
-  status. Stations and slots are closed or cancelled rather than broadly
-  deleted.
-- Citizens may list eligible `OPEN` slots and book a `SCHEDULED` appointment
-  only for their own `READY_FOR_INSPECTION` application.
-- Booking must transactionally lock or protect the slot, verify it is `OPEN`,
-  count current `SCHEDULED` appointments, confirm remaining capacity, and
-  enforce that the application has no existing `SCHEDULED` appointment.
-- Successful booking creates the appointment and the application's one
-  `PENDING` `PAY_AT_STATION` payment record in the same transaction.
-- A citizen may cancel their own `SCHEDULED` appointment before its start time.
-  An admin may cancel a scheduled appointment for an operational reason.
-  Cancellation records `cancelled_at`, `cancelled_by_user_id`, and
-  `cancellation_reason`.
-- Admins may mark an eligible appointment `NO_SHOW`. `COMPLETED` is set only
-  when the related inspection is completed in the same transaction. A cancelled
-  or no-show appointment no longer consumes scheduled capacity.
-- Rescheduling cancels the current appointment and creates a new appointment in
-  one transaction. `slot_id` must never be changed in place because the original
-  slot history must be preserved.
-- The first release has no configurable cancellation deadline beyond the
-  appointment start time, no cancellation fee, and no rescheduling limit.
+- `VEHICLE_REGISTRATION_CARD`
+- `PREVIOUS_INSPECTION_CERTIFICATE`
+- `CITIZEN_ID_CARD`
 
-## 7. Payment workflow
+`NATIONAL_ID` is not a valid current document type.
 
-- The first-release method is `PAY_AT_STATION`; `BANK_QR` and `BANK_CARD` remain
-  unused reserved enum values.
-- Each application has at most one payment record. The record is created when
-  the first appointment is successfully booked, has an invoice number, starts
-  as `PENDING`, and uses the approved amount and currency constraints.
-- An admin at the station confirms payment by setting `CONFIRMED`,
-  `confirmed_at`, `confirmed_by_user_id`, and `receipt_number`.
-- Confirmation accepts a `PENDING` or previously manually `REJECTED`
-  `PAY_AT_STATION` payment. It never creates a second payment record and keeps
-  any existing `rejected_at`, `rejected_by_user_id`, and `rejection_reason`.
-- Confirmation creates `PAYMENT_CONFIRMED` timeline and notification records
-  plus an audit record. The earlier rejection and later confirmation are both
-  retained in audit history.
-- A `CONFIRMED` payment is required before an inspection result can be recorded.
-- `REJECTED` means the manual station payment was refused or rejected by the
-  station employee. The actor, rejection time, and reason must be recorded; it
-  creates an audit record only, with no `PAYMENT_FAILED` timeline or
-  notification. A rejected payment cannot be rejected again, but may later be
-  confirmed. The application remains `READY_FOR_INSPECTION` until confirmation
-  and inspection proceed.
-- `FAILED` is reserved for future technical or external-provider failures and
-  is not used in the first-release manual payment workflow.
-- Provider fields remain null for first-release `PAY_AT_STATION` payments.
-- Citizens may view their own payment details but cannot edit payment status,
-  amounts, invoice data, receipt data, or provider fields.
-- Payment records are retained and never deleted. A confirmed payment cannot be
-  confirmed or rejected again in the first release.
-- If an admin cancels an application after payment is `CONFIRMED`, the confirmed
-  payment remains an immutable historical record and its status does not change.
-  It is not reversed, deleted, or automatically refunded.
+Citizens upload documents separately from application creation. Upload is
+allowed only while the application is `DRAFT` or `CORRECTION_REQUIRED`.
 
-## 8. Inspection and sticker workflow
+- In `DRAFT`, a current document type cannot be uploaded twice.
+- In `CORRECTION_REQUIRED`, only a current rejected document may be replaced.
+- A replacement makes the previous version non-current, increments its version
+  number, and begins with `PENDING` document status.
+- The accepted file forms are PDF, JPG/JPEG, and PNG, with matching MIME type,
+  non-zero size, and a maximum size of 5 MiB.
 
-### Inspection
+Citizen document list/download/history routes enforce ownership. Admins have
+read-only current-document, history, and download routes. There is no separate
+admin document-review endpoint; document outcomes are currently written by the
+admin request-correction operation.
 
-- An admin records an inspection against an appointment and the same
-  application. The composite foreign key enforces that consistency.
-- The appointment must belong to the application, be eligible for inspection,
-  and the application payment must be `CONFIRMED`.
-- An inspection starts `PENDING`; completion records `COMPLETED`, a `PASS` or
-  `FAIL` result, recorder, completion time, and notes. A `FAIL` result requires
-  a failure reason.
-- `PASS` allows creation or preparation of the application's one sticker.
-- `FAIL` moves the application to terminal `INSPECTION_FAILED`.
-- Reinspection is not implemented. A failed application cannot return to
-  `READY_FOR_INSPECTION` or be reopened. A citizen may later submit a new
-  application when the one-active-application rule permits it.
+## Phase 4 scheduling workflow
 
-### Sticker and completion
+Phase 4 scheduling selects a station and a calendar date; it is not a new
+citizen hourly time-slot booking flow.
 
-- After a passed inspection, create or retain the one sticker record in
-  `NOT_READY` and emit `STICKER_PREPARING` when preparation begins.
-- An admin marks it `READY_FOR_PICKUP`, records `ready_at` and actor, and emits
-  `STICKER_READY` plus the citizen notification.
-- An admin marks it `ISSUED`, records recipient/pickup details, issuer, and
-  `issued_at`, then emits `STICKER_ISSUED`.
-- Sticker number, certificate number, and certificate-file assignment follow
-  the approved number-generation and file-storage conventions defined during
-  implementation planning. They must be unique when supplied.
-- Only a `PASS` inspection and `ISSUED` sticker permit the application
-  `COMPLETED` transition.
+1. A citizen lists active stations and their selectable dates. A date is
+   selectable only when its station is active, the Cambodia-local date is in
+   the future, the capacity is open, and `reserved_count < daily_capacity`.
+2. While an application is `DRAFT`, the citizen saves exactly one paired
+   station/date preference. This validates availability but does not reserve
+   capacity or create an appointment.
+3. Submission repeats the availability validation but still does not reserve.
+4. Review-pass attempts the reservation. Success produces `APPROVED` and one
+   appointment. An unavailable preference produces
+   `APPOINTMENT_SELECTION_REQUIRED` with no appointment.
+5. A citizen in `APPOINTMENT_SELECTION_REQUIRED` selects a new available
+   station/date. The successful operation reserves it and reaches `APPROVED`.
 
-## 9. Authorization matrix
+An administrator can create, list, retrieve, change the total daily capacity,
+close, and reopen daily-capacity rows. Admins never set `reserved_count`.
+Closing a row stops new reservations but does not release existing consumed
+capacity. `reserved_count` is a consumed-unit counter: `COMPLETED` and
+`NO_SHOW` appointments are not a reason to recompute or release it.
 
-`Own` means application ownership through `renewal_applications.citizen_id`.
-`—` means the role must never receive that operation in the first release.
+## Appointment compatibility
 
-| Resource | CITIZEN: list/view/create/update/delete | ADMIN: list/view/create/update/delete |
-|---|---|---|
-| User profile | Own only / registration creates user / view through current-user response / no direct update or delete | All users / list and view / bootstrap provisions admin / manage only permitted account status / no delete |
-| Citizen profile | Own only / created with registration / update through the dedicated citizen-profile route / no delete | No first-release profile-management endpoint / no delete |
-| Vehicle | Own/linked local mock only / list, view, or create for own request / no update or delete | List/view all local records / no create, update, or delete endpoint |
-| Renewal application | Own only / create by submission / cancellation only under approved conditions; no direct workflow-status edit / no delete | All / no citizen-owned creation / review, transition, and cancel under approved rules / no delete |
-| Application document | Own application / upload initial or replacement version / replacement only, not in-place history edit / no delete | All / review current versions and view history / no binary or history delete |
-| Inspection station | View/list active stations / — / — / — | All / create / update active details or status / no delete |
-| Appointment slot | View/list eligible open slots / — / — / — | All / create / update capacity/status / no delete; close or cancel |
-| Appointment | Own only / create booking, cancel before start, reschedule by cancel-and-create / no in-place slot update / no delete | All / list/view, cancel, or mark `NO_SHOW`; inspection completion alone sets `COMPLETED` / no delete |
-| Payment | Own only / created automatically with booking / no edit / no delete | All / creation is workflow-driven / confirm a `PENDING` or `REJECTED` payment, reject `PENDING` only / no delete |
-| Inspection | Own application result only / — / — / no delete | All / create or record / complete result after confirmed payment / no delete |
-| Sticker | Own application status/certificate only / — / — / no delete | All / create or prepare / mark ready and issue / no delete |
-| Notification | Own only / — / mark read only / no delete | All operational notifications / create announcement / delivery correction if needed / no broad delete |
-| Timeline event | Own application and `visible_to_citizen = true` / — / — / no delete | All / created as workflow effect / no historical edit or delete |
-| Audit log | — / — / — / — | List/view all / system-generated only / immutable / never delete |
+`appointment_slots` remains in the database for legacy compatibility. The
+current Phase 4 flow does not expose new slot-management, slot-selection, or
+appointment-management HTTP endpoints.
 
-## 10. Timeline-event rules
+The `appointments` table supports exactly one scheduling source per row:
 
-Timeline records belong to an application and default to citizen-visible. They
-are created for material lifecycle actions, not ordinary reads. Use only the
-approved enum values:
+- legacy appointment: `slot_id` populated and `daily_capacity_id` `NULL`;
+- Phase 4 appointment: `slot_id` `NULL` and `daily_capacity_id` populated.
 
-- Submission, review start, correction request/resubmission, document approval,
-  appointment schedule/cancel/no-show, payment pending/confirmed, ready for
-  inspection, inspection pass/fail, sticker preparation/ready/issued,
-  completion, and cancellation use their matching timeline event types.
-- `PAYMENT_PENDING` is created when appointment booking creates the payment.
-- `PAYMENT_CONFIRMED` is created when station payment is confirmed.
-- Database status `REJECTED` has no dedicated timeline enum. The exact
-  workflow rule is audit only, with no new timeline or notification enum value.
-  Citizen-facing wording is a presentation detail only.
-- `PAYMENT_FAILED` is reserved for the future technical/provider failure flow
-  and is never used for rejected manual station payment.
-- Timeline metadata may contain non-sensitive operational context. It must not
-  contain password hashes, verification-code values/hashes, or internal audit
-  details.
+Phase 4 creates `SCHEDULED` appointments only. The retained partial unique
+constraint allows at most one scheduled appointment per application. There is
+currently no appointment read response or standalone appointments route; the
+appointment is an internal result of successful scheduling orchestration.
 
-## 11. Notification rules
+## Implemented boundaries
 
-- First release creates `IN_APP` notifications only. `EMAIL` and `SMS` are not
-  sent.
-- Notifications are created for citizen-visible milestones with an approved
-  `notification_type`, including correction requests (not correction
-  resubmission), document approval, appointment changes, payment
-  pending/confirmation, inspection outcomes, sticker ready, completion,
-  cancellation, and announcements.
-- The recipient is the application citizen or an appropriate audience for a
-  `SYSTEM_ANNOUNCEMENT`. A `SYSTEM_ANNOUNCEMENT` is sent to every `ACTIVE`
-  citizen only; there is no audience selection, targeting, or scheduling.
-  Citizens can read only their own notifications and mark them read.
-- No notification enum exists for correction resubmission, sticker issued, or
-  rejected manual payment. These actions must not invent new notification
-  types. Correction resubmission creates its timeline and audit effects only;
-  rejected manual payment creates its audit effect only.
-
-## 12. Audit-log rules
-
-- Audit logs are internal, immutable, and never shown to citizens.
-- Create an audit record for authentication-sensitive changes, application
-  status transitions, document review, slot administration, booking,
-  cancellation/rescheduling, payment decisions, inspection recording, sticker
-  issuance, announcements, and privileged profile/vehicle changes.
-- Record `USER` with actor user ID for an authenticated action and `SYSTEM` for
-  automated completion/notification activity. Include action, entity type/ID,
-  application when relevant, safe old/new values, request IP, and user agent
-  where available.
-- Do not put password hashes, verification codes, plaintext development codes,
-  access tokens, or other secrets in old/new values.
-
-## 13. Transaction boundaries
-
-| Operation | Transaction boundary and reason |
-|---|---|
-| Verification plus session creation | Lock the eligible registration code/user, consume the code, activate and timestamp the user, create one refresh-session row, and prepare the `AuthTokenResponse`/cookie only after the transaction succeeds. |
-| Login plus session creation | Verify credentials and `ACTIVE` status, update `last_login_at`, create one refresh-session row, and issue the response/cookie as one unit so login cannot partially update the user or create a session. |
-| Refresh rotation | Lock the refresh-session row by its signed session ID; verify the signature, user, hidden hash, fixed expiry, and revocation state; rotate its hash and usage data without moving `expires_at`. Reused rotated credentials revoke that affected session in this transaction. |
-| Current-session logout | Revoke only the cookie's matching refresh session when it is valid and always clear the cookie; failures never disclose token/session existence. |
-| Password-reset completion | Consume the eligible reset code, replace the password hash, and revoke every active refresh session for the user together. |
-| Account disable | In the existing user-status transaction, set `DISABLED`, revoke every active refresh session, and create the approved audit effect together. |
-| Application submission | Create application, snapshots, all three initial documents, timeline, notification, and audit together; prevent a partial submission or active-application race. |
-| Document replacement | Insert the new version, switch `is_current`, link `replaces_document_id`, and create workflow/audit effects together. |
-| Appointment booking and payment creation | Lock/check slot capacity, verify `OPEN`, enforce one scheduled appointment, create the appointment, create the one `PENDING` payment if it does not exist, and create timeline/notification/audit effects atomically. |
-| Appointment cancellation or rescheduling | Change the current appointment to `CANCELLED`, create the replacement appointment when rescheduling, preserve history, release scheduled capacity, and record effects together. |
-| Payment confirmation | Accept only `PENDING` or `REJECTED` `PAY_AT_STATION` payment, preserve any rejection fields, set confirmation fields/receipt, and create `PAYMENT_CONFIRMED` timeline, notification, and audit effects atomically. |
-| Payment rejection | Accept only `PENDING` `PAY_AT_STATION` payment, set rejection fields, and create the rejection audit effect only; no `PAYMENT_FAILED` timeline or notification is created. |
-| Inspection completion | Verify appointment/application consistency and confirmed payment, complete inspection, update application status, create or prepare sticker when passed, and record effects together. |
-| Sticker issuance | Record issuance/pickup fields, set `ISSUED`, complete the application only when `PASS` exists, and create timeline/notification/audit effects together. |
-| Application cancellation | Validate actor-specific cancellation rules and lock the application. If a `SCHEDULED` appointment exists, set it `CANCELLED`, record its cancellation fields, release capacity, and create `APPOINTMENT_CANCELLED` timeline, notification, and audit effects. Then cancel the application and create `APPLICATION_CANCELLED` timeline, notification, and audit effects. When an admin cancels after confirmed payment, retain the payment unchanged as immutable history; do not reverse, delete, or refund it. If no scheduled appointment exists, create only the application effects. Roll back all effects together on failure. |
-
-## 14. Remaining business and implementation decisions
-
-### A. Blocking before endpoint design
-
-No blocking business decisions remain for Task 4B.
-
-### B. Non-blocking implementation decisions
-
-1. Vehicle-editing restrictions after an application snapshot exists.
-2. Exact formats and generation rules for application reference numbers,
-   invoice numbers, receipt numbers, sticker numbers, and certificate numbers.
-3. Exact timing for sticker number, certificate number, and certificate-file
-   assignment beyond their required uniqueness.
-4. Notification wording and in-app delivery retry bookkeeping. Announcement
-   audience is fixed to all active citizens. Rejected-payment retry behavior is
-   approved; only its citizen-facing wording remains a presentation detail.
-5. Retention duration and exceptional administrative correction procedures for
-   immutable operational records.
-6. Whether the local development verification code is returned in a dedicated
-   optional response field or written only to a safe development log.
-
-### C. Explicitly out of scope for the first release
-
-1. `STAFF` role workflows and interface.
-2. External MPWT vehicle-registry integration.
-3. Online gateway, bank QR, or card payment processing.
-4. Email/SMS verification or notification delivery.
-5. Refresh-session listing/device management, logout-all, and restoring revoked
-   sessions after account activation.
-6. OAuth, Passport, social login, biometric login, and identity-provider integration.
-7. Server-side application drafts.
-8. Reinspection or reopening an `INSPECTION_FAILED` application.
-9. Payment refunds and reversals, including refund endpoints, reversal
-   endpoints, refund tables, and new refund/payment statuses.
-
-## 15. First-release scope limitations
-
-- This is a local/mock vehicle-data workflow, not a production registry
-  integration.
-- The service has no application draft state and no online payment gateway.
-- Authentication uses session-bound, 30-minute-maximum Bearer access tokens
-  and seven-day fixed refresh sessions. Refresh cookies are HttpOnly,
-  hash-backed server-side, rotated without extending expiry, and can be
-  revoked only by the approved current-session, password-reset,
-  account-disable, and token-reuse rules; each revocation immediately blocks
-  access tokens bound to the affected session or sessions.
-- Verification and notifications do not use real SMS or email delivery.
-- Notifications are in-app only, and audit logs remain entirely internal.
-- Historical application, document, payment, appointment, inspection, sticker,
-  timeline, and audit records are retained rather than deleted through broad
-  endpoints.
-- The schema supports one payment and one sticker per application and one
-  inspection per appointment.
-- A failed inspection is terminal for the application. Reinspection requires a
-  later approved workflow and is not part of the first release.
-- `STAFF`, external registry integration, online payments, and production
-  identity-provider integrations require future approved scope.
+The following are deliberately not current API behavior: generic status
+updates, a fake standalone approval action, citizen slot selection for the
+Phase 4 path, appointment rescheduling/cancellation, capacity release,
+payments, inspections, stickers, notifications, and reinspection workflow.
+Some related entities, enums, or empty controllers may exist as foundation
+code; they do not make an HTTP feature implemented.

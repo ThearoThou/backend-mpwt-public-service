@@ -17,6 +17,7 @@ import {
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
+import { CitizenSchedulingAvailabilityService } from '../scheduling/citizen-scheduling-availability.service';
 
 const UNFINISHED_APPLICATION_STATUSES = [
   ApplicationStatus.DRAFT,
@@ -33,7 +34,10 @@ const UNFINISHED_APPLICATION_UNIQUE_INDEX =
 
 @Injectable()
 export class ApplicationWorkflowService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly availability: CitizenSchedulingAvailabilityService,
+  ) {}
 
   async createDraft(
     citizenId: string,
@@ -147,6 +151,20 @@ export class ApplicationWorkflowService {
         HttpStatus.NOT_FOUND,
         'Vehicle not found',
       );
+    if (
+      a.preferredInspectionStationId === null ||
+      a.preferredInspectionDate === null
+    )
+      throw new DomainException(
+        ApiErrorCode.CONFLICT,
+        HttpStatus.CONFLICT,
+        'A preferred inspection station and date are required before application submission',
+      );
+    await this.availability.validateSelectableWithManager(
+      m,
+      a.preferredInspectionStationId,
+      a.preferredInspectionDate,
+    );
     const now = new Date();
     a.referenceNumber = this.ref(now);
     a.applicantSnapshot = {

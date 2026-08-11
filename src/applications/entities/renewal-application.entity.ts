@@ -22,6 +22,7 @@ import { Sticker } from '../../stickers/entities/sticker.entity';
 import { ApplicationStatus } from '../enums/application-status.enum';
 import { ApplicationDocument } from './application-document.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
+import { InspectionStation } from '../../scheduling/entities/inspection-station.entity';
 import { RenewalApplicationStatusHistory } from './renewal-application-status-history.entity';
 
 @Entity({ name: 'renewal_applications' })
@@ -34,6 +35,10 @@ import { RenewalApplicationStatusHistory } from './renewal-application-status-hi
   'submittedAt',
 ])
 @Index('idx_renewal_applications_status', ['status'])
+@Index('idx_renewal_applications_preferred_station_date', [
+  'preferredInspectionStationId',
+  'preferredInspectionDate',
+])
 export class RenewalApplication {
   @PrimaryGeneratedColumn('uuid', { name: 'id' })
   id!: string;
@@ -73,6 +78,16 @@ export class RenewalApplication {
 
   @Column({ name: 'current_rejection_reason', type: 'text', nullable: true })
   currentRejectionReason!: string | null;
+
+  @Column({
+    name: 'preferred_inspection_station_id',
+    type: 'uuid',
+    nullable: true,
+  })
+  preferredInspectionStationId!: string | null;
+
+  @Column({ name: 'preferred_inspection_date', type: 'date', nullable: true })
+  preferredInspectionDate!: string | null;
 
   @Column({
     name: 'submitted_at',
@@ -135,6 +150,19 @@ export class RenewalApplication {
   })
   @JoinColumn({ name: 'cancelled_by_user_id' })
   cancelledByUser!: User | null;
+
+  @ManyToOne(
+    () => InspectionStation,
+    (station) => station.preferredRenewalApplications,
+    {
+      cascade: false,
+      eager: false,
+      nullable: true,
+      onDelete: 'RESTRICT',
+    },
+  )
+  @JoinColumn({ name: 'preferred_inspection_station_id' })
+  preferredInspectionStation!: InspectionStation | null;
 
   @OneToMany(() => ApplicationDocument, (document) => document.application, {
     cascade: false,

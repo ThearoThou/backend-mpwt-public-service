@@ -26,6 +26,8 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { type RenewalApplicationResponse } from './application-response.mapper';
 import type { RenewalApplicationStatusHistoryResponse } from './application-status-history-response.mapper';
 import { ApplicationWorkflowService } from './application-workflow.service';
+import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
+import { CitizenSchedulingPreferenceRequestDto } from '../scheduling/dto/scheduling-request.dtos';
 import {
   CancelRenewalApplicationRequestDto,
   CreateRenewalApplicationDraftRequestDto,
@@ -41,6 +43,7 @@ export class CitizenApplicationsController {
   constructor(
     private readonly applicationsService: ApplicationsService,
     private readonly applicationWorkflowService: ApplicationWorkflowService,
+    private readonly schedulingPreferences: CitizenSchedulingPreferenceService,
   ) {}
 
   @Post()
@@ -70,6 +73,34 @@ export class CitizenApplicationsController {
   ) {
     return createDataResponse(
       await this.applicationWorkflowService.resubmit(actor.userId, id),
+    );
+  }
+  @Post(':applicationId/scheduling-preference')
+  async updateSchedulingPreference(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() input: CitizenSchedulingPreferenceRequestDto,
+  ) {
+    return createDataResponse(
+      await this.schedulingPreferences.updateDraftPreference(
+        actor.userId,
+        id,
+        input,
+      ),
+    );
+  }
+  @Post(':applicationId/appointment-selection')
+  async reserveAppointmentSelection(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() input: CitizenSchedulingPreferenceRequestDto,
+  ) {
+    return createDataResponse(
+      await this.schedulingPreferences.reserveAppointmentSelection(
+        actor.userId,
+        id,
+        input,
+      ),
     );
   }
   @Post(':applicationId/cancel') async cancel(

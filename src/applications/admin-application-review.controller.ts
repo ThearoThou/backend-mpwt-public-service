@@ -88,4 +88,18 @@ export class AdminApplicationReviewController {
       ),
     );
   }
+
+  @Post(':applicationId/review-pass')
+  async reviewPass(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+  ) {
+    return createDataResponse(
+      await this.adminApplicationReviewService.passReview(
+        actor.userId,
+        applicationId,
+      ),
+    );
+  }
 }

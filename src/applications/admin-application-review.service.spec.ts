@@ -11,6 +11,9 @@ import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
+import { Appointment } from '../scheduling/entities/appointment.entity';
+import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
+import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 
 const ADMIN_ID = '11111111-1111-4111-8111-111111111111';
 const APPLICATION_ID = '22222222-2222-4222-8222-222222222222';
@@ -224,6 +227,133 @@ describe('AdminApplicationReviewService', () => {
       expect(fixture.audits.save).not.toHaveBeenCalled();
     },
   );
+
+  it('passes review only by reserving daily capacity, creating a daily appointment, and approving in one transaction', async () => {
+    const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
+
+    await expect(
+      fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+    ).resolves.toMatchObject({ status: ApplicationStatus.APPROVED });
+    expect(fixture.dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(fixture.applications.findOne).toHaveBeenCalledWith({
+      where: { id: APPLICATION_ID },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(
+      fixture.dailyCapacities.reserveDailyCapacityWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, 'station-id', '2026-08-12');
+    expect(fixture.appointments.create).toHaveBeenCalledWith({
+      applicationId: APPLICATION_ID,
+      slotId: null,
+      dailyCapacity: fixture.reservedDailyCapacity,
+      status: AppointmentStatus.SCHEDULED,
+      completedAt: null,
+      cancelledAt: null,
+      cancelledByUserId: null,
+      cancellationReason: null,
+      noShowMarkedAt: null,
+      noShowMarkedByUserId: null,
+    });
+    expect(fixture.appointments.save).toHaveBeenCalledTimes(1);
+    expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(fixture.application.preferredInspectionStationId).toBe('station-id');
+    expect(fixture.application.preferredInspectionDate).toBe('2026-08-12');
+    expect(fixture.history.create).toHaveBeenCalledWith({
+      applicationId: APPLICATION_ID,
+      previousStatus: ApplicationStatus.UNDER_REVIEW,
+      newStatus: ApplicationStatus.APPROVED,
+      changedByUserId: ADMIN_ID,
+    });
+  });
+
+  it.each([
+    'full capacity',
+    'closed date',
+    'inactive station',
+    'missing capacity row',
+    'today',
+    'past date',
+  ])(
+    'uses appointment selection fallback when reservation finds %s',
+    async () => {
+      const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
+      fixture.dailyCapacities.reserveDailyCapacityWithManager.mockResolvedValue(
+        null,
+      );
+
+      await expect(
+        fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+      ).resolves.toMatchObject({
+        status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+      });
+      expect(fixture.appointments.save).not.toHaveBeenCalled();
+      expect(fixture.application.preferredInspectionStationId).toBe(
+        'station-id',
+      );
+      expect(fixture.application.preferredInspectionDate).toBe('2026-08-12');
+      expect(fixture.history.create).toHaveBeenCalledWith({
+        applicationId: APPLICATION_ID,
+        previousStatus: ApplicationStatus.UNDER_REVIEW,
+        newStatus: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+        changedByUserId: ADMIN_ID,
+      });
+    },
+  );
+
+  it.each([
+    ApplicationStatus.DRAFT,
+    ApplicationStatus.SUBMITTED,
+    ApplicationStatus.APPROVED,
+    ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+    ApplicationStatus.REJECTED,
+  ])('does not reserve twice or pass review from %s', async (status) => {
+    const fixture = createFixture({ status });
+
+    await expect(
+      fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(
+      fixture.dailyCapacities.reserveDailyCapacityWithManager,
+    ).not.toHaveBeenCalled();
+    expect(fixture.appointments.save).not.toHaveBeenCalled();
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
+  it('fails safely for a corrupted UNDER_REVIEW application without a complete preference pair', async () => {
+    const fixture = createFixture({
+      status: ApplicationStatus.UNDER_REVIEW,
+      preferredInspectionStationId: null,
+      preferredInspectionDate: null,
+    });
+
+    await expect(
+      fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(
+      fixture.dailyCapacities.reserveDailyCapacityWithManager,
+    ).not.toHaveBeenCalled();
+    expect(fixture.appointments.save).not.toHaveBeenCalled();
+    expect(fixture.applications.save).not.toHaveBeenCalled();
+  });
+
+  it('does not proceed to an application status change when appointment creation fails', async () => {
+    const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
+    const failure = new Error('appointment insert failed');
+    fixture.appointments.save.mockRejectedValue(failure);
+
+    await expect(
+      fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+    ).rejects.toBe(failure);
+    expect(fixture.application.status).toBe(ApplicationStatus.UNDER_REVIEW);
+    expect(fixture.applications.save).not.toHaveBeenCalled();
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
 });
 
 function createFixture(overrides: Record<string, unknown> = {}) {
@@ -237,6 +367,8 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     reviewStartedAt: null,
     currentCorrectionReason: null,
     currentRejectionReason: null,
+    preferredInspectionStationId: 'station-id',
+    preferredInspectionDate: '2026-08-12',
     readyForInspectionAt: null,
     completedAt: null,
     cancelledAt: null,
@@ -273,6 +405,25 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     create: jest.fn((input: Record<string, unknown>) => input),
     save: jest.fn().mockResolvedValue(undefined),
   };
+  const appointments = {
+    create: jest.fn((input: Record<string, unknown>) => input),
+    save: jest.fn().mockResolvedValue(undefined),
+  };
+  const dailyCapacities = {
+    reserveDailyCapacityWithManager: jest.fn().mockResolvedValue({
+      id: 'daily-capacity-id',
+      stationId: 'station-id',
+      capacityDate: '2026-08-12',
+    }),
+  };
+  const reservedDailyCapacity = {
+    id: 'daily-capacity-id',
+    stationId: 'station-id',
+    capacityDate: '2026-08-12',
+  };
+  const dailyCapacityRecords = {
+    findOneByOrFail: jest.fn().mockResolvedValue(reservedDailyCapacity),
+  };
   const manager = {
     getRepository: jest.fn((entity: unknown) =>
       entity === RenewalApplication
@@ -281,7 +432,11 @@ function createFixture(overrides: Record<string, unknown> = {}) {
           ? documents
           : entity === AuditLog
             ? audits
-            : history,
+            : entity === Appointment
+              ? appointments
+              : entity === InspectionStationDailyCapacity
+                ? dailyCapacityRecords
+                : history,
     ),
   };
   const dataSource = {
@@ -293,6 +448,7 @@ function createFixture(overrides: Record<string, unknown> = {}) {
   return {
     service: new AdminApplicationReviewService(
       dataSource as unknown as DataSource,
+      dailyCapacities as never,
     ),
     dataSource,
     manager,
@@ -300,6 +456,9 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     documents,
     history,
     audits,
+    appointments,
+    dailyCapacities,
+    reservedDailyCapacity,
     application,
     currentDocuments,
   };

@@ -28,6 +28,9 @@ describe('application workflow integration', () => {
     const fixture = createFixture();
     const workflow = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
+      {
+        validateSelectableWithManager: jest.fn().mockResolvedValue({}),
+      } as never,
     );
     const documents = new ApplicationDocumentsService(
       fixture.dataSource as unknown as DataSource,
@@ -35,6 +38,9 @@ describe('application workflow integration', () => {
     );
     const review = new AdminApplicationReviewService(
       fixture.dataSource as unknown as DataSource,
+      {
+        reserveDailyCapacityWithManager: jest.fn().mockResolvedValue(null),
+      } as never,
     );
 
     const draft = await workflow.createDraft(CITIZEN_ID, VEHICLE_ID);
@@ -42,6 +48,8 @@ describe('application workflow integration', () => {
     expect(draft.status).toBe(ApplicationStatus.DRAFT);
     expect(application.referenceNumber).toBeNull();
     expect(fixture.history).toHaveLength(1);
+    application.preferredInspectionStationId = 'station-id';
+    application.preferredInspectionDate = '2026-08-12';
 
     for (const documentType of Object.values(DocumentType)) {
       await documents.upload(

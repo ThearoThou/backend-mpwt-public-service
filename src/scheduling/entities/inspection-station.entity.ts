@@ -8,6 +8,8 @@ import {
 } from 'typeorm';
 
 import { AppointmentSlot } from './appointment-slot.entity';
+import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
+import { InspectionStationDailyCapacity } from './inspection-station-daily-capacity.entity';
 
 @Entity({ name: 'inspection_stations' })
 export class InspectionStation {
@@ -50,4 +52,24 @@ export class InspectionStation {
     },
   )
   appointmentSlots!: AppointmentSlot[];
+
+  @OneToMany(
+    () => InspectionStationDailyCapacity,
+    (capacity) => capacity.station,
+    {
+      cascade: false,
+      eager: false,
+    },
+  )
+  dailyCapacities!: InspectionStationDailyCapacity[];
+
+  @OneToMany(
+    () => RenewalApplication,
+    (application) => application.preferredInspectionStation,
+    {
+      cascade: false,
+      eager: false,
+    },
+  )
+  preferredRenewalApplications!: RenewalApplication[];
 }

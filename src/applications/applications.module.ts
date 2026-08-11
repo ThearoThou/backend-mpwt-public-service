@@ -18,6 +18,8 @@ import { ApplicationsService } from './applications.service';
 import { CitizenApplicationsController } from './citizen-applications.controller';
 import { ApplicationWorkflowService } from './application-workflow.service';
 import { ApplicationDocumentsService } from './application-documents.service';
+import { SchedulingModule } from '../scheduling/scheduling.module';
+import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
 
 @Module({
   imports: [
@@ -29,6 +31,7 @@ import { ApplicationDocumentsService } from './application-documents.service';
     ]),
     CommonAuthModule,
     FilesModule,
+    SchedulingModule,
   ],
   controllers: [
     CitizenApplicationsController,
@@ -44,6 +47,7 @@ import { ApplicationDocumentsService } from './application-documents.service';
     AdminApplicationReviewService,
     ApplicationWorkflowService,
     ApplicationDocumentsService,
+    CitizenSchedulingPreferenceService,
   ],
 })
 export class ApplicationsModule {}

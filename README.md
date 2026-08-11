@@ -1,123 +1,80 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# MPWT Vehicle Inspection Renewal Service — backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS, PostgreSQL, and TypeORM backend for the MPWT vehicle inspection renewal
+service.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Current implemented scope
 
-## Description
+The backend currently includes authentication/session security, users and
+citizen profiles, citizen/admin vehicle workflows, inspection-vehicle
+categories, persisted renewal-application DRAFTs and documents, application
+review operations, and Phase 4 daily station/date capacity scheduling.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+The Phase 4 scheduling path is:
 
-## Project setup
+1. a citizen creates a DRAFT, uploads required documents, and saves a preferred
+   active station and future selectable date;
+2. submission validates the preference but does not reserve it;
+3. admin review-pass atomically reserves the preferred capacity and approves,
+   or moves the application to `APPOINTMENT_SELECTION_REQUIRED` without a
+   reservation;
+4. the citizen may select another available date to reserve and reach
+   `APPROVED`.
 
-```bash
-$ npm install
-```
+Legacy `appointment_slots` remains compatible with existing appointments, but
+the Phase 4 citizen flow is daily capacity rather than new hourly slot
+selection. Payment, inspection, sticker, appointment management, and
+rescheduling endpoints are not currently implemented.
 
-## Database setup
+See:
+
+- [workflow and permissions](docs/api/01-users-workflow-and-permissions.md)
+- [implemented REST contracts](docs/api/02-rest-api-contracts.md)
+- [Scheduling implementation](docs/implementation/05-scheduling.md)
+
+## Setup
 
 1. Copy `.env.example` to `.env`.
-2. Enter your local PostgreSQL credentials in `.env` and manually create the
-   `mpwt_vehicle_inspection_renewal` database.
-3. Never commit `.env` or a real password.
+2. Set local PostgreSQL credentials and create the configured database.
+3. Install dependencies with `npm install`.
+4. Apply the TypeORM migrations before starting the service.
 
-TypeORM synchronization is disabled. Database schema changes are controlled by
-migrations, and no migration exists yet at the end of Task 3A.
+TypeORM synchronization is disabled. The repository currently contains nine
+migrations, including Migration 9 for inspection-station daily capacities and
+appointment compatibility.
 
 ```bash
-# Create an empty migration file
-$ npm run migration:create -- src/database/migrations/Name
-
-# Generate a migration from entity changes
-$ npm run migration:generate -- src/database/migrations/InitialSchema
-
-# Inspect, apply, or revert migrations
-$ npm run migration:show
-$ npm run migration:run
-$ npm run migration:revert
+npm run migration:show
+npm run migration:run
+npm run migration:revert
 ```
 
-## Compile and run the project
+The default API prefix is `/api`; configure it with `API_PREFIX`.
+
+## Run
 
 ```bash
 # development
-$ npm run start
+npm run start
 
 # watch mode
-$ npm run start:dev
+npm run start:dev
 
 # production mode
-$ npm run start:prod
+npm run start:prod
 ```
 
-## Run tests
+## Test
 
 ```bash
 # unit tests
-$ npm run test
+npm test
 
 # e2e tests
-$ npm run test:e2e
+npm run test:e2e
 
-# test coverage
-$ npm run test:cov
+# build
+npm run build
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-
-# backend-mpwt-public-service
+Do not commit `.env` or real credentials.

@@ -1,488 +1,309 @@
 -- MPWT Vehicle Inspection Renewal Service
--- PostgreSQL constraint reference. CURRENT EXECUTED SCHEMA is migrations 1-8;
--- TypeORM migrations are executable source of truth. Do not execute the
--- illustrative/deferred CREATE or ALTER statements below against an existing DB.
+-- PostgreSQL constraint and index reference for the cumulative executed schema
+-- after TypeORM migrations 1-9. This is documentation, not a migration script.
+-- The TypeORM migrations remain the executable source of truth.
+
+-- ---------------------------------------------------------------------------
+-- Executed enum vocabularies
+-- ---------------------------------------------------------------------------
+-- user_role: CITIZEN, ADMIN, STAFF
+-- user_status: PENDING_VERIFICATION, ACTIVE, DISABLED
+-- vehicle_plate_category: PROVINCE, PERSONALIZED_CAMBODIA
+-- vehicle_class: LIGHT, HEAVY
+-- verification_purpose: REGISTER_ACCOUNT, RESET_PASSWORD, CHANGE_PHONE
+-- application_status: DRAFT, SUBMITTED, UNDER_REVIEW, CORRECTION_REQUIRED,
+--   APPOINTMENT_SELECTION_REQUIRED, APPROVED, REJECTED,
+--   REINSPECTION_REQUIRED, CANCELLED, COMPLETED
+-- document_type: VEHICLE_REGISTRATION_CARD,
+--   PREVIOUS_INSPECTION_CERTIFICATE, CITIZEN_ID_CARD
+-- document_status: PENDING, APPROVED, REJECTED
+-- appointment_slot_status: OPEN, CLOSED, CANCELLED
+-- appointment_status: SCHEDULED, COMPLETED, CANCELLED, NO_SHOW
+-- inspection_status: PENDING, COMPLETED
+-- inspection_result: PASS, FAIL
+-- payment_method: PAY_AT_STATION, BANK_QR, BANK_CARD
+-- payment_status: PENDING, CONFIRMED, FAILED, REJECTED
+-- notification_type, notification_channel, notification_delivery_status,
+-- sticker_status, timeline_event_type, and audit_actor_type also exist exactly
+-- as represented in mpwt_vehicle_inspection_full_schema.dbml.
+
+-- ---------------------------------------------------------------------------
+-- CHECK constraints
+-- ---------------------------------------------------------------------------
+-- users.chk_users_phone_or_email
+--   phone IS NOT NULL OR email IS NOT NULL
 --
--- Deferred design (not yet migrated)
--- This file is documentation, not an executable migration or bootstrap script.
--- Existing executed migrations remain the executable source of truth until new,
--- reviewed migrations are created and applied. In particular, do not edit or
--- re-run 1785380837522-AddVehiclePlateCategories.ts or
--- 1785380837523-RemovePlateTypeFromProvincePlateUniqueness.ts.
+-- refresh_sessions.chk_refresh_sessions_token_hash_not_blank
+--   btrim(token_hash) <> ''
+-- refresh_sessions.chk_refresh_sessions_expires_after_created
+--   expires_at > created_at
+-- refresh_sessions.chk_refresh_sessions_last_used_after_created
+--   last_used_at IS NULL OR last_used_at >= created_at
+-- refresh_sessions.chk_refresh_sessions_revoked_after_created
+--   revoked_at IS NULL OR revoked_at >= created_at
+-- refresh_sessions.chk_refresh_sessions_reuse_detected_after_created
+--   reuse_detected_at IS NULL OR reuse_detected_at >= created_at
+-- refresh_sessions.chk_refresh_sessions_reuse_requires_revocation
+--   reuse_detected_at IS NULL OR revoked_at IS NOT NULL
+-- refresh_sessions.chk_refresh_sessions_revocation_reason_pair
+--   (revoked_at IS NULL AND revocation_reason IS NULL)
+--   OR (revoked_at IS NOT NULL AND revocation_reason IS NOT NULL)
 --
--- Before any target migration: inspect legacy application/payment/appointment
--- rows. Any legacy enum mapping requires separate approval.
+-- vehicles.chk_vehicles_plate_province_category
+--   (plate_category = 'PROVINCE' AND plate_province IS NOT NULL)
+--   OR (plate_category = 'PERSONALIZED_CAMBODIA' AND plate_province IS NULL)
+-- vehicles.chk_vehicles_classification_complete
+--   vehicle_class, inspection_category_id, classification_verified_at, and
+--   classification_verified_by are either all NULL or all non-NULL.
+--
+-- inspection_vehicle_categories.chk_vehicle_categories_code_not_blank
+--   btrim(code) <> ''
+-- inspection_vehicle_categories.chk_vehicle_categories_name_kh_not_blank
+--   btrim(name_kh) <> ''
+-- inspection_vehicle_categories.chk_vehicle_categories_validity_positive
+--   validity_months > 0
+-- inspection_vehicle_categories.chk_vehicle_categories_inspection_fee_nonnegative
+--   inspection_fee_khr >= 0
+-- inspection_vehicle_categories.chk_vehicle_categories_service_fee_nonnegative
+--   service_fee_khr >= 0
+--
+-- vehicle_classification_history.chk_vehicle_class_history_previous_pair
+--   previous_vehicle_class and previous_inspection_category_id are both NULL
+--   or both non-NULL.
+-- vehicle_classification_history.chk_vehicle_class_history_reason_not_blank
+--   btrim(reason) <> ''
+--
+-- renewal_applications.chk_renewal_applications_current_rejection_reason
+--   current_rejection_reason IS NULL OR
+--   char_length(btrim(current_rejection_reason)) BETWEEN 1 AND 500
+-- renewal_applications.chk_renewal_applications_preferred_inspection_selection_pair
+--   preferred_inspection_station_id and preferred_inspection_date are both
+--   NULL or both non-NULL.
+--
+-- renewal_application_status_history.chk_renewal_application_status_history_transition
+--   (previous_status IS NULL AND new_status = 'DRAFT') OR
+--   (previous_status IS NOT NULL AND previous_status <> new_status)
+--
+-- application_documents.chk_document_version
+--   version_number > 0
+-- application_documents.chk_document_file_size
+--   file_size_bytes > 0
+-- application_documents.chk_application_documents_file_size_max_5mb
+--   file_size_bytes <= 5242880
+--
+-- appointment_slots.chk_appointment_slot_capacity
+--   capacity > 0
+-- appointment_slots.chk_appointment_slot_time
+--   end_time > start_time
+--
+-- appointments.chk_appointments_slot_or_daily_capacity
+--   (slot_id IS NOT NULL AND daily_capacity_id IS NULL) OR
+--   (slot_id IS NULL AND daily_capacity_id IS NOT NULL)
+--
+-- payments.chk_payment_amounts
+--   base_amount >= 0 AND late_fee >= 0 AND total_amount >= 0 AND
+--   total_amount = base_amount + late_fee
+-- payments.chk_payments_provider_name_required
+--   provider_transaction_id IS NULL OR provider_name IS NOT NULL
+--
+-- inspection_station_daily_capacities.chk_inspection_station_daily_capacities_daily_capacity
+--   daily_capacity > 0
+-- inspection_station_daily_capacities.chk_inspection_station_daily_capacities_reserved_count
+--   reserved_count >= 0 AND reserved_count <= daily_capacity
 
 -- ---------------------------------------------------------------------------
--- CURRENT EXECUTED SCHEMA (migrations 6-8): reference only, do not re-run.
+-- Unique constraints and unique indexes
 -- ---------------------------------------------------------------------------
--- vehicle_class is LIGHT/HEAVY. inspection_vehicle_categories,
--- vehicle_classification_history, chk_vehicles_classification_complete,
--- fk_vehicles_category_class, idx_vehicles_inspection_category_class,
--- fn_guard_vehicle_classification_history, and
--- trg_guard_vehicle_classification_history already exist with the exact names
--- in migration 6.
--- renewal_applications uses application_status values DRAFT, SUBMITTED,
--- UNDER_REVIEW, CORRECTION_REQUIRED, APPOINTMENT_SELECTION_REQUIRED, APPROVED,
--- REJECTED, REINSPECTION_REQUIRED, CANCELLED, COMPLETED. Migration 7 created
--- uq_unfinished_application_per_vehicle for DRAFT, SUBMITTED, UNDER_REVIEW,
--- CORRECTION_REQUIRED, APPOINTMENT_SELECTION_REQUIRED, APPROVED, and
--- REINSPECTION_REQUIRED.
--- renewal_application_status_history columns are id, application_id,
--- previous_status, new_status, changed_by_user_id, created_at; immutable guard
--- names are public.fn_guard_renewal_application_status_history and
--- trg_guard_renewal_application_status_history_immutable.
--- application_documents already has CITIZEN_ID_CARD, uq_current_document_per_type,
--- version uniqueness, and chk_application_documents_file_size_max_5mb.
--- Migration 8 added current_rejection_reason with
--- chk_renewal_applications_current_rejection_reason: NULL OR
--- char_length(btrim(current_rejection_reason)) BETWEEN 1 AND 500.
--- Phase 3C/3D correction/rejection/reopen are application workflow/audit_logs
--- behavior, not additional history-table columns or DB migrations.
-
--- ---------------------------------------------------------------------------
--- Existing executed vehicle-plate protections retained by the target model.
--- ---------------------------------------------------------------------------
-
-CREATE UNIQUE INDEX uq_vehicles_province_plate_identity
-ON vehicles (plate_province, plate_number)
-WHERE plate_category = 'PROVINCE'::vehicle_plate_category;
-
-CREATE UNIQUE INDEX uq_vehicles_personalized_plate_number
-ON vehicles (plate_number)
-WHERE plate_category = 'PERSONALIZED_CAMBODIA'::vehicle_plate_category;
-
-ALTER TABLE vehicles
-ADD CONSTRAINT chk_vehicles_plate_province_category
-CHECK (
-  (plate_category = 'PROVINCE'::vehicle_plate_category AND plate_province IS NOT NULL)
-  OR (
-    plate_category = 'PERSONALIZED_CAMBODIA'::vehicle_plate_category
-    AND plate_province IS NULL
-  )
-);
-
--- CURRENT EXECUTED SCHEMA (migration 6)
--- Vehicle classification remains nullable for legacy vehicles. The class and
--- category are a single logical value and must be populated together.
--- Migration 6 uses chk_vehicles_classification_complete: vehicle_class,
--- inspection_category_id, classification_verified_at, and
--- classification_verified_by are either all NULL or all populated.
--- idx_vehicles_inspection_category_class supports the current relationship.
+-- users: unique phone; unique email.
+-- citizen_profiles: unique user_id; unique national_id_number.
+-- vehicles: unique registration_number; unique chassis_number.
+-- inspection_stations: unique code.
+-- inspection_vehicle_categories.uq_inspection_vehicle_categories_code: code.
+-- inspection_vehicle_categories.uq_inspection_vehicle_categories_id_class:
+--   (id, vehicle_class).
+-- renewal_applications: unique reference_number.
+-- application_documents.uq_application_documents_application_document_type_version:
+--   (application_id, document_type, version_number).
+-- appointment_slots.uq_appointment_slots_station_date_start_end:
+--   (station_id, slot_date, start_time, end_time).
+-- appointments.uq_appointments_id_application: (id, application_id).
+-- inspections: unique appointment_id.
+-- payments: unique application_id; unique invoice_number; unique receipt_number.
+-- stickers: unique application_id; unique sticker_number; unique certificate_number.
+-- inspection_station_daily_capacities.uq_inspection_station_daily_capacities_station_date:
+--   (station_id, capacity_date).
+--
+-- uq_vehicles_province_plate_identity
+--   unique (plate_province, plate_number)
+--   where plate_category = 'PROVINCE'::vehicle_plate_category.
+-- uq_vehicles_personalized_plate_number
+--   unique (plate_number)
+--   where plate_category = 'PERSONALIZED_CAMBODIA'::vehicle_plate_category.
+-- uq_unfinished_application_per_vehicle
+--   unique (vehicle_id) where status IN ('DRAFT', 'SUBMITTED',
+--   'UNDER_REVIEW', 'CORRECTION_REQUIRED',
+--   'APPOINTMENT_SELECTION_REQUIRED', 'APPROVED',
+--   'REINSPECTION_REQUIRED')::application_status.
+-- uq_current_document_per_type
+--   unique (application_id, document_type) where is_current = true.
+-- uq_scheduled_appointment_per_application
+--   unique (application_id) where status = 'SCHEDULED'::appointment_status.
+-- uq_provider_transaction
+--   unique (provider_name, provider_transaction_id)
+--   where provider_transaction_id IS NOT NULL.
 
 -- ---------------------------------------------------------------------------
--- Inspection vehicle categories and immutable classification history.
+-- Non-unique indexes
 -- ---------------------------------------------------------------------------
-
--- CURRENT EXECUTED SCHEMA (migration 6)
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT chk_vehicle_categories_code_not_blank
-CHECK (btrim(code) <> '');
-
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT chk_vehicle_categories_name_kh_not_blank
-CHECK (btrim(name_kh) <> '');
-
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT chk_vehicle_categories_validity_positive
-CHECK (validity_months > 0);
-
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT chk_vehicle_categories_inspection_fee_nonnegative
-CHECK (inspection_fee_khr >= 0);
-
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT chk_vehicle_categories_service_fee_nonnegative
-CHECK (service_fee_khr >= 0);
-
-ALTER TABLE inspection_vehicle_categories
-ADD CONSTRAINT uq_inspection_vehicle_categories_id_class
-UNIQUE (id, vehicle_class);
-
-CREATE INDEX idx_inspection_vehicle_categories_class_active
-ON inspection_vehicle_categories (vehicle_class, is_active);
-
-ALTER TABLE vehicles
-ADD CONSTRAINT fk_vehicles_category_class
-FOREIGN KEY (inspection_category_id, vehicle_class)
-REFERENCES inspection_vehicle_categories (id, vehicle_class)
-ON DELETE RESTRICT;
-
-ALTER TABLE vehicles
-ADD CONSTRAINT fk_vehicles_classification_verified_by
-FOREIGN KEY (classification_verified_by) REFERENCES users (id)
-ON DELETE RESTRICT;
-
--- Category code and class are business-immutable after creation. Enforce this
--- in the category-management service; a later migration may add a narrowly
--- scoped trigger if direct database writes require the same protection.
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT chk_vehicle_class_history_reason_not_blank
-CHECK (btrim(reason) <> '');
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT chk_vehicle_class_history_previous_pair
-CHECK (
-  (previous_vehicle_class IS NULL AND previous_inspection_category_id IS NULL)
-  OR
-  (previous_vehicle_class IS NOT NULL AND previous_inspection_category_id IS NOT NULL)
-);
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT fk_vehicle_class_history_vehicle
-FOREIGN KEY (vehicle_id) REFERENCES vehicles (id) ON DELETE RESTRICT;
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT fk_vehicle_class_history_prev_category_class
-FOREIGN KEY (previous_inspection_category_id, previous_vehicle_class)
-REFERENCES inspection_vehicle_categories (id, vehicle_class)
-ON DELETE RESTRICT;
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT fk_vehicle_class_history_new_category_class
-FOREIGN KEY (new_inspection_category_id, new_vehicle_class)
-REFERENCES inspection_vehicle_categories (id, vehicle_class)
-ON DELETE RESTRICT;
-
-ALTER TABLE vehicle_classification_history
-ADD CONSTRAINT fk_vehicle_class_history_changed_by_admin
-FOREIGN KEY (changed_by_admin_id) REFERENCES users (id) ON DELETE RESTRICT;
-
-CREATE INDEX idx_vehicle_classification_history_vehicle_created
-ON vehicle_classification_history (vehicle_id, created_at, id);
-
--- CURRENT EXECUTED SCHEMA (migration 6): immutable-row protection.
-CREATE OR REPLACE FUNCTION fn_guard_vehicle_classification_history()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  RAISE EXCEPTION '% rows are immutable', TG_TABLE_NAME;
-END;
-$$;
-
-CREATE TRIGGER trg_guard_vehicle_classification_history
-BEFORE UPDATE OR DELETE ON vehicle_classification_history
-FOR EACH ROW EXECUTE FUNCTION fn_guard_vehicle_classification_history();
+-- verification_codes.IDX_e2aa1f0c94500d4aa891eaf32f:
+--   (destination, purpose, created_at)
+-- refresh_sessions.idx_refresh_sessions_user_active:
+--   (user_id, expires_at) where revoked_at IS NULL
+-- refresh_sessions.idx_refresh_sessions_expires_at: (expires_at)
+-- inspection_vehicle_categories.idx_inspection_vehicle_categories_class_active:
+--   (vehicle_class, is_active)
+-- vehicles.idx_vehicles_inspection_category_class:
+--   (inspection_category_id, vehicle_class)
+-- vehicle_classification_history.idx_vehicle_classification_history_vehicle_created:
+--   (vehicle_id, created_at, id)
+-- renewal_applications.idx_renewal_applications_status: (status)
+-- renewal_applications.idx_renewal_applications_citizen_submitted_at:
+--   (citizen_id, submitted_at)
+-- renewal_applications.idx_renewal_applications_vehicle_submitted_at:
+--   (vehicle_id, submitted_at)
+-- renewal_applications.idx_renewal_applications_preferred_station_date:
+--   (preferred_inspection_station_id, preferred_inspection_date)
+-- renewal_application_status_history.idx_renewal_application_status_history_application_created:
+--   (application_id, created_at, id)
+-- application_documents.idx_application_documents_application_status:
+--   (application_id, status)
+-- appointment_slots.idx_appointment_slots_station_date_status:
+--   (station_id, slot_date, status)
+-- appointments.idx_appointments_application_status: (application_id, status)
+-- appointments.idx_appointments_slot_status: (slot_id, status)
+-- appointments.idx_appointments_daily_capacity_status:
+--   (daily_capacity_id, status)
+-- inspections.idx_inspections_application_created: (application_id, created_at)
+-- inspections.idx_inspections_status: (status)
+-- inspections.idx_inspections_result: (result)
+-- payments.idx_payments_method: (method)
+-- payments.idx_payments_status: (status)
+-- stickers.idx_stickers_status: (status)
+-- notifications.idx_notifications_application_created: (application_id, created_at)
+-- notifications.idx_notifications_recipient_read_created:
+--   (recipient_user_id, is_read, created_at)
+-- application_timeline_events.idx_timeline_application_occurred:
+--   (application_id, occurred_at)
+-- application_timeline_events.idx_timeline_application_visible_occurred:
+--   (application_id, visible_to_citizen, occurred_at)
+-- audit_logs.idx_audit_logs_actor_created: (actor_user_id, created_at)
+-- audit_logs.idx_audit_logs_entity_created: (entity_type, entity_id, created_at)
+-- audit_logs.idx_audit_logs_application_created: (application_id, created_at)
 
 -- ---------------------------------------------------------------------------
--- Renewal lifecycle and authoritative immutable status history.
+-- Foreign keys
 -- ---------------------------------------------------------------------------
-
--- CURRENT EXECUTED SCHEMA (migration 7): the application_status enum is
--- DRAFT, SUBMITTED, UNDER_REVIEW, CORRECTION_REQUIRED,
--- APPOINTMENT_SELECTION_REQUIRED, APPROVED, REJECTED,
--- REINSPECTION_REQUIRED, CANCELLED, and COMPLETED.
-
-CREATE UNIQUE INDEX uq_unfinished_application_per_vehicle
-ON renewal_applications (vehicle_id)
-WHERE status IN (
-  'DRAFT',
-  'SUBMITTED',
-  'UNDER_REVIEW',
-  'CORRECTION_REQUIRED',
-  'APPOINTMENT_SELECTION_REQUIRED',
-  'APPROVED',
-  'REINSPECTION_REQUIRED'
-);
-
-ALTER TABLE renewal_application_status_history
-ADD CONSTRAINT fk_renewal_application_status_history_application
-FOREIGN KEY (application_id) REFERENCES renewal_applications (id)
-ON DELETE RESTRICT;
-
-ALTER TABLE renewal_application_status_history
-ADD CONSTRAINT fk_renewal_application_status_history_changed_by
-FOREIGN KEY (changed_by_user_id) REFERENCES users (id)
-ON DELETE RESTRICT;
-
-CREATE INDEX idx_renewal_application_status_history_application_created
-ON renewal_application_status_history (application_id, created_at, id);
-
-CREATE TRIGGER trg_guard_renewal_application_status_history_immutable
-BEFORE UPDATE OR DELETE ON renewal_application_status_history
-FOR EACH ROW EXECUTE FUNCTION public.fn_guard_renewal_application_status_history();
-
--- Reasons for corrections, rejections, reversals, classification-sensitive
--- actions, and controlled rescheduling are workflow rules. Their exact state
--- context is enforced by the application transition service, not a simple
--- row-local CHECK constraint.
-
--- ---------------------------------------------------------------------------
--- Versioned required documents.
--- ---------------------------------------------------------------------------
-
--- CURRENT EXECUTED SCHEMA (migration 7) for the CITIZEN_ID_CARD enum vocabulary.
--- Preserve version_number, is_current, replaces_document_id, uploader, and
--- reviewer metadata. One current row per application and document type remains.
-CREATE UNIQUE INDEX uq_current_document_per_type
-ON application_documents (application_id, document_type)
-WHERE is_current = true;
-
-ALTER TABLE application_documents
-ADD CONSTRAINT chk_document_version
-CHECK (version_number > 0);
-
-ALTER TABLE application_documents
-ADD CONSTRAINT chk_document_file_size
-CHECK (file_size_bytes > 0);
-
--- CURRENT EXECUTED SCHEMA (migration 7)
-ALTER TABLE application_documents
-ADD CONSTRAINT chk_application_documents_file_size_max_5mb
-CHECK (file_size_bytes <= 5242880);
-
--- PDF/JPG/JPEG/PNG acceptance is primarily application-level validation.
--- One file per required type is represented by the current-document index.
-
--- ---------------------------------------------------------------------------
--- Daily capacity and temporary hourly-slot compatibility.
--- ---------------------------------------------------------------------------
-
--- TARGET DESIGN — NOT YET MIGRATED
-ALTER TABLE inspection_stations
-ADD CONSTRAINT chk_inspection_stations_default_daily_capacity
-CHECK (default_daily_capacity IS NULL OR default_daily_capacity > 0);
-
-ALTER TABLE inspection_center_daily_capacities
-ADD CONSTRAINT uq_inspection_center_daily_capacities_station_date
-UNIQUE (station_id, capacity_date);
-
-ALTER TABLE inspection_center_daily_capacities
-ADD CONSTRAINT chk_inspection_center_daily_capacities_capacity
-CHECK (daily_capacity > 0);
-
-ALTER TABLE inspection_center_daily_capacities
-ADD CONSTRAINT chk_inspection_center_daily_capacities_reserved_count
-CHECK (reserved_count >= 0 AND reserved_count <= daily_capacity);
-
-ALTER TABLE inspection_center_daily_capacities
-ADD CONSTRAINT fk_inspection_center_daily_capacities_station
-FOREIGN KEY (station_id) REFERENCES inspection_stations (id)
-ON DELETE RESTRICT;
-
-CREATE INDEX idx_inspection_center_daily_capacities_station_date_closed
-ON inspection_center_daily_capacities (station_id, capacity_date, is_closed);
-
--- The application approval transaction, rather than a direct API update,
--- reserves capacity through this conditional write. No returned row means full
--- or closed capacity and the whole approval transaction must roll back.
--- UPDATE inspection_center_daily_capacities
--- SET reserved_count = reserved_count + 1
--- WHERE id = :capacityDayId
---   AND is_closed = false
---   AND reserved_count < daily_capacity
--- RETURNING id;
-
--- TARGET DESIGN — NOT YET MIGRATED
--- During transition slot_id remains for legacy appointments and daily_capacity_id
--- is used by all new daily-capacity appointments. A row uses exactly one.
-ALTER TABLE appointments
-ADD CONSTRAINT chk_appointments_slot_or_daily_capacity
-CHECK (
-  (slot_id IS NOT NULL AND daily_capacity_id IS NULL)
-  OR
-  (slot_id IS NULL AND daily_capacity_id IS NOT NULL)
-);
-
-ALTER TABLE appointments
-ADD CONSTRAINT fk_appointments_daily_capacity
-FOREIGN KEY (daily_capacity_id)
-REFERENCES inspection_center_daily_capacities (id)
-ON DELETE RESTRICT;
-
-CREATE INDEX idx_appointments_daily_capacity_status
-ON appointments (daily_capacity_id, status);
-
--- EXISTING EXECUTED SCHEMA — current active hourly-slot appointment rule.
-CREATE UNIQUE INDEX uq_scheduled_appointment_per_application
-ON appointments (application_id)
-WHERE status = 'SCHEDULED';
-
--- TARGET DESIGN — NOT YET MIGRATED
-CREATE UNIQUE INDEX uq_reserved_appointment_per_application
-ON appointments (application_id)
-WHERE status = 'RESERVED';
-
--- The current hourly-slot constraints remain valid while slots remain in use.
-ALTER TABLE appointment_slots
-ADD CONSTRAINT chk_appointment_slot_capacity
-CHECK (capacity > 0);
-
-ALTER TABLE appointment_slots
-ADD CONSTRAINT chk_appointment_slot_time
-CHECK (end_time > start_time);
+-- The following FK names and actions are current. Each action not shown as
+-- RESTRICT, SET NULL, or CASCADE is exactly the migration's ON UPDATE action.
+--
+-- application_documents.FK_9ad8ab815e842d67e9aaec900cb:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- application_documents.FK_d9af0254f7efae9da2693aa4742:
+--   uploaded_by_user_id -> users(id), DELETE RESTRICT, UPDATE NO ACTION
+-- application_documents.FK_0fe03681b334256703eb84219ba:
+--   reviewed_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- application_documents.FK_5e03b1c78c991240bc4eae02183:
+--   replaces_document_id -> application_documents(id), DELETE RESTRICT, UPDATE NO ACTION
+-- audit_logs.FK_f160d97a931844109de9d04228f:
+--   actor_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- audit_logs.FK_e64c07c384f813ed88b30316272:
+--   application_id -> renewal_applications(id), DELETE SET NULL, UPDATE NO ACTION
+-- verification_codes.FK_0a53c41a810420ee446082ce6c6:
+--   user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- refresh_sessions.fk_refresh_sessions_user:
+--   user_id -> users(id), DELETE CASCADE, UPDATE NO ACTION
+-- citizen_profiles.FK_74180041ad4437e4b389830a81a:
+--   user_id -> users(id), DELETE RESTRICT, UPDATE NO ACTION
+-- vehicles.FK_2bbcffac87540842b672d79f3ba:
+--   linked_citizen_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- vehicles.fk_vehicles_category_class:
+--   (inspection_category_id, vehicle_class) ->
+--   inspection_vehicle_categories(id, vehicle_class), DELETE RESTRICT, UPDATE RESTRICT
+-- vehicles.fk_vehicles_classification_verified_by:
+--   classification_verified_by -> users(id), DELETE RESTRICT, UPDATE RESTRICT
+-- vehicle_classification_history.fk_vehicle_class_history_vehicle:
+--   vehicle_id -> vehicles(id), DELETE RESTRICT, UPDATE RESTRICT
+-- vehicle_classification_history.fk_vehicle_class_history_prev_category_class:
+--   (previous_inspection_category_id, previous_vehicle_class) ->
+--   inspection_vehicle_categories(id, vehicle_class), DELETE RESTRICT, UPDATE RESTRICT
+-- vehicle_classification_history.fk_vehicle_class_history_new_category_class:
+--   (new_inspection_category_id, new_vehicle_class) ->
+--   inspection_vehicle_categories(id, vehicle_class), DELETE RESTRICT, UPDATE RESTRICT
+-- vehicle_classification_history.fk_vehicle_class_history_changed_by_admin:
+--   changed_by_admin_id -> users(id), DELETE RESTRICT, UPDATE RESTRICT
+-- renewal_applications.FK_c84f3f2e9ec197ad80eb6a6f83d:
+--   citizen_id -> users(id), DELETE RESTRICT, UPDATE NO ACTION
+-- renewal_applications.FK_b3cb416fe563ac49b11f8bb4d8b:
+--   vehicle_id -> vehicles(id), DELETE RESTRICT, UPDATE NO ACTION
+-- renewal_applications.FK_557393d26f8ac9b03c84744e9bf:
+--   cancelled_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- renewal_applications.fk_renewal_applications_preferred_inspection_station:
+--   preferred_inspection_station_id -> inspection_stations(id), DELETE RESTRICT, UPDATE RESTRICT
+-- renewal_application_status_history.fk_renewal_application_status_history_application:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE RESTRICT
+-- renewal_application_status_history.fk_renewal_application_status_history_changed_by:
+--   changed_by_user_id -> users(id), DELETE RESTRICT, UPDATE RESTRICT
+-- inspection_station_daily_capacities.fk_inspection_station_daily_capacities_station:
+--   station_id -> inspection_stations(id), DELETE RESTRICT, UPDATE RESTRICT
+-- appointment_slots.FK_89c035ca139f732036d4a648b9e:
+--   station_id -> inspection_stations(id), DELETE RESTRICT, UPDATE NO ACTION
+-- appointments.FK_ea1002cd0a41822ca930cb1c7e5:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- appointments.FK_b1ccdd43ac8ccbb787c68a64a13:
+--   slot_id -> appointment_slots(id), DELETE RESTRICT, UPDATE NO ACTION
+-- appointments.fk_appointments_daily_capacity:
+--   daily_capacity_id -> inspection_station_daily_capacities(id), DELETE RESTRICT, UPDATE RESTRICT
+-- appointments.FK_f989063890cd83f0e7652a5de45:
+--   cancelled_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- appointments.FK_89c8373a12d9beae36102216b09:
+--   no_show_marked_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- inspections.FK_f255b06d9aa8dfd89e147742723:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- inspections.FK_572ebcefff16193088f271b9d98:
+--   appointment_id -> appointments(id), DELETE RESTRICT, UPDATE NO ACTION
+-- inspections.fk_inspections_appointment_application:
+--   (appointment_id, application_id) -> appointments(id, application_id), DELETE RESTRICT, UPDATE NO ACTION
+-- inspections.FK_ad5e97202348d01c9ee4851b67d:
+--   recorded_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- payments.FK_3b379ebb0e5d8ac17f998b932e7:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- payments.FK_d11985ac51d0104779148528b7b:
+--   confirmed_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- payments.FK_9464a28484ff27338e4eb98dcb2:
+--   rejected_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- stickers.FK_80895b54aab0c858e783d9722fe:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- stickers.FK_1e6d9ce40174aacd279bb7d8ca3:
+--   marked_ready_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- stickers.FK_c27c7ef3c03b81d67642af8def0:
+--   issued_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- notifications.FK_2726bde496d82b6401532ab1477:
+--   recipient_user_id -> users(id), DELETE RESTRICT, UPDATE NO ACTION
+-- notifications.FK_dd75186e413a1f6e0d1ef8e1214:
+--   application_id -> renewal_applications(id), DELETE SET NULL, UPDATE NO ACTION
+-- notifications.FK_0af187ad618f397cf2a0e393276:
+--   created_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- application_timeline_events.FK_27860d3a56abb9d4d4d6e0802df:
+--   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
+-- application_timeline_events.FK_7195522fa3d3188add4b021e132:
+--   actor_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
 
 -- ---------------------------------------------------------------------------
--- Approval-time invoices, phased payments, and receipts.
+-- Immutable-history database objects
 -- ---------------------------------------------------------------------------
-
--- TARGET DESIGN — NOT YET MIGRATED
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT fk_renewal_invoices_application
-FOREIGN KEY (application_id) REFERENCES renewal_applications (id)
-ON DELETE RESTRICT;
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT fk_renewal_invoices_cancelled_by_admin
-FOREIGN KEY (cancelled_by_admin_id) REFERENCES users (id)
-ON DELETE RESTRICT;
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT chk_renewal_invoices_validity_months
-CHECK (validity_months_snapshot > 0);
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT chk_renewal_invoices_days_overdue
-CHECK (days_overdue >= 0);
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT chk_renewal_invoices_amounts_nonnegative
-CHECK (
-  inspection_fee_snapshot >= 0
-  AND service_fee_snapshot >= 0
-  AND penalty_rate_per_day >= 0
-  AND penalty_amount_snapshot >= 0
-  AND discount_amount_snapshot >= 0
-  AND total_amount_snapshot >= 0
-);
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT chk_renewal_invoices_total_amount
-CHECK (
-  total_amount_snapshot = inspection_fee_snapshot
-    + service_fee_snapshot
-    + penalty_amount_snapshot
-    - discount_amount_snapshot
-);
-
-ALTER TABLE renewal_invoices
-ADD CONSTRAINT chk_renewal_invoices_currency_khr
-CHECK (currency = 'KHR');
-
-CREATE UNIQUE INDEX uq_unpaid_invoice_per_application
-ON renewal_invoices (application_id)
-WHERE status = 'UNPAID';
-
-CREATE INDEX idx_renewal_invoices_application_issued
-ON renewal_invoices (application_id, issued_at);
-
-CREATE INDEX idx_renewal_invoices_status_issued
-ON renewal_invoices (status, issued_at);
-
--- TARGET DESIGN — NOT YET MIGRATED
--- payments currently combines application, invoice, receipt, amount, and
--- provider data. Do not replace its columns until a database preflight has
--- inspected rows and an approved preservation mapping exists.
--- Target payment_method values: ONLINE, PAY_AT_CENTER.
--- Target payment_status values: UNPAID, PENDING, PAID, FAILED, CANCELLED.
--- TRANSITIONAL COMPATIBILITY — invoice_id is nullable. Existing rows retain
--- application_id and all legacy invoice/receipt fields.
-ALTER TABLE payments
-ADD CONSTRAINT fk_payments_invoice
-FOREIGN KEY (invoice_id) REFERENCES renewal_invoices (id)
-ON DELETE RESTRICT;
-
--- A partial unique index explicitly permits many legacy NULL invoice_id values.
-CREATE UNIQUE INDEX uq_payments_invoice
-ON payments (invoice_id)
-WHERE invoice_id IS NOT NULL;
-
-ALTER TABLE payment_receipts
-ADD CONSTRAINT fk_payment_receipts_payment
-FOREIGN KEY (payment_id) REFERENCES payments (id)
-ON DELETE RESTRICT;
-
-ALTER TABLE payment_receipts
-ADD CONSTRAINT uq_payment_receipts_payment UNIQUE (payment_id);
-
-ALTER TABLE payment_receipts
-ADD CONSTRAINT uq_payment_receipts_number UNIQUE (receipt_number);
-
--- Receipt creation is allowed only after payment status is PAID by the payment
--- confirmation transaction. A cross-table status condition is enforced in
--- application logic, not by a plain CHECK.
-
--- ---------------------------------------------------------------------------
--- Existing foundation constraints retained by the target model.
--- ---------------------------------------------------------------------------
-
-ALTER TABLE users
-ADD CONSTRAINT chk_users_phone_or_email
-CHECK (phone IS NOT NULL OR email IS NOT NULL);
-
-ALTER TABLE inspections
-ADD CONSTRAINT fk_inspections_appointment_application
-FOREIGN KEY (appointment_id, application_id)
-REFERENCES appointments (id, application_id)
-ON DELETE RESTRICT;
-
--- EXISTING EXECUTED SCHEMA — legacy payment protections remain in force until
--- payment decomposition receives row-level preflight and separate approval.
-ALTER TABLE payments
-ADD CONSTRAINT chk_payment_amounts
-CHECK (
-  base_amount >= 0
-  AND late_fee >= 0
-  AND total_amount >= 0
-  AND total_amount = base_amount + late_fee
-);
-
-CREATE UNIQUE INDEX uq_provider_transaction
-ON payments (provider_name, provider_transaction_id)
-WHERE provider_transaction_id IS NOT NULL;
-
-ALTER TABLE payments
-ADD CONSTRAINT chk_payments_provider_name_required
-CHECK (
-  provider_transaction_id IS NULL
-  OR provider_name IS NOT NULL
-);
-
--- EXISTING EXECUTED SCHEMA — refresh-session credential integrity. These are
--- retained verbatim from the existing reference and are unaffected by target
--- workflow design.
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_token_hash_not_blank
-CHECK (btrim(token_hash) <> '');
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_expires_after_created
-CHECK (expires_at > created_at);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_last_used_after_created
-CHECK (last_used_at IS NULL OR last_used_at >= created_at);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_revoked_after_created
-CHECK (revoked_at IS NULL OR revoked_at >= created_at);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_reuse_detected_after_created
-CHECK (reuse_detected_at IS NULL OR reuse_detected_at >= created_at);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_reuse_requires_revocation
-CHECK (reuse_detected_at IS NULL OR revoked_at IS NOT NULL);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT chk_refresh_sessions_revocation_reason_pair
-CHECK (
-  (revoked_at IS NULL AND revocation_reason IS NULL)
-  OR (revoked_at IS NOT NULL AND revocation_reason IS NOT NULL)
-);
-
-ALTER TABLE refresh_sessions
-ADD CONSTRAINT fk_refresh_sessions_user
-FOREIGN KEY (user_id)
-REFERENCES users (id)
-ON DELETE CASCADE;
-
-CREATE INDEX idx_refresh_sessions_user_active
-ON refresh_sessions (user_id, expires_at)
-WHERE revoked_at IS NULL;
-
-CREATE INDEX idx_refresh_sessions_expires_at
-ON refresh_sessions (expires_at);
+-- public.fn_guard_vehicle_classification_history and
+-- trg_guard_vehicle_classification_history reject UPDATE and DELETE on
+-- vehicle_classification_history.
+-- public.fn_guard_renewal_application_status_history and
+-- trg_guard_renewal_application_status_history_immutable reject UPDATE and
+-- DELETE on renewal_application_status_history.

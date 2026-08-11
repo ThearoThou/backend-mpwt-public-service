@@ -24,6 +24,7 @@ describe('ApplicationWorkflowService', () => {
     const fixture = createFixture();
     const service = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
+      availabilityStub() as never,
     );
 
     const result = await service.createDraft(CITIZEN_ID, VEHICLE_ID);
@@ -67,6 +68,7 @@ describe('ApplicationWorkflowService', () => {
     await expect(
       new ApplicationWorkflowService(
         fixture.dataSource as unknown as DataSource,
+        availabilityStub() as never,
       ).createDraft(CITIZEN_ID, VEHICLE_ID),
     ).rejects.toMatchObject({
       code: ApiErrorCode.VEHICLE_NOT_FOUND,
@@ -81,6 +83,7 @@ describe('ApplicationWorkflowService', () => {
     await expect(
       new ApplicationWorkflowService(
         fixture.dataSource as unknown as DataSource,
+        availabilityStub() as never,
       ).createDraft(CITIZEN_ID, VEHICLE_ID),
     ).rejects.toMatchObject({
       code: ApiErrorCode.RESOURCE_NOT_OWNED,
@@ -95,6 +98,7 @@ describe('ApplicationWorkflowService', () => {
     await expect(
       new ApplicationWorkflowService(
         fixture.dataSource as unknown as DataSource,
+        availabilityStub() as never,
       ).createDraft(CITIZEN_ID, VEHICLE_ID),
     ).rejects.toMatchObject({
       code: ApiErrorCode.UNFINISHED_APPLICATION_ALREADY_EXISTS,
@@ -110,6 +114,7 @@ describe('ApplicationWorkflowService', () => {
     });
     const service = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
+      availabilityStub() as never,
     );
 
     await expect(
@@ -136,6 +141,7 @@ describe('ApplicationWorkflowService', () => {
     await expect(
       new ApplicationWorkflowService(
         fixture.dataSource as unknown as DataSource,
+        availabilityStub() as never,
       ).createDraft(CITIZEN_ID, VEHICLE_ID),
     ).rejects.toBe(error);
     expect(fixture.dataSource.transaction).toHaveBeenCalledTimes(1);
@@ -232,6 +238,51 @@ describe('ApplicationWorkflowService.submit', () => {
       code: ApiErrorCode.CITIZEN_PROFILE_REQUIRED,
       status: HttpStatus.CONFLICT,
     });
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
+  it('requires a complete preferred inspection station and date before submission', async () => {
+    const fixture = createSubmitFixture({
+      preferredInspectionStationId: null,
+      preferredInspectionDate: null,
+    });
+
+    await expect(
+      fixture.service.submit(CITIZEN_ID, 'application-id'),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.CONFLICT,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(
+      fixture.availability.validateSelectableWithManager,
+    ).not.toHaveBeenCalled();
+    expect(fixture.applications.save).not.toHaveBeenCalled();
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the selected station and date before submission without reserving capacity', async () => {
+    const fixture = createSubmitFixture();
+
+    await fixture.service.submit(CITIZEN_ID, 'application-id');
+
+    expect(
+      fixture.availability.validateSelectableWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, 'station-id', '2026-08-12');
+    expect(fixture.application).not.toHaveProperty('reservedCount');
+  });
+
+  it('keeps the application DRAFT when the selected station date is no longer available', async () => {
+    const fixture = createSubmitFixture();
+    const unavailable = new Error('date is full');
+    fixture.availability.validateSelectableWithManager.mockRejectedValue(
+      unavailable,
+    );
+
+    await expect(
+      fixture.service.submit(CITIZEN_ID, 'application-id'),
+    ).rejects.toBe(unavailable);
+    expect(fixture.application.status).toBe(ApplicationStatus.DRAFT);
+    expect(fixture.applications.save).not.toHaveBeenCalled();
     expect(fixture.history.save).not.toHaveBeenCalled();
   });
 
@@ -662,6 +713,8 @@ function createSubmitFixture(
     applicantSnapshot: null,
     vehicleSnapshot: null,
     submittedAt: null,
+    preferredInspectionStationId: 'station-id',
+    preferredInspectionDate: '2026-08-12',
     currentCorrectionReason: null,
     currentRejectionReason: null,
     reviewStartedAt: null,
@@ -721,6 +774,7 @@ function createSubmitFixture(
         callback(manager),
     ),
   };
+  const availability = availabilityStub();
 
   return {
     application,
@@ -730,9 +784,21 @@ function createSubmitFixture(
     history,
     manager,
     profiles,
+    availability,
     service: new ApplicationWorkflowService(
       dataSource as unknown as DataSource,
+      availability as never,
     ),
+  };
+}
+
+function availabilityStub() {
+  return {
+    validateSelectableWithManager: jest.fn().mockResolvedValue({
+      id: 'daily-capacity-id',
+      stationId: 'station-id',
+      capacityDate: '2026-08-12',
+    }),
   };
 }
 

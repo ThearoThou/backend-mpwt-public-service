@@ -14,6 +14,7 @@ import { RenewalApplication } from '../../applications/entities/renewal-applicat
 import { Inspection } from '../../inspections/entities/inspection.entity';
 import { User } from '../../users/entities/user.entity';
 import { AppointmentStatus } from '../enums/appointment-status.enum';
+import { InspectionStationDailyCapacity } from './inspection-station-daily-capacity.entity';
 import { AppointmentSlot } from './appointment-slot.entity';
 
 @Entity({ name: 'appointments' })
@@ -22,6 +23,7 @@ import { AppointmentSlot } from './appointment-slot.entity';
 })
 @Index('idx_appointments_application_status', ['applicationId', 'status'])
 @Index('idx_appointments_slot_status', ['slotId', 'status'])
+@Index('idx_appointments_daily_capacity_status', ['dailyCapacityId', 'status'])
 export class Appointment {
   @PrimaryGeneratedColumn('uuid', { name: 'id' })
   id!: string;
@@ -29,8 +31,11 @@ export class Appointment {
   @Column({ name: 'application_id', type: 'uuid' })
   applicationId!: string;
 
-  @Column({ name: 'slot_id', type: 'uuid' })
-  slotId!: string;
+  @Column({ name: 'slot_id', type: 'uuid', nullable: true })
+  slotId!: string | null;
+
+  @Column({ name: 'daily_capacity_id', type: 'uuid', nullable: true })
+  dailyCapacityId!: string | null;
 
   @Column({
     name: 'status',
@@ -88,11 +93,24 @@ export class Appointment {
   @ManyToOne(() => AppointmentSlot, (slot) => slot.appointments, {
     cascade: false,
     eager: false,
-    nullable: false,
+    nullable: true,
     onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'slot_id' })
-  slot!: AppointmentSlot;
+  slot!: AppointmentSlot | null;
+
+  @ManyToOne(
+    () => InspectionStationDailyCapacity,
+    (dailyCapacity) => dailyCapacity.appointments,
+    {
+      cascade: false,
+      eager: false,
+      nullable: true,
+      onDelete: 'RESTRICT',
+    },
+  )
+  @JoinColumn({ name: 'daily_capacity_id' })
+  dailyCapacity!: InspectionStationDailyCapacity | null;
 
   @ManyToOne(() => User, (user) => user.cancelledAppointments, {
     cascade: false,

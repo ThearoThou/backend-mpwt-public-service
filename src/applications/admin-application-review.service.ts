@@ -18,10 +18,17 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
+import { InspectionStationDailyCapacityService } from '../scheduling/inspection-station-daily-capacity.service';
+import { Appointment } from '../scheduling/entities/appointment.entity';
+import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
+import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 
 @Injectable()
 export class AdminApplicationReviewService {
-  constructor(private readonly dataSource: DataSource) {}
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly dailyCapacities: InspectionStationDailyCapacityService,
+  ) {}
 
   async startReview(
     adminId: string,
@@ -59,6 +66,15 @@ export class AdminApplicationReviewService {
   ): Promise<AdminApplicationDetailResponse> {
     return this.dataSource.transaction((manager) =>
       this.reopenWithManager(manager, adminId, applicationId, input.reason),
+    );
+  }
+
+  async passReview(
+    adminId: string,
+    applicationId: string,
+  ): Promise<AdminApplicationDetailResponse> {
+    return this.dataSource.transaction((manager) =>
+      this.passReviewWithManager(manager, adminId, applicationId),
     );
   }
 
@@ -233,6 +249,75 @@ export class AdminApplicationReviewService {
         reopenReason: reason,
       },
     });
+    return mapAdminApplicationDetail(application);
+  }
+
+  private async passReviewWithManager(
+    manager: EntityManager,
+    adminId: string,
+    applicationId: string,
+  ): Promise<AdminApplicationDetailResponse> {
+    const application = await this.lockSubmittedApplication(
+      manager,
+      applicationId,
+    );
+    if (application.status !== ApplicationStatus.UNDER_REVIEW) {
+      throw this.invalidTransition();
+    }
+    if (
+      application.preferredInspectionStationId === null ||
+      application.preferredInspectionDate === null
+    ) {
+      throw this.invalidTransition();
+    }
+
+    const reservedCapacity =
+      await this.dailyCapacities.reserveDailyCapacityWithManager(
+        manager,
+        application.preferredInspectionStationId,
+        application.preferredInspectionDate,
+      );
+
+    if (reservedCapacity === null) {
+      application.status = ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED;
+      await manager.getRepository(RenewalApplication).save(application);
+      await this.writeHistory(
+        manager,
+        application.id,
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+        adminId,
+      );
+      return mapAdminApplicationDetail(application);
+    }
+
+    const dailyCapacity = await manager
+      .getRepository(InspectionStationDailyCapacity)
+      .findOneByOrFail({ id: reservedCapacity.id });
+    const appointments = manager.getRepository(Appointment);
+    await appointments.save(
+      appointments.create({
+        applicationId: application.id,
+        slotId: null,
+        dailyCapacity,
+        status: AppointmentStatus.SCHEDULED,
+        completedAt: null,
+        cancelledAt: null,
+        cancelledByUserId: null,
+        cancellationReason: null,
+        noShowMarkedAt: null,
+        noShowMarkedByUserId: null,
+      }),
+    );
+    application.status = ApplicationStatus.APPROVED;
+    await manager.getRepository(RenewalApplication).save(application);
+    await this.writeHistory(
+      manager,
+      application.id,
+      ApplicationStatus.UNDER_REVIEW,
+      ApplicationStatus.APPROVED,
+      adminId,
+    );
     return mapAdminApplicationDetail(application);
   }
 
