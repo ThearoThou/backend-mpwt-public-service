@@ -5,6 +5,7 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -14,6 +15,7 @@ import { RenewalApplication } from '../../applications/entities/renewal-applicat
 import { User } from '../../users/entities/user.entity';
 import { PaymentMethod } from '../enums/payment-method.enum';
 import { PaymentStatus } from '../enums/payment-status.enum';
+import { PaymentStatusHistory } from './payment-status-history.entity';
 
 @Entity({ name: 'payments' })
 @Index('idx_payments_status', ['status'])
@@ -66,6 +68,22 @@ export class Payment {
     scale: 2,
   })
   baseAmount!: string;
+
+  @Column({
+    name: 'inspection_fee_khr',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+  })
+  inspectionFeeKhr!: string;
+
+  @Column({
+    name: 'service_fee_khr',
+    type: 'numeric',
+    precision: 12,
+    scale: 2,
+  })
+  serviceFeeKhr!: string;
 
   @Column({
     name: 'late_fee',
@@ -155,6 +173,23 @@ export class Payment {
   })
   receiptFileKey!: string | null;
 
+  @Column({
+    name: 'previous_inspection_expiry_date',
+    type: 'date',
+  })
+  previousInspectionExpiryDate!: string;
+
+  @Column({ name: 'late_days', type: 'integer' })
+  lateDays!: number;
+
+  @Column({
+    name: 'inspection_sheet_file_key',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
+  inspectionSheetFileKey!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -187,4 +222,10 @@ export class Payment {
   })
   @JoinColumn({ name: 'rejected_by_user_id' })
   rejectedByUser!: User | null;
+
+  @OneToMany(() => PaymentStatusHistory, (history) => history.payment, {
+    cascade: false,
+    eager: false,
+  })
+  statusHistory!: PaymentStatusHistory[];
 }

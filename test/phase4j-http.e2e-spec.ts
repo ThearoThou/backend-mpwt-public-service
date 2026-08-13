@@ -14,6 +14,11 @@ import { InspectionStation } from '../src/scheduling/entities/inspection-station
 import { User } from '../src/users/entities/user.entity';
 import { UserRole } from '../src/users/enums/user-role.enum';
 import { UserStatus } from '../src/users/enums/user-status.enum';
+import { loadE2eEnvironment } from './e2e/e2e-environment';
+import {
+  assertApprovedE2eDatabase,
+  cleanApprovedE2eFixtures,
+} from './e2e/e2e-safety';
 
 interface CitizenStationResponse {
   id: string;
@@ -80,6 +85,7 @@ describe('Phase 4J scheduling HTTP', () => {
     await app.init();
     httpServer = app.getHttpServer() as Parameters<typeof request>[0];
     dataSource = app.get(DataSource);
+    await assertApprovedE2eDatabase(dataSource, loadE2eEnvironment());
     const tokens = app.get(AuthTokenService);
     for (const [id, role] of [
       [ids.citizen, UserRole.CITIZEN],
@@ -140,19 +146,25 @@ describe('Phase 4J scheduling HTTP', () => {
     ]);
   });
   afterAll(async () => {
-    await dataSource
-      .getRepository(InspectionStationDailyCapacity)
-      .delete({ stationId: ids.active });
-    await dataSource
-      .getRepository(InspectionStation)
-      .delete([ids.active, ids.inactive]);
-    await dataSource
-      .getRepository(RefreshSession)
-      .delete({ userId: ids.citizen });
-    await dataSource
-      .getRepository(RefreshSession)
-      .delete({ userId: ids.admin });
-    await dataSource.getRepository(User).delete([ids.citizen, ids.admin]);
+    await cleanApprovedE2eFixtures(
+      dataSource,
+      loadE2eEnvironment(),
+      async (manager) => {
+        await manager
+          .getRepository(InspectionStationDailyCapacity)
+          .delete({ stationId: ids.active });
+        await manager
+          .getRepository(InspectionStation)
+          .delete([ids.active, ids.inactive]);
+        await manager
+          .getRepository(RefreshSession)
+          .delete({ userId: ids.citizen });
+        await manager
+          .getRepository(RefreshSession)
+          .delete({ userId: ids.admin });
+        await manager.getRepository(User).delete([ids.citizen, ids.admin]);
+      },
+    );
     await app.close();
   });
   it('enforces roles and returns citizen-safe active stations', async () => {

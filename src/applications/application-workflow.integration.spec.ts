@@ -41,6 +41,7 @@ describe('application workflow integration', () => {
       {
         reserveDailyCapacityWithManager: jest.fn().mockResolvedValue(null),
       } as never,
+      { initializePayment: jest.fn().mockResolvedValue({}) } as never,
     );
 
     const draft = await workflow.createDraft(CITIZEN_ID, VEHICLE_ID);

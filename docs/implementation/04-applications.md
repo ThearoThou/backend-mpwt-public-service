@@ -7,7 +7,8 @@ review transitions, application reads/status history, and versioned application
 documents. `FilesModule` provides private file persistence for document bytes.
 Scheduling validates preferences during submission and owns the cross-domain
 reservation branch of review-pass; that behavior is documented in
-[Scheduling](05-scheduling.md).
+[Scheduling](05-scheduling.md). Payment initialization is a separate Phase 5
+operation documented in [Payments](06-payments.md).
 
 The route contract is maintained separately in
 [`docs/api/02-rest-api-contracts.md`](../api/02-rest-api-contracts.md).
@@ -129,6 +130,13 @@ change. Citizen recovery selection follows the matching reservation branch.
 The locking, atomic update, compatibility, and rollback details belong to the
 [Scheduling](05-scheduling.md) document.
 
+After either successful scheduling branch commits, the caller attempts
+idempotent payment initialization outside the Phase 4 transaction. A failure is
+logged and leaves the approved application, appointment, and capacity
+reservation committed; an administrator can retry payment initialization. This
+does not add an application status transition or change the application's
+`APPROVED` state while payment progresses.
+
 ## Tests and implementation checks
 
 Application tests cover DRAFT creation/uniqueness, submission snapshots and
@@ -138,4 +146,5 @@ admin queue/detail/history mapping, and every implemented review transition.
 Application integration tests cover transactional workflow behavior. Phase 4
 real PostgreSQL rollback/e2e tests additionally prove that a later failure does
 not leave a capacity reservation, appointment, status change, or status-history
-row behind.
+row behind. Phase 5 tests separately cover the post-commit payment attempt and
+its non-rollback behavior.

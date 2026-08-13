@@ -3,10 +3,10 @@
 ## Scope and source of truth
 
 This document describes the backend that is currently implemented through
-Phases 2, 3, and 4. The source of truth is the NestJS controllers, DTOs,
-services, entities, migrations, and automated tests. It deliberately does not
-describe planned payment, inspection, sticker, cancellation, rescheduling, or
-reinspection features as though they already exist.
+Phases 2, 3, 4, and 5. The source of truth is the NestJS controllers, DTOs,
+services, entities, migrations, and automated tests. It does not describe
+future online-provider payments, physical inspection, stickers, cancellation,
+rescheduling, or reinspection features as though they already exist.
 
 The API prefix is configured by `API_PREFIX` and defaults to `/api`. Protected
 routes use an active-session Bearer access token. The global validation pipe
@@ -15,11 +15,11 @@ error envelope on validation failure.
 
 ## Actors and access
 
-| Actor     | Implemented access                                                                                                                                                                                                                                                                               |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CITIZEN` | Manages their profile and vehicles; creates and progresses only their own renewal applications; uploads/downloads their own application documents; sees active stations and selectable dates; sets a DRAFT preference; and selects a replacement station/date when required.                     |
-| `ADMIN`   | Lists and reads submitted applications and their document/status-history records; starts reviews, requests corrections, rejects, reopens, and performs review-pass; manages daily station capacities; manages users, vehicles, and inspection categories through their implemented admin routes. |
-| `STAFF`   | Present in the role enum but has no implemented route or permission policy.                                                                                                                                                                                                                      |
+| Actor     | Implemented access                                                                                                                                                                                                                                                                                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CITIZEN` | Manages their profile and vehicles; creates and progresses only their own renewal applications; uploads/downloads their own application and available payment documents; sees active stations and selectable dates; sets a DRAFT preference; and selects a replacement station/date when required.                                                                     |
+| `ADMIN`   | Lists and reads submitted applications and their document/status-history records; starts reviews, requests corrections, rejects, reopens, and performs review-pass; manages daily station capacities; initializes, reads, transitions, and downloads payment documents; and manages users, vehicles, and inspection categories through their implemented admin routes. |
+| `STAFF`   | Present in the role enum but has no implemented route or permission policy.                                                                                                                                                                                                                                                                                            |
 
 Citizens cannot use admin routes or operate on another citizen's application.
 Admins cannot use the citizen-only scheduling discovery or application mutation
@@ -180,11 +180,37 @@ constraint allows at most one scheduled appointment per application. There is
 currently no appointment read response or standalone appointments route; the
 appointment is an internal result of successful scheduling orchestration.
 
+## Phase 5 payment workflow
+
+After review-pass or citizen replacement selection commits an `APPROVED`
+application with one `SCHEDULED` appointment, payment initialization is
+attempted. It is idempotent and creates at most one Payment/invoice per
+application. If initialization fails, scheduling remains committed and an
+admin may retry it.
+
+The only functional MVP method is `PAY_AT_STATION`; `BANK_QR` and `BANK_CARD`
+are reserved enum values. A payment uses `PENDING`, `CONFIRMED`, `FAILED`, or
+`REJECTED` status. Admins can confirm or reject `PENDING`, and can reopen a
+rejected payment to `PENDING` or confirm it. `CONFIRMED` is terminal; `FAILED`
+is reserved for future online-payment work. Reject/reopen reasons are trimmed,
+non-empty, and at most 500 characters.
+
+Payment initialization snapshots the active category's inspection and service
+fees, vehicle expiry, Cambodia-local creation date, late days/fee, and KHR
+totals. It is blocked when the classification/category/expiry sources or the
+approved/scheduled prerequisites are invalid. Payment history records only
+actual status transitions with status pair, actor, reason, and timestamp.
+
+Invoices are available for `PENDING`, `REJECTED`, and `CONFIRMED` payments.
+Receipts and inspection sheets are available only after confirmation. Citizens
+can access documents for their own application only; admins access them by
+payment. The endpoints stream PDF bytes and never expose private storage keys.
+
 ## Implemented boundaries
 
 The following are deliberately not current API behavior: generic status
 updates, a fake standalone approval action, citizen slot selection for the
-Phase 4 path, appointment rescheduling/cancellation, capacity release,
-payments, inspections, stickers, notifications, and reinspection workflow.
-Some related entities, enums, or empty controllers may exist as foundation
-code; they do not make an HTTP feature implemented.
+Phase 4 path, appointment rescheduling/cancellation, capacity release, online
+payment-provider processing, physical inspections, stickers, notifications,
+and reinspection workflow. Some related entities or enums may exist as
+foundation code; they do not make an HTTP feature implemented.

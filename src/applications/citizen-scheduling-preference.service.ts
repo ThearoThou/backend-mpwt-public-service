@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
@@ -8,6 +8,7 @@ import { InspectionStationDailyCapacity } from '../scheduling/entities/inspectio
 import { InspectionStationDailyCapacityService } from '../scheduling/inspection-station-daily-capacity.service';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
+import { PaymentsService } from '../payments/payments.service';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
@@ -19,10 +20,13 @@ export interface CitizenInspectionPreferenceInput {
 
 @Injectable()
 export class CitizenSchedulingPreferenceService {
+  private readonly logger = new Logger(CitizenSchedulingPreferenceService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     private readonly availability: CitizenSchedulingAvailabilityService,
     private readonly dailyCapacities: InspectionStationDailyCapacityService,
+    private readonly payments: PaymentsService,
   ) {}
 
   async updateDraftPreference(
@@ -65,7 +69,7 @@ export class CitizenSchedulingPreferenceService {
     applicationId: string,
     input: CitizenInspectionPreferenceInput,
   ): Promise<RenewalApplication> {
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const application = await this.locked(manager, citizenId, applicationId);
       this.requireStatus(
         application,
@@ -118,6 +122,8 @@ export class CitizenSchedulingPreferenceService {
       );
       return application;
     });
+    await this.initializePaymentAfterScheduling(applicationId);
+    return result;
   }
 
   async validateAppointmentSelectionRequiredWithManager(
@@ -178,6 +184,19 @@ export class CitizenSchedulingPreferenceService {
         ApiErrorCode.APPLICATION_INVALID_TRANSITION,
         HttpStatus.CONFLICT,
         'Application scheduling selection is not allowed in its current status',
+      );
+    }
+  }
+
+  private async initializePaymentAfterScheduling(
+    applicationId: string,
+  ): Promise<void> {
+    try {
+      await this.payments.initializePayment(applicationId);
+    } catch (error) {
+      this.logger.error(
+        `Automatic payment initialization failed after appointment-selection scheduling: ${applicationId}`,
+        error instanceof Error ? error.stack : String(error),
       );
     }
   }

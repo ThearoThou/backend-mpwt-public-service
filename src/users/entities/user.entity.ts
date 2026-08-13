@@ -17,6 +17,7 @@ import { VerificationCode } from '../../auth/entities/verification-code.entity';
 import { RefreshSession } from '../../auth/entities/refresh-session.entity';
 import { Inspection } from '../../inspections/entities/inspection.entity';
 import { Payment } from '../../payments/entities/payment.entity';
+import { PaymentStatusHistory } from '../../payments/entities/payment-status-history.entity';
 import { Notification } from '../../notifications/entities/notification.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
 import { Sticker } from '../../stickers/entities/sticker.entity';
@@ -170,6 +171,12 @@ export class User {
     eager: false,
   })
   rejectedPayments!: Payment[];
+
+  @OneToMany(() => PaymentStatusHistory, (history) => history.changedByUser, {
+    cascade: false,
+    eager: false,
+  })
+  changedPaymentStatusHistory!: PaymentStatusHistory[];
 
   @OneToMany(() => Inspection, (inspection) => inspection.recordedByUser, {
     cascade: false,

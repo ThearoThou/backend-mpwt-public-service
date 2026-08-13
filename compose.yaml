@@ -10,15 +10,28 @@ services:
     volumes:
       - mpwt-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}',
-        ]
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 10s
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  db-e2e:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: mpwt_vehicle_inspection_renewal_e2e
+    ports:
+      - '5433:5432'
+    volumes:
+      - mpwt-postgres-e2e-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: 'no'
 
   pgadmin:
     image: dpage/pgadmin4:8.11
@@ -36,4 +49,5 @@ services:
 
 volumes:
   mpwt-postgres-data:
+  mpwt-postgres-e2e-data:
   mpwt-pgadmin-data:

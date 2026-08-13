@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { CommonAuthModule } from '../common/auth/common-auth.module';
 import { FilesModule } from '../files/files.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { User } from '../users/entities/user.entity';
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
@@ -32,6 +33,7 @@ import { CitizenSchedulingPreferenceService } from './citizen-scheduling-prefere
     CommonAuthModule,
     FilesModule,
     SchedulingModule,
+    PaymentsModule,
   ],
   controllers: [
     CitizenApplicationsController,

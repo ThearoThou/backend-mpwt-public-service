@@ -3,19 +3,23 @@ import { getMetadataArgsStorage } from 'typeorm';
 import { RefreshSession } from '../auth/entities/refresh-session.entity';
 import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentStatusHistory } from '../payments/entities/payment-status-history.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { User } from '../users/entities/user.entity';
 import { VehicleClassificationHistory } from '../vehicles/entities/vehicle-classification-history.entity';
 import { databaseEntities } from './database.entities';
 
 describe('database entity registry', () => {
-  it('registers the approved 20 entities, including daily station capacity', () => {
-    expect(databaseEntities).toHaveLength(20);
+  it('registers the approved 21 entities, including payment status history', () => {
+    expect(databaseEntities).toHaveLength(21);
     expect(databaseEntities).toContain(RefreshSession);
     expect(databaseEntities).toContain(InspectionVehicleCategory);
     expect(databaseEntities).toContain(VehicleClassificationHistory);
     expect(databaseEntities).toContain(RenewalApplicationStatusHistory);
     expect(databaseEntities).toContain(InspectionStationDailyCapacity);
+    expect(databaseEntities).toContain(Payment);
+    expect(databaseEntities).toContain(PaymentStatusHistory);
   });
 
   it('maps the refresh-session credential metadata without a raw token field', () => {

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { HttpStatus } from '@nestjs/common';
+import { HttpStatus, Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
@@ -256,6 +256,9 @@ describe('AdminApplicationReviewService', () => {
     });
     expect(fixture.appointments.save).toHaveBeenCalledTimes(1);
     expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(fixture.payments.initializePayment).toHaveBeenCalledWith(
+      APPLICATION_ID,
+    );
     expect(fixture.application.preferredInspectionStationId).toBe('station-id');
     expect(fixture.application.preferredInspectionDate).toBe('2026-08-12');
     expect(fixture.history.create).toHaveBeenCalledWith({
@@ -287,6 +290,7 @@ describe('AdminApplicationReviewService', () => {
         status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
       });
       expect(fixture.appointments.save).not.toHaveBeenCalled();
+      expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
       expect(fixture.application.preferredInspectionStationId).toBe(
         'station-id',
       );
@@ -320,6 +324,27 @@ describe('AdminApplicationReviewService', () => {
     ).not.toHaveBeenCalled();
     expect(fixture.appointments.save).not.toHaveBeenCalled();
     expect(fixture.history.save).not.toHaveBeenCalled();
+    expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed review-pass response when payment initialization fails', async () => {
+    const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
+    const loggerError = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    fixture.payments.initializePayment.mockRejectedValue(
+      new Error('invoice generation failed'),
+    );
+
+    await expect(
+      fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
+    ).resolves.toMatchObject({ status: ApplicationStatus.APPROVED });
+    expect(fixture.payments.initializePayment).toHaveBeenCalledTimes(1);
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.stringContaining(APPLICATION_ID),
+      expect.any(String),
+    );
+    loggerError.mockRestore();
   });
 
   it('fails safely for a corrupted UNDER_REVIEW application without a complete preference pair', async () => {
@@ -445,10 +470,12 @@ function createFixture(overrides: Record<string, unknown> = {}) {
         callback(manager),
     ),
   };
+  const payments = { initializePayment: jest.fn().mockResolvedValue({}) };
   return {
     service: new AdminApplicationReviewService(
       dataSource as unknown as DataSource,
       dailyCapacities as never,
+      payments as never,
     ),
     dataSource,
     manager,
@@ -458,6 +485,7 @@ function createFixture(overrides: Record<string, unknown> = {}) {
     audits,
     appointments,
     dailyCapacities,
+    payments,
     reservedDailyCapacity,
     application,
     currentDocuments,

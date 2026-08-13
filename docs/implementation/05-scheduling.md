@@ -42,6 +42,7 @@ that counter directly.
 | `CitizenSchedulingPreferenceService`    | Saves a DRAFT preference and owns citizen recovery reservation from `APPOINTMENT_SELECTION_REQUIRED`.                  |
 | `ApplicationWorkflowService`            | Requires and revalidates a DRAFT preference during submission without reserving it.                                    |
 | `AdminApplicationReviewService`         | Owns review-pass orchestration: reservation outcome, appointment creation, application status, and status history.     |
+| `PaymentsService`                       | Is invoked after successful scheduling commits; initialization failures are isolated from scheduling.                  |
 | `StationsController`                    | Citizen station and available-date discovery.                                                                          |
 | `AdminSchedulingController`             | ADMIN daily-capacity management routes.                                                                                |
 
@@ -113,6 +114,11 @@ One transaction:
 Repeating review-pass after this success is an invalid application transition,
 so it cannot reserve twice.
 
+Only after this transaction commits does review-pass attempt idempotent payment
+initialization. The attempt is deliberately outside scheduling: a payment
+failure leaves the approved application, appointment, and incremented capacity
+committed. Payment rules are documented in [Payments](06-payments.md).
+
 ### Unavailable preference
 
 When the conditional update returns no row—missing, inactive, non-future,
@@ -127,7 +133,8 @@ selection. In one transaction the service locks the application, conditionally
 reserves the selected row, creates the daily-capacity `SCHEDULED` appointment,
 updates both preference fields, changes the application to `APPROVED`, and
 appends history. A capacity that ceased to be selectable produces no partial
-writes.
+writes. After this scheduling transaction commits, it makes the same isolated
+payment-initialization attempt.
 
 ## Appointment compatibility
 
@@ -166,6 +173,7 @@ and closure without release of an existing reservation.
 
 There is no scheduling implementation for appointment retrieval, cancellation,
 rescheduling, daily-capacity decrement/release, hourly citizen slot selection,
-payment, inspection, reinspection, or notification delivery. New work in those
-areas requires explicit rules rather than inference from the retained legacy
-slot schema.
+physical inspection, reinspection, or notification delivery. Payment
+initialization is implemented only as the post-commit integration described
+above; its calculation, status, document, and HTTP rules are in
+[Payments](06-payments.md).

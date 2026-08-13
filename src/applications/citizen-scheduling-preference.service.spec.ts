@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { HttpStatus } from '@nestjs/common';
+import { HttpStatus, Logger } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
@@ -187,6 +187,9 @@ describe('CitizenSchedulingPreferenceService', () => {
       newStatus: ApplicationStatus.APPROVED,
       changedByUserId: CITIZEN_ID,
     });
+    expect(fixture.payments.initializePayment).toHaveBeenCalledWith(
+      APPLICATION_ID,
+    );
   });
 
   it('keeps the old selection and status when reservation is unavailable', async () => {
@@ -214,6 +217,33 @@ describe('CitizenSchedulingPreferenceService', () => {
       preferredInspectionDate: '2026-08-11',
       status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
     });
+    expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed appointment-selection response when payment initialization fails', async () => {
+    const fixture = createFixture({
+      status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+    });
+    const loggerError = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+    fixture.payments.initializePayment.mockRejectedValue(
+      new Error('invoice generation failed'),
+    );
+
+    await expect(
+      fixture.service.reserveAppointmentSelection(
+        CITIZEN_ID,
+        APPLICATION_ID,
+        input(),
+      ),
+    ).resolves.toMatchObject({ status: ApplicationStatus.APPROVED });
+    expect(fixture.payments.initializePayment).toHaveBeenCalledTimes(1);
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.stringContaining(APPLICATION_ID),
+      expect.any(String),
+    );
+    loggerError.mockRestore();
   });
 });
 
@@ -261,12 +291,14 @@ function createFixture(overrides: Partial<RenewalApplication> = {}) {
       capacityDate: DATE,
     }),
   };
+  const payments = { initializePayment: jest.fn().mockResolvedValue({}) };
 
   return {
     service: new CitizenSchedulingPreferenceService(
       dataSource as unknown as DataSource,
       availability as unknown as CitizenSchedulingAvailabilityService,
       dailyCapacities as unknown as InspectionStationDailyCapacityService,
+      payments as never,
     ),
     application,
     applications,
@@ -275,6 +307,7 @@ function createFixture(overrides: Partial<RenewalApplication> = {}) {
     dailyCapacities,
     appointments,
     history,
+    payments,
     dailyCapacity,
   };
 }

@@ -20,6 +20,11 @@ import { UserRole } from '../src/users/enums/user-role.enum';
 import { UserStatus } from '../src/users/enums/user-status.enum';
 import { Vehicle } from '../src/vehicles/entities/vehicle.entity';
 import { VehiclePlateCategory } from '../src/vehicles/enums/vehicle-plate-category.enum';
+import { loadE2eEnvironment } from './e2e/e2e-environment';
+import {
+  assertApprovedE2eDatabase,
+  cleanApprovedE2eFixtures,
+} from './e2e/e2e-safety';
 
 describe('Phase 4G review-pass rollback (PostgreSQL)', () => {
   const ids = {
@@ -38,6 +43,7 @@ describe('Phase 4G review-pass rollback (PostgreSQL)', () => {
     if (!dataSource.isInitialized) {
       await dataSource.initialize();
     }
+    await assertApprovedE2eDatabase(dataSource, loadE2eEnvironment());
 
     const [today] = await dataSource.query<Array<{ capacityDate: string }>>(
       `
@@ -142,19 +148,23 @@ describe('Phase 4G review-pass rollback (PostgreSQL)', () => {
       return;
     }
 
-    await dataSource.transaction(async (manager) => {
-      await manager.delete(RenewalApplicationStatusHistory, {
-        applicationId: ids.applicationId,
-      });
-      await manager.delete(Appointment, { applicationId: ids.applicationId });
-      await manager.delete(RenewalApplication, { id: ids.applicationId });
-      await manager.delete(InspectionStationDailyCapacity, {
-        id: ids.dailyCapacityId,
-      });
-      await manager.delete(InspectionStation, { id: ids.stationId });
-      await manager.delete(Vehicle, { id: ids.vehicleId });
-      await manager.delete(User, [ids.adminId, ids.citizenId]);
-    });
+    await cleanApprovedE2eFixtures(
+      dataSource,
+      loadE2eEnvironment(),
+      async (manager) => {
+        await manager.delete(RenewalApplicationStatusHistory, {
+          applicationId: ids.applicationId,
+        });
+        await manager.delete(Appointment, { applicationId: ids.applicationId });
+        await manager.delete(RenewalApplication, { id: ids.applicationId });
+        await manager.delete(InspectionStationDailyCapacity, {
+          id: ids.dailyCapacityId,
+        });
+        await manager.delete(InspectionStation, { id: ids.stationId });
+        await manager.delete(Vehicle, { id: ids.vehicleId });
+        await manager.delete(User, [ids.adminId, ids.citizenId]);
+      },
+    );
     await dataSource.destroy();
   });
 

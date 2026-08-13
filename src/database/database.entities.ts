@@ -9,6 +9,7 @@ import { Inspection } from '../inspections/entities/inspection.entity';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { Payment } from '../payments/entities/payment.entity';
+import { PaymentStatusHistory } from '../payments/entities/payment-status-history.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { AppointmentSlot } from '../scheduling/entities/appointment-slot.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
@@ -35,6 +36,7 @@ export const databaseEntities = [
   AppointmentSlot,
   Appointment,
   Payment,
+  PaymentStatusHistory,
   Inspection,
   Sticker,
   Notification,

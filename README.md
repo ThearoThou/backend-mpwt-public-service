@@ -1,7 +1,7 @@
 # MPWT Vehicle Inspection Renewal Service — backend
 
 NestJS, PostgreSQL, and TypeORM backend for the MPWT vehicle inspection renewal
-service.
+service, including the Phase 5 payment workflow and PDF payment documents.
 
 ## Current implemented scope
 
@@ -19,18 +19,22 @@ The Phase 4 scheduling path is:
    or moves the application to `APPOINTMENT_SELECTION_REQUIRED` without a
    reservation;
 4. the citizen may select another available date to reserve and reach
-   `APPROVED`.
+   `APPROVED`; and
+5. after the scheduling transaction commits, payment initialization is attempted
+   without rolling back scheduling when it fails.
 
 Legacy `appointment_slots` remains compatible with existing appointments, but
 the Phase 4 citizen flow is daily capacity rather than new hourly slot
-selection. Payment, inspection, sticker, appointment management, and
-rescheduling endpoints are not currently implemented.
+selection. Payment is implemented for the `PAY_AT_STATION` MVP; inspections,
+stickers, appointment management, and rescheduling remain outside the current
+HTTP workflow.
 
 See:
 
 - [workflow and permissions](docs/api/01-users-workflow-and-permissions.md)
 - [implemented REST contracts](docs/api/02-rest-api-contracts.md)
 - [Scheduling implementation](docs/implementation/05-scheduling.md)
+- [Payment workflow implementation](docs/implementation/06-payments.md)
 
 ## Setup
 
@@ -39,9 +43,11 @@ See:
 3. Install dependencies with `npm install`.
 4. Apply the TypeORM migrations before starting the service.
 
-TypeORM synchronization is disabled. The repository currently contains nine
+TypeORM synchronization is disabled. The repository currently contains ten
 migrations, including Migration 9 for inspection-station daily capacities and
-appointment compatibility.
+appointment compatibility and Migration 10 for payment workflow snapshots and
+payment status history. Migration 10 refuses to run if `payments` already has
+rows, because those rows cannot safely receive its required snapshots.
 
 ```bash
 npm run migration:show
@@ -70,11 +76,19 @@ npm run start:prod
 # unit tests
 npm test
 
-# e2e tests
+# guarded PostgreSQL e2e tests (uses the dedicated db-e2e database only)
 npm run test:e2e
 
 # build
 npm run build
 ```
 
-Do not commit `.env` or real credentials.
+E2E tests require the dedicated `db-e2e` service and exact
+`mpwt_vehicle_inspection_renewal_e2e` database-name safety guards. Jest runs
+them with one worker because they perform broad fixture cleanup. `.env.e2e` and
+`.env.e2e.example` are intentionally not tracked; never point E2E execution at
+the development database.
+
+Payment PDFs are rendered with Puppeteer/managed Chromium and the bundled Khmer
+font, so deployment must provide the managed Chromium runtime. Do not commit
+`.env` or real credentials.

@@ -1,6 +1,6 @@
 -- MPWT Vehicle Inspection Renewal Service
 -- PostgreSQL constraint and index reference for the cumulative executed schema
--- after TypeORM migrations 1-9. This is documentation, not a migration script.
+-- after TypeORM migrations 1-10. This is documentation, not a migration script.
 -- The TypeORM migrations remain the executable source of truth.
 
 -- ---------------------------------------------------------------------------
@@ -105,6 +105,17 @@
 --   total_amount = base_amount + late_fee
 -- payments.chk_payments_provider_name_required
 --   provider_transaction_id IS NULL OR provider_name IS NOT NULL
+-- payments.chk_payments_late_days_nonnegative
+--   late_days >= 0
+-- payments.chk_payments_inspection_fee_nonnegative
+--   inspection_fee_khr >= 0
+-- payments.chk_payments_service_fee_nonnegative
+--   service_fee_khr >= 0
+-- payments.chk_payments_base_amount_fee_components
+--   base_amount = inspection_fee_khr + service_fee_khr
+--
+-- payment_status_history.chk_payment_status_history_status_transition
+--   from_status <> to_status
 --
 -- inspection_station_daily_capacities.chk_inspection_station_daily_capacities_daily_capacity
 --   daily_capacity > 0
@@ -188,6 +199,10 @@
 -- inspections.idx_inspections_result: (result)
 -- payments.idx_payments_method: (method)
 -- payments.idx_payments_status: (status)
+-- payment_status_history.idx_payment_status_history_payment_created:
+--   (payment_id, created_at)
+-- payment_status_history.idx_payment_status_history_changed_by_user:
+--   (changed_by_user_id)
 -- stickers.idx_stickers_status: (status)
 -- notifications.idx_notifications_application_created: (application_id, created_at)
 -- notifications.idx_notifications_recipient_read_created:
@@ -281,6 +296,10 @@
 --   confirmed_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
 -- payments.FK_9464a28484ff27338e4eb98dcb2:
 --   rejected_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
+-- payment_status_history.fk_payment_status_history_payment:
+--   payment_id -> payments(id), DELETE RESTRICT, UPDATE RESTRICT
+-- payment_status_history.fk_payment_status_history_changed_by_user:
+--   changed_by_user_id -> users(id), DELETE SET NULL, UPDATE RESTRICT
 -- stickers.FK_80895b54aab0c858e783d9722fe:
 --   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
 -- stickers.FK_1e6d9ce40174aacd279bb7d8ca3:

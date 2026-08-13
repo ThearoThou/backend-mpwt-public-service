@@ -1,6 +1,6 @@
 Project MPWT_Vehicle_Inspection_Renewal_Service {
   database_type: 'PostgreSQL'
-  Note: 'Cumulative current executed PostgreSQL schema after TypeORM migrations 1-9. The migrations are the executable source of truth.'
+  Note: 'Cumulative current executed PostgreSQL schema after TypeORM migrations 1-10. The migrations are the executable source of truth.'
 }
 
 Enum user_role {
@@ -476,6 +476,8 @@ Table payments {
   method payment_method [not null]
   status payment_status [not null, default: 'PENDING']
   base_amount numeric(12,2) [not null]
+  inspection_fee_khr numeric(12,2) [not null]
+  service_fee_khr numeric(12,2) [not null]
   late_fee numeric(12,2) [not null, default: 0]
   total_amount numeric(12,2) [not null]
   currency char(3) [not null, default: 'KHR']
@@ -492,6 +494,9 @@ Table payments {
   invoice_issued_at timestamptz [not null, default: `now()`]
   invoice_file_key varchar(500)
   receipt_file_key varchar(500)
+  previous_inspection_expiry_date date [not null]
+  late_days integer [not null]
+  inspection_sheet_file_key varchar(500)
   created_at timestamptz [not null, default: `now()`]
   updated_at timestamptz [not null, default: `now()`]
 
@@ -501,7 +506,24 @@ Table payments {
     (provider_name, provider_transaction_id) [unique, name: 'uq_provider_transaction']
   }
 
-  Note: 'uq_provider_transaction is partial where provider_transaction_id IS NOT NULL. chk_payment_amounts requires non-negative components and total_amount = base_amount + late_fee. chk_payments_provider_name_required requires provider_name when provider_transaction_id is non-NULL.'
+  Note: 'uq_provider_transaction is partial where provider_transaction_id IS NOT NULL. chk_payment_amounts requires non-negative components and total_amount = base_amount + late_fee. chk_payments_provider_name_required requires provider_name when provider_transaction_id is non-NULL. chk_payments_late_days_nonnegative requires late_days >= 0. chk_payments_inspection_fee_nonnegative requires inspection_fee_khr >= 0. chk_payments_service_fee_nonnegative requires service_fee_khr >= 0. chk_payments_base_amount_fee_components requires base_amount = inspection_fee_khr + service_fee_khr.'
+}
+
+Table payment_status_history {
+  id uuid [pk]
+  payment_id uuid [not null]
+  from_status payment_status [not null]
+  to_status payment_status [not null]
+  changed_by_user_id uuid
+  reason text
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (payment_id, created_at) [name: 'idx_payment_status_history_payment_created']
+    changed_by_user_id [name: 'idx_payment_status_history_changed_by_user']
+  }
+
+  Note: 'chk_payment_status_history_status_transition requires from_status <> to_status.'
 }
 
 Table stickers {
@@ -623,6 +645,8 @@ Ref: inspections.recorded_by_user_id > users.id [delete: set null, update: no ac
 Ref: payments.application_id - renewal_applications.id [delete: restrict, update: no action]
 Ref: payments.confirmed_by_user_id > users.id [delete: set null, update: no action]
 Ref: payments.rejected_by_user_id > users.id [delete: set null, update: no action]
+Ref: payment_status_history.payment_id > payments.id [delete: restrict, update: restrict]
+Ref: payment_status_history.changed_by_user_id > users.id [delete: set null, update: restrict]
 Ref: stickers.application_id - renewal_applications.id [delete: restrict, update: no action]
 Ref: stickers.marked_ready_by_user_id > users.id [delete: set null, update: no action]
 Ref: stickers.issued_by_user_id > users.id [delete: set null, update: no action]

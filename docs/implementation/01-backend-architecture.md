@@ -16,7 +16,7 @@ status, domain code, message, timestamp, and path.
 
 PostgreSQL schema changes are migration-based. TypeORM synchronization,
 automatic schema drops, and automatic migration execution are disabled. The
-current entity registry contains 20 entities and the repository contains nine
+current entity registry contains 21 entities and the repository contains ten
 migrations. The cumulative executed schema is documented in
 [`docs/database`](../database/).
 
@@ -25,22 +25,23 @@ migrations. The cumulative executed schema is documented in
 `AppModule` composes configuration, database, common foundation, auth, users,
 vehicles, inspection categories, applications, scheduling, files, and the
 foundation modules for payments, inspections, stickers, notifications,
-activity, and admin features. The latter group has persisted schema/entity
-foundation where applicable, but their end-to-end business workflows are not
-currently implemented.
+activity, and admin features. Payments has an implemented MVP workflow;
+inspections, stickers, notifications, activity, and other admin features have
+only the foundations or explicit behavior described by their controllers.
 
-| Area                                                                        | Current responsibility                                                                                                               |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `config`                                                                    | Validates environment configuration and supplies it application-wide.                                                                |
-| `database`                                                                  | Creates the TypeORM PostgreSQL connection from registered entities and migration configuration.                                      |
-| `common/http` and `common/errors`                                           | API prefix, validation, response envelopes, `DomainException`, and safe exception mapping.                                           |
-| `common/auth`                                                               | Access-token guard, actor decorator, role metadata, and role guard.                                                                  |
-| `auth`                                                                      | Registration, verification, login, token issuance, refresh rotation, logout, reset, refresh-session revocation, and admin bootstrap. |
-| `users`                                                                     | Users, citizen profiles, current-user/profile work, and admin user administration.                                                   |
-| `vehicles` and `inspection-categories`                                      | Citizen/admin vehicle access, plate normalization, categories, and admin classification/history.                                     |
-| `applications` and `files`                                                  | DRAFT lifecycle, document storage/versioning, submission, citizen reads, and admin review operations.                                |
-| `scheduling`                                                                | Station/date availability, daily capacities, preference validation, and reservation primitives.                                      |
-| `payments`, `inspections`, `stickers`, `notifications`, `activity`, `admin` | Current schema/module foundations only unless a controller/service explicitly implements a listed behavior.                          |
+| Area                                                            | Current responsibility                                                                                                                 |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `config`                                                        | Validates environment configuration and supplies it application-wide.                                                                  |
+| `database`                                                      | Creates the TypeORM PostgreSQL connection from registered entities and migration configuration.                                        |
+| `common/http` and `common/errors`                               | API prefix, validation, response envelopes, `DomainException`, and safe exception mapping.                                             |
+| `common/auth`                                                   | Access-token guard, actor decorator, role metadata, and role guard.                                                                    |
+| `auth`                                                          | Registration, verification, login, token issuance, refresh rotation, logout, reset, refresh-session revocation, and admin bootstrap.   |
+| `users`                                                         | Users, citizen profiles, current-user/profile work, and admin user administration.                                                     |
+| `vehicles` and `inspection-categories`                          | Citizen/admin vehicle access, plate normalization, categories, and admin classification/history.                                       |
+| `applications` and `files`                                      | DRAFT lifecycle, document storage/versioning, submission, citizen reads, and admin review operations.                                  |
+| `scheduling`                                                    | Station/date availability, daily capacities, preference validation, and reservation primitives.                                        |
+| `payments`                                                      | Idempotent post-scheduling payment initialization, payment transitions/history, private PDF artifacts, and citizen/admin payment APIs. |
+| `inspections`, `stickers`, `notifications`, `activity`, `admin` | Current schema/module foundations only unless a controller/service explicitly implements a listed behavior.                            |
 
 Detailed implementation notes are domain-oriented:
 
@@ -48,6 +49,7 @@ Detailed implementation notes are domain-oriented:
 - [Vehicles](03-vehicles.md)
 - [Applications](04-applications.md)
 - [Scheduling](05-scheduling.md)
+- [Payments](06-payments.md)
 
 ## HTTP, validation, and authorization
 
@@ -74,6 +76,9 @@ The central relationships currently implemented are:
   station/date;
 - application documents are versioned and their files are kept under the
   private file-storage root;
+- an approved application with one scheduled appointment may have one Payment
+  with immutable fee, expiry, and calculation snapshots plus payment-status
+  history and private PDF artifact keys;
 - a vehicle may be classified against one inspection vehicle category and has
   immutable classification history;
 - a station owns legacy appointment slots and daily-capacity rows;
@@ -91,6 +96,10 @@ manager to nested operations when their writes must commit or roll back as one
 unit. Examples include account verification/session creation, password-reset
 session revocation, vehicle classification/history, application submission,
 document replacement, review actions, and Phase 4 reservation orchestration.
+Payment initialization begins only after the scheduling transaction commits, so
+an initialization failure cannot roll back an approved application, appointment,
+or capacity reservation. Payment status changes and their history writes share
+their own transaction.
 
 The service that owns a cross-domain transition owns the transaction. In
 particular, admin review-pass coordinates the scheduling reservation,
@@ -110,12 +119,15 @@ Implemented through the current project stage:
   citizen application reads/cancellation, and admin review operations;
 - Phase 4 station/date scheduling with daily capacity, review-pass reservation,
   fallback selection, and real PostgreSQL rollback coverage.
+- Phase 5 payment initialization, `PAY_AT_STATION` confirmation/rejection/
+  reopen transitions, payment history, and private invoice/receipt/inspection
+  sheet PDFs.
 
-Not implemented as complete workflows: payment processing, inspections,
-stickers/certificates, notification delivery and reads, appointment retrieval,
-appointment cancellation/rescheduling, daily-capacity release, and
-reinspection/completion transitions. Their entities or controller shells do
-not make those workflows current behavior.
+Not implemented as complete workflows: online payment providers, physical
+inspection, stickers/certificates, notification delivery and reads, appointment
+retrieval, appointment cancellation/rescheduling, daily-capacity release, and
+reinspection/completion transitions. Their entities or controller shells do not
+make those workflows current behavior.
 
 ## Testing approach
 
@@ -123,5 +135,7 @@ The repository combines focused unit tests with service integration tests and
 real Nest/PostgreSQL e2e coverage. The Phase 4 rollback tests verify that a
 reservation increment is rolled back when a later transactional write fails;
 the HTTP tests verify the `/api` prefix, guards, roles, envelopes, DTO
-validation, and real daily-capacity persistence. Domain documents describe
-their relevant test coverage; the REST contract remains in `docs/api`.
+validation, and real daily-capacity persistence. Phase 5 adds guarded real
+PostgreSQL/API E2E, migration UP/DOWN/UP, rollback, Postman, and visual-PDF
+verification. Domain documents describe their relevant test coverage; the REST
+contract remains in `docs/api`.

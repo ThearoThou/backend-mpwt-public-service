@@ -19,6 +19,7 @@ import { UserRole } from '../src/users/enums/user-role.enum';
 import { UserStatus } from '../src/users/enums/user-status.enum';
 import { VehiclesController } from '../src/vehicles/vehicles.controller';
 import { VehiclesService } from '../src/vehicles/vehicles.service';
+import { VehicleClassificationService } from '../src/vehicles/vehicle-classification.service';
 
 const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
@@ -32,6 +33,7 @@ const VEHICLE_ID = '33333333-3333-4333-8333-333333333333';
     RolesGuard,
     AuthTokenService,
     RefreshSessionService,
+    { provide: VehicleClassificationService, useValue: {} },
     { provide: getRepositoryToken(User), useValue: {} },
   ],
 })

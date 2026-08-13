@@ -2,7 +2,7 @@
 
 ## Scope
 
-This is the implemented HTTP contract as of Phases 2–4. Routes below are
+This is the implemented HTTP contract as of Phases 2–5. Routes below are
 relative to `API_PREFIX`, which defaults to `/api`; examples therefore use
 `/api`. A route is documented only when a controller implements it. Empty
 foundation controllers and entity-only domains do not imply an endpoint.
@@ -188,6 +188,56 @@ status-history insert share one database transaction. A later failure rolls
 back the earlier reservation. Repeating review-pass after a successful pass is
 an invalid transition and cannot double-reserve.
 
+## Phase 5 payment contract
+
+Payment initialization follows a committed successful scheduling result; it
+does not participate in the Phase 4 reservation transaction. It creates at
+most one `PAY_AT_STATION` Payment and invoice per application, and an
+initialization failure does not undo approval, appointment creation, or
+capacity reservation. `BANK_QR` and `BANK_CARD` are future enum values only.
+
+Payment amount values are KHR snapshots created from the active inspection
+category and vehicle expiry: inspection fee plus service fee is the base
+amount; late days use the Cambodia-local creation date; late fee is 500 KHR per
+late day; total is base plus late fee. Invalid/missing classification,
+category, expiry, or approved/scheduled source data blocks initialization.
+
+### Citizen payment routes
+
+All routes require CITIZEN and enforce ownership of `:applicationId`.
+
+| Method and path                                              | Response / rule                                                               |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `GET /payments/applications/:applicationId`                  | Payment for the owned application.                                            |
+| `GET /payments/applications/:applicationId/invoice`          | Streams the stored invoice as `application/pdf` when available.               |
+| `GET /payments/applications/:applicationId/receipt`          | Streams the stored receipt as `application/pdf` only when confirmed.          |
+| `GET /payments/applications/:applicationId/inspection-sheet` | Streams the stored inspection sheet as `application/pdf` only when confirmed. |
+
+### Admin payment routes
+
+All routes require ADMIN. List supports the implemented pagination plus
+`status`, `method`, and trimmed `search` filters; it allows sorting by
+`createdAt`, `invoiceIssuedAt`, `totalAmount`, or `status`.
+
+| Method and path                                               | Body                                | Response / rule                                                                 |
+| ------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------- |
+| `GET /admin/payments`                                         | pagination/filter query             | Paginated payments.                                                             |
+| `POST /admin/payments/applications/:applicationId/initialize` | —                                   | Idempotently creates or returns the application payment.                        |
+| `GET /admin/payments/:paymentId`                              | —                                   | Payment detail.                                                                 |
+| `GET /admin/payments/:paymentId/history`                      | —                                   | Status-transition history, ordered ascending.                                   |
+| `POST /admin/payments/:paymentId/confirm`                     | `{ "paymentReference"?: "string" }` | `PENDING` or `REJECTED` to `CONFIRMED`; generates receipt and inspection sheet. |
+| `POST /admin/payments/:paymentId/reject`                      | `{ "reason": "1–500 chars" }`       | `PENDING` to `REJECTED`.                                                        |
+| `POST /admin/payments/:paymentId/reopen`                      | `{ "reason": "1–500 chars" }`       | `REJECTED` to `PENDING`.                                                        |
+| `GET /admin/payments/:paymentId/invoice`                      | —                                   | Streams invoice PDF.                                                            |
+| `GET /admin/payments/:paymentId/receipt`                      | —                                   | Streams confirmed receipt PDF.                                                  |
+| `GET /admin/payments/:paymentId/inspection-sheet`             | —                                   | Streams confirmed inspection-sheet PDF.                                         |
+
+Reject and reopen reasons are trimmed, non-empty, and at most 500 characters.
+`CONFIRMED` is terminal. `FAILED` is reserved for future online-payment support.
+The invoice is available for `PENDING`, `REJECTED`, and `CONFIRMED`; receipt
+and inspection sheet are available only for `CONFIRMED`. Download responses are
+raw PDF bytes, not JSON envelopes, and private storage keys are never exposed.
+
 ## Persistence representation relevant to the API
 
 Migration 9 introduced `inspection_station_daily_capacities`:
@@ -207,6 +257,12 @@ exactly one of them. Phase 4 writes a `daily_capacity_id` appointment with
 remain in use. There is no current appointment GET/list/cancel/reschedule HTTP
 contract.
 
+Migration 10 (`1786422084519-AddPaymentWorkflowFoundation`) adds required
+payment expiry, late-day, and fee-component snapshots, inspection-sheet key,
+and `payment_status_history`. Its preflight guard rejects execution when
+`payments` already contains rows, because the required new snapshots cannot be
+safely backfilled.
+
 ## Errors and unimplemented routes
 
 Errors use the common shape:
@@ -221,13 +277,13 @@ Errors use the common shape:
 }
 ```
 
-Relevant current scheduling outcomes include `STATION_NOT_FOUND`,
-`APPLICATION_NOT_FOUND`, `RESOURCE_NOT_OWNED`, `CONFLICT`, and
-`APPLICATION_INVALID_TRANSITION`. Validation failures use `VALIDATION_ERROR`.
+Relevant current outcomes include `STATION_NOT_FOUND`, `APPLICATION_NOT_FOUND`,
+`PAYMENT_NOT_FOUND`, `PAYMENT_DOCUMENT_NOT_AVAILABLE`,
+`PAYMENT_INVALID_TRANSITION`, `RESOURCE_NOT_OWNED`, and `CONFLICT`. Validation
+failures use `VALIDATION_ERROR`.
 
-No routes currently exist for appointment CRUD, slot management, payment,
-inspection, sticker/certificate, notification, audit, dashboard, reports, or
-announcements, even though some matching controller/entity foundations are
-present in the repository. Do not use older planned `/inspection-stations`,
-`/appointment-slots`, `/appointments`, or payment/inspection paths as current
-contracts.
+No routes currently exist for appointment CRUD, slot management, online payment
+providers, physical inspection, sticker/certificate, notification, audit,
+dashboard, reports, or announcements. Do not use older planned
+`/inspection-stations`, `/appointment-slots`, or `/appointments` paths as
+current contracts.
