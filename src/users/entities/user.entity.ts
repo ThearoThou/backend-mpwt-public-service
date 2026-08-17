@@ -184,12 +184,6 @@ export class User {
   })
   recordedInspections!: Inspection[];
 
-  @OneToMany(() => Sticker, (sticker) => sticker.markedReadyByUser, {
-    cascade: false,
-    eager: false,
-  })
-  markedReadyStickers!: Sticker[];
-
   @OneToMany(() => Sticker, (sticker) => sticker.issuedByUser, {
     cascade: false,
     eager: false,

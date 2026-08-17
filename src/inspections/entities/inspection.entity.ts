@@ -13,6 +13,7 @@ import {
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
 import { User } from '../../users/entities/user.entity';
+import { Sticker } from '../../stickers/entities/sticker.entity';
 import { InspectionResult } from '../enums/inspection-result.enum';
 import { InspectionStatus } from '../enums/inspection-status.enum';
 
@@ -102,4 +103,11 @@ export class Inspection {
   })
   @JoinColumn({ name: 'recorded_by_user_id' })
   recordedByUser!: User | null;
+
+  @OneToOne(() => Sticker, (sticker) => sticker.inspection, {
+    cascade: false,
+    eager: false,
+    nullable: true,
+  })
+  sticker!: Sticker | null;
 }

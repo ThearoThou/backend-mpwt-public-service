@@ -3,10 +3,10 @@
 ## Scope and source of truth
 
 This document describes the backend that is currently implemented through
-Phases 2, 3, 4, 5, and 6. The source of truth is the NestJS controllers, DTOs,
-services, entities, migrations, and automated tests. It does not describe
-future online-provider payments, stickers, general appointment cancellation,
-or rescheduling features as though they already exist.
+Phases 2, 3, 4, 5, 6, and 7. The source of truth is the NestJS controllers,
+DTOs, services, entities, migrations, and automated tests. It does not describe
+future online-provider payments, general appointment cancellation, or
+rescheduling features as though they already exist.
 
 The API prefix is configured by `API_PREFIX` and defaults to `/api`. Protected
 routes use an active-session Bearer access token. The global validation pipe
@@ -15,11 +15,11 @@ error envelope on validation failure.
 
 ## Actors and access
 
-| Actor     | Implemented access                                                                                                                                                                                                                                                                                                                                                                                         |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CITIZEN` | Manages their profile and vehicles; creates and progresses only their own renewal applications; uploads/downloads their own application and available payment documents; sees active stations and selectable dates; sets a DRAFT preference; and selects a replacement station/date when required.                                                                                                         |
-| `ADMIN`   | Lists and reads submitted applications and their document/status-history records; starts reviews, requests corrections, rejects, reopens, and performs review-pass; manages daily station capacities; initializes, reads, transitions, and downloads payment documents; records physical inspection PASS/FAIL results and manual NO_SHOW fallback; and manages users, vehicles, and inspection categories. |
-| `STAFF`   | Present in the role enum but has no implemented route or permission policy.                                                                                                                                                                                                                                                                                                                                |
+| Actor     | Implemented access                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CITIZEN` | Manages their profile and vehicles; creates and progresses only their own renewal applications; uploads/downloads their own application and available payment documents; sees active stations and selectable dates; sets a DRAFT preference; selects a replacement station/date when required; and reads the sticker-issuance status of their own renewal application.                                                                                                                             |
+| `ADMIN`   | Lists and reads submitted applications and their document/status-history records; starts reviews, requests corrections, rejects, reopens, and performs review-pass; manages daily station capacities; initializes, reads, transitions, and downloads payment documents; records physical inspection PASS/FAIL results and manual NO_SHOW fallback; lists and reads sticker-issuance work and physically issues an eligible sticker number; and manages users, vehicles, and inspection categories. |
+| `STAFF`   | Present in the role enum but has no implemented route or permission policy.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Citizens cannot use admin routes or operate on another citizen's application.
 Admins cannot use the citizen-only scheduling discovery or application mutation
@@ -89,10 +89,11 @@ is created only by the configured bootstrap process, never public registration.
 
 The presence of an enum value is not an endpoint contract. In particular,
 there is currently no implemented route that transitions an application to
-`REINSPECTION_REQUIRED` or `COMPLETED`, and Phase 4 adds no rescheduling,
-cancellation, or reinspection behavior for scheduled daily-capacity
-appointments. Phase 6 intentionally does not use `REINSPECTION_REQUIRED`;
-`COMPLETED` remains reserved for downstream sticker issuance.
+`REINSPECTION_REQUIRED`, and Phase 4 adds no rescheduling, cancellation, or
+reinspection behavior for scheduled daily-capacity appointments. Phase 6
+intentionally does not use `REINSPECTION_REQUIRED`. A Phase 6 PASS leaves the
+application `APPROVED` and sticker eligible; Phase 7 sticker issuance performs
+the final `APPROVED → COMPLETED` transition.
 
 ### Implemented transitions
 
@@ -110,6 +111,7 @@ appointments. Phase 6 intentionally does not use `REINSPECTION_REQUIRED`;
 | `APPOINTMENT_SELECTION_REQUIRED`                                                 | `APPROVED`                       | Citizen appointment selection    | Atomically reserves the citizen's selected daily capacity, replaces the stored preference, creates one `SCHEDULED` daily-capacity appointment, updates status, and writes history.                                                                                                                                                                          |
 | `DRAFT`, `SUBMITTED`, `CORRECTION_REQUIRED`, or `APPOINTMENT_SELECTION_REQUIRED` | `CANCELLED`                      | Citizen cancellation             | The citizen may cancel only their own application in one of these states. The optional reason and history are recorded. No Phase 4 daily-capacity release or appointment cancellation is implemented by this operation.                                                                                                                                     |
 | `APPROVED`                                                                       | `APPROVED`                       | Attempt 1/2 PASS                 | With confirmed payment and an eligible daily-capacity appointment, an ADMIN records PASS. The application stays APPROVED and is sticker eligible.                                                                                                                                                                                                           |
+| `APPROVED`                                                                       | `COMPLETED`                      | ADMIN sticker issuance           | For exactly one completed PASS on a daily-capacity appointment, issuance creates one Sticker, sets `completedAt`, and records `STICKER_ISSUED` history atomically.                                                                                                                                                                                          |
 | `APPROVED`                                                                       | `APPROVED`                       | Attempt 1 FAIL                   | An ADMIN records FAIL with a required reason. Reinspection is required; Phase 6 does not use `REINSPECTION_REQUIRED`.                                                                                                                                                                                                                                       |
 | `APPROVED`                                                                       | `INSPECTION_FAILED`              | Attempt 2 FAIL or expiry         | A second actual FAIL uses `SECOND_INSPECTION_FAILED`; missing the Attempt-1-FAIL reinspection completion deadline uses `REINSPECTION_DEADLINE_EXPIRED`.                                                                                                                                                                                                     |
 | `APPROVED`                                                                       | `APPROVED`                       | First NO_SHOW before FAIL        | A missed appointment creates no inspection attempt and permits replacement booking until the first-NO_SHOW booking deadline.                                                                                                                                                                                                                                |
@@ -231,9 +233,19 @@ cancel. Missed reinspection completion deadline becomes INSPECTION_FAILED. The
 maximum two actual physical attempts is an internship MVP rule, not verified
 official MPWT policy.
 
+### Phase 7 sticker issuance
+
+A completed PASS derives the presentation state `READY_FOR_ISSUANCE`; it is not
+a persisted `StickerStatus`. An ADMIN may issue a physical sticker number only
+for an eligible `APPROVED` application with exactly one completed PASS on a
+daily-capacity-backed appointment. Issuance creates the Sticker, sets
+`completedAt`, changes the application to `COMPLETED`, and records
+`STICKER_ISSUED` status history in one locked transaction. Citizens can read
+only their own sticker-issuance status and cannot issue stickers.
+
 The following are deliberately not current API behavior: generic status
 updates, a fake standalone approval action, citizen slot selection for the
 Phase 4 path, appointment rescheduling/cancellation, capacity release, online
-payment-provider processing, stickers, and notifications. Some related entities
-or enums may exist as foundation code; they do not make an HTTP feature
-implemented.
+payment-provider processing, certificate management, and notifications. Some
+related entities or enums may exist as foundation code; they do not make an HTTP
+feature implemented.

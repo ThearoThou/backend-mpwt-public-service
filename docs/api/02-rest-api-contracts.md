@@ -45,9 +45,38 @@ Booking accepts `{ "stationId": "uuid-v4", "capacityDate": "YYYY-MM-DD" }`
 and returns `applicationId`, `appointmentId`, status, booking reason, date-only
 `capacityDate`, and station `id`, `code`, `nameKh`, and `nameEn`.
 
+## Phase 7 sticker issuance
+
+Sticker issuance is the final renewal step. A completed PASS leaves the
+application `APPROVED` and derives `READY_FOR_ISSUANCE`; only successful ADMIN
+issuance transitions `APPROVED → COMPLETED`. The presentation states
+`NOT_READY`, `READY_FOR_ISSUANCE`, and `ISSUED` are API/UI states only, not a
+stored `StickerStatus` enum.
+
+### Admin sticker routes
+
+All routes below require ADMIN.
+
+| Method and path                                          | Request / response                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /admin/stickers`                                    | Accepts a `view` of `AWAITING` or `ISSUED` and `BasePaginationQueryDto` pagination. Returns `{ data, meta, summary }`; `summary` contains `awaitingIssuance`, `issuedToday`, and `issuedThisMonth`. Today/month calculations use `Asia/Phnom_Penh` business time.                                                                                                                    |
+| `GET /admin/stickers/applications/:applicationId`        | Returns the application, vehicle, owner name, successful PASS inspection, derived station, Sticker when issued, presentation `state`, and `actions.canIssueSticker`.                                                                                                                                                                                                                 |
+| `POST /admin/stickers/applications/:applicationId/issue` | Accepts `{ "stickerNumber": "ABC123" }`. The required value is trimmed, non-empty, and at most 100 characters; its uniqueness is exact and case-sensitive, with no serial prefix or regex requirement. On success, returns the sticker detail after atomically creating the Sticker, setting `completedAt`, changing `APPROVED → COMPLETED`, and recording `STICKER_ISSUED` history. |
+
+### Citizen sticker route
+
+`GET /applications/:applicationId/sticker-status` requires CITIZEN ownership
+and returns the same status detail without the ADMIN `actions` field. It does
+not expose the issuing admin identity or issuance actions.
+
+The Sticker references the exact completed PASS inspection. Its station is
+derived through that inspection's appointment `dailyCapacityId`, daily capacity,
+and inspection station; sticker issuance does not use legacy `slotId`
+appointments and a Sticker has no `station_id`.
+
 ## Scope
 
-This is the implemented HTTP contract as of Phases 2–6. Routes below are
+This is the implemented HTTP contract as of Phases 2–7. Routes below are
 relative to `API_PREFIX`, which defaults to `/api`; examples therefore use
 `/api`. A route is documented only when a controller implements it. Empty
 foundation controllers and entity-only domains do not imply an endpoint.
@@ -324,11 +353,13 @@ Errors use the common shape:
 
 Relevant current outcomes include `STATION_NOT_FOUND`, `APPLICATION_NOT_FOUND`,
 `PAYMENT_NOT_FOUND`, `PAYMENT_DOCUMENT_NOT_AVAILABLE`,
-`PAYMENT_INVALID_TRANSITION`, `RESOURCE_NOT_OWNED`, and `CONFLICT`. Validation
-failures use `VALIDATION_ERROR`.
+`PAYMENT_INVALID_TRANSITION`, `RESOURCE_NOT_OWNED`, and `CONFLICT`. Sticker
+issuance additionally uses `STICKER_PASS_INSPECTION_REQUIRED`,
+`STICKER_NUMBER_CONFLICT`, and `STICKER_INVALID_TRANSITION`. Validation failures
+use `VALIDATION_ERROR`.
 
 No routes currently exist for general appointment CRUD, slot management, online
-payment providers, sticker/certificate, notification, audit, dashboard,
+payment providers, certificate management, notification, audit, dashboard,
 reports, or announcements. Do not use older planned
 `/inspection-stations`, `/appointment-slots`, or `/appointments` paths as
 current contracts.

@@ -1,6 +1,6 @@
 -- MPWT Vehicle Inspection Renewal Service
 -- PostgreSQL constraint and index reference for the cumulative executed schema
--- after TypeORM migrations 1-11. This is documentation, not a migration script.
+-- after TypeORM migrations 1-12. This is documentation, not a migration script.
 -- The TypeORM migrations remain the executable source of truth.
 
 -- ---------------------------------------------------------------------------
@@ -24,8 +24,8 @@
 -- payment_method: PAY_AT_STATION, BANK_QR, BANK_CARD
 -- payment_status: PENDING, CONFIRMED, FAILED, REJECTED
 -- notification_type, notification_channel, notification_delivery_status,
--- sticker_status, timeline_event_type, and audit_actor_type also exist exactly
--- as represented in mpwt_vehicle_inspection_full_schema.dbml.
+-- timeline_event_type, and audit_actor_type also exist exactly as represented
+-- in mpwt_vehicle_inspection_full_schema.dbml.
 
 -- ---------------------------------------------------------------------------
 -- CHECK constraints
@@ -117,6 +117,9 @@
 -- payment_status_history.chk_payment_status_history_status_transition
 --   from_status <> to_status
 --
+-- stickers.chk_stickers_sticker_number_trimmed_nonempty
+--   sticker_number = btrim(sticker_number) AND sticker_number <> ''
+--
 -- inspection_station_daily_capacities.chk_inspection_station_daily_capacities_daily_capacity
 --   daily_capacity > 0
 -- inspection_station_daily_capacities.chk_inspection_station_daily_capacities_reserved_count
@@ -140,7 +143,9 @@
 -- appointments.uq_appointments_id_application: (id, application_id).
 -- inspections: unique appointment_id.
 -- payments: unique application_id; unique invoice_number; unique receipt_number.
--- stickers: unique application_id; unique sticker_number; unique certificate_number.
+-- stickers.uq_stickers_application: unique application_id.
+-- stickers.uq_stickers_inspection: unique inspection_id.
+-- stickers.uq_stickers_sticker_number: unique sticker_number.
 -- inspection_station_daily_capacities.uq_inspection_station_daily_capacities_station_date:
 --   (station_id, capacity_date).
 --
@@ -203,7 +208,7 @@
 --   (payment_id, created_at)
 -- payment_status_history.idx_payment_status_history_changed_by_user:
 --   (changed_by_user_id)
--- stickers.idx_stickers_status: (status)
+-- stickers.idx_stickers_issued_at: (issued_at)
 -- notifications.idx_notifications_application_created: (application_id, created_at)
 -- notifications.idx_notifications_recipient_read_created:
 --   (recipient_user_id, is_read, created_at)
@@ -300,11 +305,11 @@
 --   payment_id -> payments(id), DELETE RESTRICT, UPDATE RESTRICT
 -- payment_status_history.fk_payment_status_history_changed_by_user:
 --   changed_by_user_id -> users(id), DELETE SET NULL, UPDATE RESTRICT
--- stickers.FK_80895b54aab0c858e783d9722fe:
+-- stickers.fk_stickers_application:
 --   application_id -> renewal_applications(id), DELETE RESTRICT, UPDATE NO ACTION
--- stickers.FK_1e6d9ce40174aacd279bb7d8ca3:
---   marked_ready_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
--- stickers.FK_c27c7ef3c03b81d67642af8def0:
+-- stickers.fk_stickers_inspection:
+--   inspection_id -> inspections(id), DELETE RESTRICT, UPDATE NO ACTION
+-- stickers.fk_stickers_issued_by_user:
 --   issued_by_user_id -> users(id), DELETE SET NULL, UPDATE NO ACTION
 -- notifications.FK_2726bde496d82b6401532ab1477:
 --   recipient_user_id -> users(id), DELETE RESTRICT, UPDATE NO ACTION
@@ -339,3 +344,14 @@
 -- completed inspection. renewal_application_status_history.reason is
 -- varchar(100). Migration 11 down is intentionally irreversible because enum
 -- evolution cannot be safely reverted.
+--
+-- Migration 12 sticker objects
+-- stickers has required application_id, inspection_id, sticker_number, and
+-- issued_at. uq_stickers_application, uq_stickers_inspection, and
+-- uq_stickers_sticker_number enforce one Sticker per application, successful
+-- PASS inspection, and exact sticker number. The
+-- chk_stickers_sticker_number_trimmed_nonempty check requires sticker_number to
+-- be non-empty and already trimmed. idx_stickers_issued_at indexes issued_at.
+-- The current Sticker FKs are fk_stickers_application, fk_stickers_inspection,
+-- and fk_stickers_issued_by_user; the old persisted sticker state,
+-- certificate, readiness, and pickup objects were removed with sticker_status.

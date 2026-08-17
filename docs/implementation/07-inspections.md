@@ -42,8 +42,9 @@ no state containing a completed PASS advertises a new Phase 6 action.
 Attempt 1 PASS and Attempt 2 PASS leave the application APPROVED and make it
 sticker eligible. Attempt 1 FAIL leaves it APPROVED and requires reinspection;
 Phase 6 intentionally does not use `REINSPECTION_REQUIRED`. Attempt 2 FAIL
-sets `INSPECTION_FAILED` with `SECOND_INSPECTION_FAILED`. `COMPLETED` remains
-reserved for downstream sticker issuance.
+sets `INSPECTION_FAILED` with `SECOND_INSPECTION_FAILED`. Phase 6 itself does
+not transition PASS to `COMPLETED`; Phase 7 sticker issuance performs the final
+`APPROVED → COMPLETED` transition.
 
 ## Admin inspection queue
 

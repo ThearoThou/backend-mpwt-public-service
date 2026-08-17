@@ -42,7 +42,6 @@ function createUser(overrides: Partial<User> = {}): User {
     confirmedPayments: [],
     rejectedPayments: [],
     recordedInspections: [],
-    markedReadyStickers: [],
     issuedStickers: [],
     receivedNotifications: [],
     createdNotifications: [],
