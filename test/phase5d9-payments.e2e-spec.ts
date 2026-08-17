@@ -18,6 +18,7 @@ import { configureApiApplication } from '../src/common/http/api-application.conf
 import { FilesService } from '../src/files/files.service';
 import { InspectionVehicleCategory } from '../src/inspection-categories/entities/inspection-vehicle-category.entity';
 import { Payment } from '../src/payments/entities/payment.entity';
+import { PaymentPdfService } from '../src/payments/payment-pdf.service';
 import { PaymentStatusHistory } from '../src/payments/entities/payment-status-history.entity';
 import { PaymentMethod } from '../src/payments/enums/payment-method.enum';
 import { PaymentStatus } from '../src/payments/enums/payment-status.enum';
@@ -66,7 +67,20 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      // PostgreSQL/API E2E verifies the payment workflow and persistence, not
+      // browser rendering. Jest's CommonJS runtime cannot execute Puppeteer's
+      // installed ESM entrypoint; PaymentPdfService rendering is unit-tested.
+      .overrideProvider(PaymentPdfService)
+      .useValue({
+        generateInvoice: () =>
+          Promise.resolve(Buffer.from('%PDF-1.7 e2e invoice')),
+        generateReceipt: () =>
+          Promise.resolve(Buffer.from('%PDF-1.7 e2e receipt')),
+        generateInspectionSheet: () =>
+          Promise.resolve(Buffer.from('%PDF-1.7 e2e inspection sheet')),
+      })
+      .compile();
     app = module.createNestApplication();
     configureApiApplication(
       app,

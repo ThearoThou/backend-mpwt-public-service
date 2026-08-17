@@ -71,6 +71,12 @@ describe('InspectionStationDailyCapacityService', () => {
         'capacity."reserved_count" < capacity."daily_capacity"',
       ),
     );
+    expect(queryText).toEqual(
+      expect.stringContaining(
+        'capacity."capacity_date"::text AS "capacityDate"',
+      ),
+    );
+    expect(typeof reserved.capacityDate).toBe('string');
   });
 
   it('returns null when the guarded reservation update finds no reservable capacity', async () => {

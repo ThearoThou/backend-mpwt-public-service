@@ -39,6 +39,9 @@ export class RenewalApplicationStatusHistory {
   @Column({ name: 'changed_by_user_id', type: 'uuid', nullable: true })
   changedByUserId!: string | null;
 
+  @Column({ name: 'reason', type: 'varchar', length: 100, nullable: true })
+  reason!: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 

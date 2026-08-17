@@ -1,8 +1,53 @@
 # REST API contracts
 
+## Phase 6 physical inspection
+
+ADMIN-only: `GET /admin/inspections` (PENDING, PASSED, FAILED queue),
+`GET /admin/inspections/appointments/:appointmentId`,
+`POST /admin/inspections/appointments/:appointmentId/result` with
+`{ "result": "PASS" | "FAIL", "failureReason"?: string }`, and
+`POST /admin/inspections/appointments/:appointmentId/no-show`.
+
+CITIZEN-only: `GET /applications/:applicationId/inspection-status`,
+`GET /inspections`,
+`GET /applications/:applicationId/replacement-inspection/stations/:stationId/available-dates`,
+and `POST /applications/:applicationId/replacement-inspection/appointment`
+with UUID-v4 `stationId` and date-only `capacityDate` (`YYYY-MM-DD`). Booking
+returns a date-only `capacityDate`, never an ISO timestamp. Automatic expiry is
+internal only; there is no scheduler HTTP endpoint. Internal status-history
+reason codes are not citizen inspection-history fields.
+
+`GET /admin/inspections` accepts `view=PENDING|PASSED|FAILED`, optional UUID-v4
+`stationId`, optional date-only `capacityDate`, and pagination query fields
+`page` and `limit`.
+PENDING is APPROVED + CONFIRMED + SCHEDULED daily-capacity work with no
+inspection, date at least Cambodia today, no PASS, and at most one FAIL.
+Queue rows include application/reference/appointment/capacity date, station,
+vehicle, derived attempt number, view, and inspection summary. Detail returns
+application, appointment/capacity date, station, vehicle, documents, payment
+status, inspection, attempt number, `canRecordResult`, and `canMarkNoShow`.
+
+Result accepts PASS/FAIL. PASS permits omitted/null `failureReason`; FAIL needs
+a trimmed nonempty value no longer than 500 characters. It requires APPROVED,
+CONFIRMED, SCHEDULED daily-capacity work dated Cambodia today and no inspection.
+NO_SHOW needs past daily-capacity SCHEDULED work without inspection; it creates
+no inspection history and leaves capacity/payment consumed/confirmed.
+
+Citizen status returns `applicationId`, `applicationStatus`, `inspection`,
+`latestAppointmentStatus`, `attemptsUsed`, `attemptsRemaining`, reinspection
+and replacement flags/deadlines, and `stickerEligible`. Actions apply only while
+APPROVED and PASS is final defensively. `GET /inspections` is paginated,
+citizen-scoped completed-attempt history with application/reference, attempt,
+result, inspected time, failure reason, station, and vehicle; no recorder ID or
+NO_SHOW-only row. Availability returns `applicationId`, `stationId`,
+`bookingReason`, `bookingDeadline`, `reinspectionDeadline`, and `availableDates`.
+Booking accepts `{ "stationId": "uuid-v4", "capacityDate": "YYYY-MM-DD" }`
+and returns `applicationId`, `appointmentId`, status, booking reason, date-only
+`capacityDate`, and station `id`, `code`, `nameKh`, and `nameEn`.
+
 ## Scope
 
-This is the implemented HTTP contract as of Phases 2–5. Routes below are
+This is the implemented HTTP contract as of Phases 2–6. Routes below are
 relative to `API_PREFIX`, which defaults to `/api`; examples therefore use
 `/api`. A route is documented only when a controller implements it. Empty
 foundation controllers and entity-only domains do not imply an endpoint.
@@ -97,7 +142,7 @@ The exact `ApplicationStatus` values are:
 
 `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `CORRECTION_REQUIRED`,
 `APPOINTMENT_SELECTION_REQUIRED`, `APPROVED`, `REJECTED`,
-`REINSPECTION_REQUIRED`, `CANCELLED`, `COMPLETED`.
+`REINSPECTION_REQUIRED`, `INSPECTION_FAILED`, `CANCELLED`, `COMPLETED`.
 
 ### Citizen application routes
 
@@ -282,8 +327,8 @@ Relevant current outcomes include `STATION_NOT_FOUND`, `APPLICATION_NOT_FOUND`,
 `PAYMENT_INVALID_TRANSITION`, `RESOURCE_NOT_OWNED`, and `CONFLICT`. Validation
 failures use `VALIDATION_ERROR`.
 
-No routes currently exist for appointment CRUD, slot management, online payment
-providers, physical inspection, sticker/certificate, notification, audit,
-dashboard, reports, or announcements. Do not use older planned
+No routes currently exist for general appointment CRUD, slot management, online
+payment providers, sticker/certificate, notification, audit, dashboard,
+reports, or announcements. Do not use older planned
 `/inspection-stations`, `/appointment-slots`, or `/appointments` paths as
 current contracts.

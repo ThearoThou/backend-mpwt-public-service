@@ -11,6 +11,22 @@ this document describes the service and transaction design.
 
 ## Scope and locked behavior
 
+### Phase 6 inspection replacement
+
+Replacement/reinspection is daily-capacity only; legacy `slot_id` appointments
+are outside this MVP. After Attempt 1 FAIL, selected reinspection date must be
+after Cambodia today and no later than the original FAIL deadline. After first
+NO_SHOW, the citizen must book by its deadline, but the selected future date is
+not capped by that booking deadline. `capacityDate` remains `YYYY-MM-DD`; the
+atomic reservation query returns `capacity."capacity_date"::text`.
+
+Replacement uses the existing CONFIRMED payment and creates no new payment.
+Any active station with future, open, non-full capacity is eligible. The atomic
+reservation rejects an existing SCHEDULED appointment. NO_SHOW does not release
+the original capacity and a failed duplicate booking cannot increment it again.
+Attempt 2 must complete by the original Attempt-1-FAIL deadline; a NO_SHOW after
+that FAIL does not change it.
+
 `inspection_stations` remains the station record. Phase 4 adds one
 `inspection_station_daily_capacities` row per station/date, with positive
 `daily_capacity`, integer `reserved_count`, and `is_closed`. The station/date
@@ -173,7 +189,7 @@ and closure without release of an existing reservation.
 
 There is no scheduling implementation for appointment retrieval, cancellation,
 rescheduling, daily-capacity decrement/release, hourly citizen slot selection,
-physical inspection, reinspection, or notification delivery. Payment
-initialization is implemented only as the post-commit integration described
-above; its calculation, status, document, and HTTP rules are in
-[Payments](06-payments.md).
+or notification delivery. Physical inspection and replacement/reinspection use
+the Phase 6 daily-capacity behavior described above. Payment initialization is
+implemented only as the post-commit integration described above; its
+calculation, status, document, and HTTP rules are in [Payments](06-payments.md).

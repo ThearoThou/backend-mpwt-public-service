@@ -16,32 +16,48 @@ status, domain code, message, timestamp, and path.
 
 PostgreSQL schema changes are migration-based. TypeORM synchronization,
 automatic schema drops, and automatic migration execution are disabled. The
-current entity registry contains 21 entities and the repository contains ten
+current entity registry contains 21 entities and the repository contains eleven
 migrations. The cumulative executed schema is documented in
 [`docs/database`](../database/).
 
 ## Runtime composition
 
+### Phase 6 inspections
+
+`InspectionsModule` owns `AdminInspectionsController`,
+`CitizenApplicationInspectionsController`, `CitizenInspectionsController`,
+`InspectionReadsService`, `InspectionCommandsService`,
+`InspectionReplacementSchedulingService`, `InspectionExpiryService`, and
+`InspectionWorkflowScheduler`. Services use TypeORM entities/DataSource directly
+and replacement reservation depends on the daily-capacity scheduling service;
+there is no ApplicationsModule/PaymentsModule domain import cycle.
+
+`ScheduleModule.forRoot()` is configured once in `AppModule`. The hourly
+scheduler delegates only to `InspectionExpiryService.processDueActions()`, with
+an in-process busy guard and caught/logged errors. There is no distributed lock
+or multi-instance coordination; this is a single-process internship MVP.
+
 `AppModule` composes configuration, database, common foundation, auth, users,
 vehicles, inspection categories, applications, scheduling, files, and the
 foundation modules for payments, inspections, stickers, notifications,
-activity, and admin features. Payments has an implemented MVP workflow;
-inspections, stickers, notifications, activity, and other admin features have
+activity, and admin features. Payments and inspections have implemented MVP
+workflows; stickers, notifications, activity, and other admin features have
 only the foundations or explicit behavior described by their controllers.
 
-| Area                                                            | Current responsibility                                                                                                                 |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `config`                                                        | Validates environment configuration and supplies it application-wide.                                                                  |
-| `database`                                                      | Creates the TypeORM PostgreSQL connection from registered entities and migration configuration.                                        |
-| `common/http` and `common/errors`                               | API prefix, validation, response envelopes, `DomainException`, and safe exception mapping.                                             |
-| `common/auth`                                                   | Access-token guard, actor decorator, role metadata, and role guard.                                                                    |
-| `auth`                                                          | Registration, verification, login, token issuance, refresh rotation, logout, reset, refresh-session revocation, and admin bootstrap.   |
-| `users`                                                         | Users, citizen profiles, current-user/profile work, and admin user administration.                                                     |
-| `vehicles` and `inspection-categories`                          | Citizen/admin vehicle access, plate normalization, categories, and admin classification/history.                                       |
-| `applications` and `files`                                      | DRAFT lifecycle, document storage/versioning, submission, citizen reads, and admin review operations.                                  |
-| `scheduling`                                                    | Station/date availability, daily capacities, preference validation, and reservation primitives.                                        |
-| `payments`                                                      | Idempotent post-scheduling payment initialization, payment transitions/history, private PDF artifacts, and citizen/admin payment APIs. |
-| `inspections`, `stickers`, `notifications`, `activity`, `admin` | Current schema/module foundations only unless a controller/service explicitly implements a listed behavior.                            |
+| Area                                             | Current responsibility                                                                                                                 |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `config`                                         | Validates environment configuration and supplies it application-wide.                                                                  |
+| `database`                                       | Creates the TypeORM PostgreSQL connection from registered entities and migration configuration.                                        |
+| `common/http` and `common/errors`                | API prefix, validation, response envelopes, `DomainException`, and safe exception mapping.                                             |
+| `common/auth`                                    | Access-token guard, actor decorator, role metadata, and role guard.                                                                    |
+| `auth`                                           | Registration, verification, login, token issuance, refresh rotation, logout, reset, refresh-session revocation, and admin bootstrap.   |
+| `users`                                          | Users, citizen profiles, current-user/profile work, and admin user administration.                                                     |
+| `vehicles` and `inspection-categories`           | Citizen/admin vehicle access, plate normalization, categories, and admin classification/history.                                       |
+| `applications` and `files`                       | DRAFT lifecycle, document storage/versioning, submission, citizen reads, and admin review operations.                                  |
+| `scheduling`                                     | Station/date availability, daily capacities, preference validation, and reservation primitives.                                        |
+| `payments`                                       | Idempotent post-scheduling payment initialization, payment transitions/history, private PDF artifacts, and citizen/admin payment APIs. |
+| `inspections`                                    | Physical inspection reads/commands, replacement booking, expiry processing, and the scheduler adapter.                                 |
+| `stickers`, `notifications`, `activity`, `admin` | Current schema/module foundations only unless a controller/service explicitly implements a listed behavior.                            |
 
 Detailed implementation notes are domain-oriented:
 
@@ -123,11 +139,11 @@ Implemented through the current project stage:
   reopen transitions, payment history, and private invoice/receipt/inspection
   sheet PDFs.
 
-Not implemented as complete workflows: online payment providers, physical
-inspection, stickers/certificates, notification delivery and reads, appointment
-retrieval, appointment cancellation/rescheduling, daily-capacity release, and
-reinspection/completion transitions. Their entities or controller shells do not
-make those workflows current behavior.
+Not implemented as complete workflows: online payment providers,
+stickers/certificates, notification delivery and reads, general appointment
+retrieval/cancellation/rescheduling, daily-capacity release, and downstream
+sticker completion transitions. Their entities or controller shells do not make
+those workflows current behavior.
 
 ## Testing approach
 

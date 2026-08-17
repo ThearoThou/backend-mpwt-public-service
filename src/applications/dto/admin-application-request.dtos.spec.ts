@@ -53,6 +53,14 @@ describe('ListAdminApplicationsQueryDto', () => {
     expect(input.citizenSearch).toBe('Citizen Name');
   });
 
+  it('accepts INSPECTION_FAILED as a filterable terminal status', async () => {
+    const input = plainToInstance(ListAdminApplicationsQueryDto, {
+      status: ApplicationStatus.INSPECTION_FAILED,
+    });
+
+    expect(await validate(input)).toHaveLength(0);
+  });
+
   it('validates date-only filters and rejects an invalid submitted range', async () => {
     const valid = plainToInstance(ListAdminApplicationsQueryDto, {
       submittedFrom: '2026-08-01',

@@ -40,6 +40,7 @@ Enum application_status {
   APPROVED
   REJECTED
   REINSPECTION_REQUIRED
+  INSPECTION_FAILED
   CANCELLED
   COMPLETED
 }
@@ -335,6 +336,7 @@ Table renewal_application_status_history {
   previous_status application_status
   new_status application_status [not null]
   changed_by_user_id uuid
+  reason varchar(100)
   created_at timestamptz [not null, default: `now()`]
 
   indexes {
@@ -451,6 +453,7 @@ Table inspections {
   id uuid [pk]
   application_id uuid [not null]
   appointment_id uuid [not null, unique]
+  attempt_number smallint [not null]
   status inspection_status [not null, default: 'PENDING']
   result inspection_result
   recorded_by_user_id uuid
@@ -462,10 +465,13 @@ Table inspections {
   updated_at timestamptz [not null, default: `now()`]
 
   indexes {
+    (application_id, attempt_number) [unique, name: 'uq_inspections_application_attempt']
     (application_id, created_at) [name: 'idx_inspections_application_created']
     status [name: 'idx_inspections_status']
     result [name: 'idx_inspections_result']
   }
+
+  Note: 'chk_inspections_attempt_number permits only 1 or 2. chk_inspections_state_consistency and chk_inspections_result_failure_reason enforce pending/completed and PASS/FAIL fields. fn_guard_completed_inspection_immutable and trg_guard_completed_inspection_immutable reject UPDATE and DELETE after COMPLETED. Reinspection deadline and NO_SHOW count are derived, not persisted.'
 }
 
 Table payments {

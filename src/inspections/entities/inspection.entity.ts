@@ -30,6 +30,9 @@ export class Inspection {
   @Column({ name: 'appointment_id', type: 'uuid' })
   appointmentId!: string;
 
+  @Column({ name: 'attempt_number', type: 'smallint' })
+  attemptNumber!: number;
+
   @Column({
     name: 'status',
     type: 'enum',

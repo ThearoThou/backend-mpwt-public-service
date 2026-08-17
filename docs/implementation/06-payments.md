@@ -2,6 +2,12 @@
 
 ## Scope and integration
 
+### Phase 6 inspection invariant
+
+Physical result recording requires `CONFIRMED` payment. Replacement and
+reinspection reuse that same payment: no second initialization, fee, invoice,
+or payment-state mutation occurs. NO_SHOW does not cancel, reset, or reject it.
+
 Phase 5 implements the MVP payment workflow for an application that is
 `APPROVED` and has exactly one `SCHEDULED` appointment. Scheduling remains the
 owner of its reservation transaction. After that transaction commits,
@@ -92,5 +98,6 @@ API E2E tests, migration UP/DOWN/UP verification, and rollback verification.
 Manual verification includes the Postman payment workflow and visual PDF
 inspection.
 
-Phase 6 physical inspection is not implemented. Its future workflow depends
-on Payment being `CONFIRMED`.
+Phase 6 physical inspection is implemented. Result recording requires Payment
+to be `CONFIRMED`; replacement and reinspection reuse that confirmed payment
+without changing its state.

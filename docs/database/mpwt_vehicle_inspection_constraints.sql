@@ -1,6 +1,6 @@
 -- MPWT Vehicle Inspection Renewal Service
 -- PostgreSQL constraint and index reference for the cumulative executed schema
--- after TypeORM migrations 1-10. This is documentation, not a migration script.
+-- after TypeORM migrations 1-11. This is documentation, not a migration script.
 -- The TypeORM migrations remain the executable source of truth.
 
 -- ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@
 -- verification_purpose: REGISTER_ACCOUNT, RESET_PASSWORD, CHANGE_PHONE
 -- application_status: DRAFT, SUBMITTED, UNDER_REVIEW, CORRECTION_REQUIRED,
 --   APPOINTMENT_SELECTION_REQUIRED, APPROVED, REJECTED,
---   REINSPECTION_REQUIRED, CANCELLED, COMPLETED
+--   REINSPECTION_REQUIRED, INSPECTION_FAILED, CANCELLED, COMPLETED
 -- document_type: VEHICLE_REGISTRATION_CARD,
 --   PREVIOUS_INSPECTION_CERTIFICATE, CITIZEN_ID_CARD
 -- document_status: PENDING, APPROVED, REJECTED
@@ -326,3 +326,16 @@
 -- public.fn_guard_renewal_application_status_history and
 -- trg_guard_renewal_application_status_history_immutable reject UPDATE and
 -- DELETE on renewal_application_status_history.
+--
+-- Migration 11 physical inspection objects
+-- application_status adds INSPECTION_FAILED. inspections.attempt_number is
+-- smallint NOT NULL with chk_inspections_attempt_number (IN (1, 2)) and
+-- uq_inspections_application_attempt (application_id, attempt_number).
+-- chk_inspections_state_consistency requires coherent PENDING/COMPLETED result,
+-- recorder, completion and reason fields. chk_inspections_result_failure_reason
+-- requires PASS reason NULL and FAIL a trimmed nonempty reason up to 500 chars.
+-- public.fn_guard_completed_inspection_immutable and
+-- trg_guard_completed_inspection_immutable reject UPDATE and DELETE of a
+-- completed inspection. renewal_application_status_history.reason is
+-- varchar(100). Migration 11 down is intentionally irreversible because enum
+-- evolution cannot be safely reverted.

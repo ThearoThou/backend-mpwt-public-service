@@ -21,8 +21,28 @@ export interface AdminApplicationDocumentResponse {
   updatedAt: Date;
 }
 
+export type AdminApplicationDocumentSource = Pick<
+  ApplicationDocument,
+  | 'id'
+  | 'applicationId'
+  | 'documentType'
+  | 'versionNumber'
+  | 'isCurrent'
+  | 'replacesDocumentId'
+  | 'originalFileName'
+  | 'mimeType'
+  | 'fileSizeBytes'
+  | 'status'
+  | 'reviewedByUserId'
+  | 'reviewedAt'
+  | 'rejectionReason'
+  | 'uploadedAt'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
 export function mapAdminApplicationDocument(
-  document: ApplicationDocument,
+  document: AdminApplicationDocumentSource,
 ): AdminApplicationDocumentResponse {
   return {
     id: document.id,

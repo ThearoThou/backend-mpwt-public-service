@@ -143,7 +143,7 @@ export class InspectionStationDailyCapacityService {
         RETURNING
           capacity."id" AS "id",
           capacity."station_id" AS "stationId",
-          capacity."capacity_date" AS "capacityDate"
+          capacity."capacity_date"::text AS "capacityDate"
       `,
       [stationId, capacityDate],
     );
