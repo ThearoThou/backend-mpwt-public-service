@@ -10,9 +10,16 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.use(cookieParser());
-  configureApiApplication(app, configService.getOrThrow<string>('API_PREFIX'));
+
+  configureApiApplication(
+    app,
+    configService.getOrThrow<string>('API_PREFIX'),
+    configService.getOrThrow<string>('FRONTEND_ORIGIN'),
+  );
+
   await app.get(AdminBootstrapService).bootstrapInitialAdministrator();
 
   await app.listen(process.env.PORT ?? 3000);
 }
+
 void bootstrap();

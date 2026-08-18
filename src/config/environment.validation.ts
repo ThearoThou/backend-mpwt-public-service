@@ -2,6 +2,7 @@ export interface EnvironmentVariables {
   NODE_ENV: string;
   PORT: number;
   API_PREFIX: string;
+  FRONTEND_ORIGIN: string;
   PRIVATE_STORAGE_ROOT: string;
   DB_HOST: string;
   DB_PORT: number;
@@ -269,6 +270,7 @@ export function validateEnvironment(
     NODE_ENV,
     PORT: port(environment, 'PORT', 3000),
     API_PREFIX: optionalString(environment, 'API_PREFIX', '/api'),
+    FRONTEND_ORIGIN: requiredString(environment, 'FRONTEND_ORIGIN'),
     PRIVATE_STORAGE_ROOT: optionalString(
       environment,
       'PRIVATE_STORAGE_ROOT',

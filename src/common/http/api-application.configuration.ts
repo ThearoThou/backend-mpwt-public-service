@@ -12,8 +12,15 @@ import { normalizeApiPrefix } from './api-prefix';
 export function configureApiApplication(
   app: INestApplication,
   apiPrefix: string | undefined,
+  frontendOrigin: string,
 ): void {
+  app.enableCors({
+    origin: frontendOrigin,
+    credentials: true,
+  });
+
   app.setGlobalPrefix(normalizeApiPrefix(apiPrefix));
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -30,5 +37,6 @@ export function configureApiApplication(
         ),
     }),
   );
+
   app.useGlobalFilters(new ApiExceptionFilter());
 }

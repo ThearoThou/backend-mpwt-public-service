@@ -10,6 +10,7 @@ const validEnvironment = {
   JWT_ACCESS_EXPIRES_IN: '30m',
   JWT_REFRESH_SECRET: 'refresh-secret-for-test-only',
   JWT_REFRESH_EXPIRES_IN: '7d',
+  FRONTEND_ORIGIN: 'http://localhost:3001',
 };
 
 describe('environment validation', () => {
@@ -17,6 +18,7 @@ describe('environment validation', () => {
     expect(validateEnvironment(validEnvironment)).toMatchObject({
       JWT_ACCESS_EXPIRES_IN: '30m',
       JWT_REFRESH_EXPIRES_IN: '7d',
+      FRONTEND_ORIGIN: 'http://localhost:3001',
       REFRESH_COOKIE_NAME: 'mpwt_refresh',
       REFRESH_COOKIE_SECURE: false,
       REFRESH_COOKIE_SAME_SITE: 'lax',
@@ -25,6 +27,16 @@ describe('environment validation', () => {
       EXPOSE_DEVELOPMENT_VERIFICATION_CODE: false,
       ADMIN_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('requires a frontend origin for credentialed CORS', () => {
+    const withoutFrontendOrigin = { ...validEnvironment };
+
+    delete withoutFrontendOrigin.FRONTEND_ORIGIN;
+
+    expect(() => validateEnvironment(withoutFrontendOrigin)).toThrow(
+      'FRONTEND_ORIGIN',
+    );
   });
 
   it('requires distinct, non-placeholder access and refresh secrets', () => {
