@@ -86,6 +86,38 @@ export class VehiclesService {
       { citizenId },
     );
 
+    if (input.registrationNumber !== undefined) {
+      query.andWhere('vehicle.registrationNumber = :registrationNumber', {
+        registrationNumber: normalizeVehicleIdentifier(
+          input.registrationNumber,
+        ),
+      });
+    }
+
+    if (input.chassisNumber !== undefined) {
+      query.andWhere('vehicle.chassisNumber = :chassisNumber', {
+        chassisNumber: normalizeVehicleIdentifier(input.chassisNumber),
+      });
+    }
+
+    if (input.plateCategory !== undefined) {
+      query.andWhere('vehicle.plateCategory = :plateCategory', {
+        plateCategory: input.plateCategory,
+      });
+    }
+
+    if (input.plateProvince !== undefined) {
+      query.andWhere('vehicle.plateProvince = :plateProvince', {
+        plateProvince: normalizePlateProvince(input.plateProvince),
+      });
+    }
+
+    if (input.plateNumber !== undefined) {
+      query.andWhere('vehicle.plateNumber = :plateNumber', {
+        plateNumber: normalizePlateNumber(input.plateNumber),
+      });
+    }
+
     return this.executeList(query, input);
   }
 

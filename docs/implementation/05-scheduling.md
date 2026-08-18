@@ -81,6 +81,15 @@ The citizen discovery service returns active stations sorted by code/ID and
 returns selectable station dates sorted ascending. A station that is absent or
 inactive is not selectable.
 
+`GET /stations` returns only active station `id`, `code`, `nameKh`, `nameEn`,
+`province`, `address`, and nullable `phone` fields. It does not expose station
+activity flags or capacity data. `GET /stations/:stationId/available-dates`
+returns only `{ stationId, capacityDate }` rows; it intentionally does not
+expose remaining capacity. `capacityDate` is always a Cambodia-local, date-only
+`YYYY-MM-DD` value, never a UTC timestamp. Citizens must select a returned
+date, although submission revalidates it because a preference does not reserve
+capacity.
+
 ## Reservation transaction and concurrency
 
 Review-pass and citizen recovery lock the application with a pessimistic write

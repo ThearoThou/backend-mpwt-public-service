@@ -79,6 +79,14 @@ class VehiclePlateConstraint implements ValidatorConstraintInterface {
       plateNumber?: unknown;
     };
 
+    if (
+      plateCategory === undefined &&
+      plateProvince === undefined &&
+      plateNumber === undefined
+    ) {
+      return true;
+    }
+
     return isValidVehiclePlate(plateCategory, plateProvince, plateNumber);
   }
 
@@ -228,7 +236,37 @@ class VehiclePaginationQueryDto extends BasePaginationQueryDto {
   declare sortOrder: SortOrder;
 }
 
-export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {}
+export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  @Transform(canonicalizeVehicleIdentifierValue)
+  registrationNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  @Transform(canonicalizeVehicleIdentifierValue)
+  chassisNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  @Transform(normalizePlateNumberValue)
+  plateNumber?: string;
+
+  @Validate(VehiclePlateConstraint)
+  plateCategory?: VehiclePlateCategory;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  @Transform(normalizePlateProvinceValue)
+  plateProvince?: string;
+}
 
 export class ListAdminVehiclesQueryDto extends VehiclePaginationQueryDto {
   @IsOptional()

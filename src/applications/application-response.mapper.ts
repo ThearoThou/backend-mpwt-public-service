@@ -9,6 +9,8 @@ export interface RenewalApplicationResponse {
   status: ApplicationStatus;
   currentCorrectionReason: string | null;
   currentRejectionReason: string | null;
+  preferredInspectionStationId: string | null;
+  preferredInspectionDate: string | null;
   submittedAt: Date | null;
   reviewStartedAt: Date | null;
   readyForInspectionAt: Date | null;
@@ -30,6 +32,8 @@ export function mapRenewalApplication(
     status: application.status,
     currentCorrectionReason: application.currentCorrectionReason,
     currentRejectionReason: application.currentRejectionReason,
+    preferredInspectionStationId: application.preferredInspectionStationId,
+    preferredInspectionDate: application.preferredInspectionDate,
     submittedAt: application.submittedAt,
     reviewStartedAt: application.reviewStartedAt,
     readyForInspectionAt: application.readyForInspectionAt,

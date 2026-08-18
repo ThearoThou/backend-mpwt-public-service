@@ -164,13 +164,6 @@ export class ApplicationDocumentsService {
       where: { applicationId, documentType, isCurrent: true },
       lock: { mode: 'pessimistic_write' },
     });
-    if (current !== null && application.status === ApplicationStatus.DRAFT) {
-      throw new DomainException(
-        ApiErrorCode.APPLICATION_DOCUMENT_ALREADY_EXISTS,
-        HttpStatus.CONFLICT,
-        'A current document of this type already exists',
-      );
-    }
     if (
       current !== null &&
       application.status === ApplicationStatus.CORRECTION_REQUIRED &&

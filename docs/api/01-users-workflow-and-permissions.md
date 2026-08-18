@@ -136,7 +136,9 @@ The required document enum is exactly:
 Citizens upload documents separately from application creation. Upload is
 allowed only while the application is `DRAFT` or `CORRECTION_REQUIRED`.
 
-- In `DRAFT`, a current document type cannot be uploaded twice.
+- In `DRAFT`, re-uploading a document type replaces its current version. The
+  prior file and row remain in version history, become non-current, and the
+  replacement becomes the sole current version with the next version number.
 - In `CORRECTION_REQUIRED`, only a current rejected document may be replaced.
 - A replacement makes the previous version non-current, increments its version
   number, and begins with `PENDING` document status.
@@ -165,6 +167,14 @@ citizen hourly time-slot booking flow.
    `APPOINTMENT_SELECTION_REQUIRED` with no appointment.
 5. A citizen in `APPOINTMENT_SELECTION_REQUIRED` selects a new available
    station/date. The successful operation reserves it and reaches `APPROVED`.
+
+Citizen application responses include the nullable
+`preferredInspectionStationId` and date-only `preferredInspectionDate` fields.
+For an owned `DRAFT`, `GET /applications/:applicationId/fee-estimate` returns a
+read-only current category/expiry estimate with `inspectionFeeKhr`,
+`serviceFeeKhr`, `baseAmount`, `lateDays`, `lateFee`, `totalAmount`, and
+`currency`. It neither reserves capacity nor creates an appointment, payment,
+or invoice; it may differ from later payment snapshots.
 
 An administrator can create, list, retrieve, change the total daily capacity,
 close, and reopen daily-capacity rows. Admins never set `reserved_count`.

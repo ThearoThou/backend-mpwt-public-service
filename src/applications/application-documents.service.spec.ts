@@ -7,6 +7,24 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 const citizenId = '11111111-1111-4111-8111-111111111111';
 const applicationId = '22222222-2222-4222-8222-222222222222';
 
+type StoredDocument = {
+  id: string;
+  applicationId: string;
+  documentType: DocumentType;
+  versionNumber: number;
+  isCurrent: boolean;
+  replacesDocumentId: string | null;
+  uploadedByUserId: string;
+  storageKey: string;
+  originalFileName: string;
+  mimeType: string;
+  fileSizeBytes: string;
+  status: DocumentStatus;
+  uploadedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 describe('ApplicationDocumentsService upload preflight', () => {
   it('rejects a missing application before saving a file', async () => {
     const files = {
@@ -96,6 +114,108 @@ describe('ApplicationDocumentsService upload preflight', () => {
         storageKey: 'new-key',
       }),
     );
+  });
+
+  it('versions draft replacements, keeps history, and leaves other types current', async () => {
+    const fixture = draftReplacementFixture();
+
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+
+    expect(fixture.documents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          documentType: DocumentType.CITIZEN_ID_CARD,
+          versionNumber: 1,
+          isCurrent: false,
+          replacesDocumentId: null,
+        }),
+        expect.objectContaining({
+          documentType: DocumentType.CITIZEN_ID_CARD,
+          versionNumber: 2,
+          isCurrent: false,
+          replacesDocumentId: 'document-1',
+        }),
+        expect.objectContaining({
+          documentType: DocumentType.CITIZEN_ID_CARD,
+          versionNumber: 3,
+          isCurrent: true,
+          replacesDocumentId: 'document-2',
+        }),
+        expect.objectContaining({
+          documentType: DocumentType.VEHICLE_REGISTRATION_CARD,
+          versionNumber: 1,
+          isCurrent: true,
+        }),
+      ]),
+    );
+
+    const history = await fixture.service.listHistory(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      { page: 1, limit: 20 },
+    );
+    expect(history.data.map((document) => document.versionNumber)).toEqual([
+      3, 2, 1,
+    ]);
+
+    const current = await fixture.service.listCurrent(citizenId, applicationId);
+    expect(current).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          documentType: DocumentType.CITIZEN_ID_CARD,
+          versionNumber: 3,
+          isCurrent: true,
+        }),
+        expect.objectContaining({
+          documentType: DocumentType.VEHICLE_REGISTRATION_CARD,
+          versionNumber: 1,
+          isCurrent: true,
+        }),
+      ]),
+    );
+    expect(
+      current.filter(
+        (document) => document.documentType === DocumentType.CITIZEN_ID_CARD,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('does not allow another citizen to replace a draft document', async () => {
+    const fixture = draftReplacementFixture();
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+
+    await expect(
+      fixture.service.upload(
+        'other-citizen',
+        applicationId,
+        DocumentType.CITIZEN_ID_CARD,
+        file(),
+      ),
+    ).rejects.toMatchObject({ code: 'RESOURCE_NOT_OWNED' });
+    expect(fixture.files.saveApplicationDocument).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -279,4 +399,106 @@ function correctionUploadFixture(currentStatus: DocumentStatus | null) {
     service: new ApplicationDocumentsService(source as never, files as never),
     files,
   };
+}
+
+function draftReplacementFixture() {
+  const application = {
+    id: applicationId,
+    citizenId,
+    status: ApplicationStatus.DRAFT,
+  };
+  const documents: StoredDocument[] = [
+    document({
+      id: 'registration-document',
+      documentType: DocumentType.VEHICLE_REGISTRATION_CARD,
+      versionNumber: 1,
+    }),
+  ];
+  let nextDocumentId = 1;
+  const applications = { findOne: jest.fn().mockResolvedValue(application) };
+  const documentRepository = {
+    findOne: jest.fn(({ where }: { where: Partial<StoredDocument> }) =>
+      Promise.resolve(
+        documents.find((document) => matches(document, where)) ?? null,
+      ),
+    ),
+    find: jest.fn(({ where }: { where: Partial<StoredDocument> }) =>
+      Promise.resolve(
+        documents
+          .filter((document) => matches(document, where))
+          .sort((left, right) =>
+            left.documentType.localeCompare(right.documentType),
+          ),
+      ),
+    ),
+    findAndCount: jest.fn(({ where }: { where: Partial<StoredDocument> }) => {
+      const matching = documents
+        .filter((document) => matches(document, where))
+        .sort((left, right) => right.versionNumber - left.versionNumber);
+      return Promise.resolve([matching, matching.length] as const);
+    }),
+    create: jest.fn((input: Record<string, unknown>) =>
+      document({
+        id: `document-${nextDocumentId++}`,
+        ...(input as Partial<StoredDocument>),
+      }),
+    ),
+    save: jest.fn((value: StoredDocument) => {
+      const existingIndex = documents.findIndex(
+        (document) => document.id === value.id,
+      );
+      if (existingIndex === -1) documents.push(value);
+      else documents[existingIndex] = value;
+      return Promise.resolve(value);
+    }),
+  };
+  const manager = {
+    getRepository: jest.fn((entity) =>
+      entity === RenewalApplication ? applications : documentRepository,
+    ),
+  };
+  const source = {
+    getRepository: jest.fn((entity) =>
+      entity === RenewalApplication ? applications : documentRepository,
+    ),
+    transaction: jest.fn((callback: (value: typeof manager) => unknown) =>
+      callback(manager),
+    ),
+  };
+  const files = {
+    saveApplicationDocument: jest
+      .fn()
+      .mockResolvedValue({ storageKey: 'new-key' }),
+    deleteIfExists: jest.fn(),
+  };
+  return {
+    service: new ApplicationDocumentsService(source as never, files as never),
+    files,
+    documents,
+  };
+}
+
+function document(input: Partial<StoredDocument> & Pick<StoredDocument, 'id'>) {
+  const now = new Date();
+  return {
+    applicationId,
+    isCurrent: true,
+    replacesDocumentId: null,
+    uploadedByUserId: citizenId,
+    storageKey: 'existing-key',
+    originalFileName: 'existing.pdf',
+    mimeType: 'application/pdf',
+    fileSizeBytes: '1',
+    status: DocumentStatus.PENDING,
+    uploadedAt: now,
+    createdAt: now,
+    updatedAt: now,
+    ...input,
+  } satisfies StoredDocument;
+}
+
+function matches(document: StoredDocument, where: Partial<StoredDocument>) {
+  return (Object.keys(where) as Array<keyof StoredDocument>).every(
+    (key) => document[key] === where[key],
+  );
 }

@@ -28,10 +28,12 @@ set. For DRAFT support, `reference_number`, `applicant_snapshot`,
 
 The current application status enum contains `DRAFT`, `SUBMITTED`,
 `UNDER_REVIEW`, `CORRECTION_REQUIRED`, `APPOINTMENT_SELECTION_REQUIRED`,
-`APPROVED`, `REJECTED`, `REINSPECTION_REQUIRED`, `CANCELLED`, and `COMPLETED`.
+`APPROVED`, `REJECTED`, `REINSPECTION_REQUIRED`, `INSPECTION_FAILED`,
+`CANCELLED`, and `COMPLETED`.
 The presence of a stored enum value is not evidence of a complete route
 workflow: no current operation transitions an application to
-`REINSPECTION_REQUIRED` or `COMPLETED`.
+`REINSPECTION_REQUIRED`; completed PASS inspection is finalized by the
+implemented sticker-issuance `APPROVED → COMPLETED` transition.
 
 Citizen list/detail/status-history operations enforce ownership. Admin list,
 detail, document, and status-history reads operate on submitted applications;
@@ -63,7 +65,10 @@ current row per application/type.
 Upload is allowed only for an owned application in `DRAFT` or
 `CORRECTION_REQUIRED`:
 
-- During DRAFT, a current type cannot be uploaded a second time.
+- During DRAFT, the first file is version 1. A later upload of the same type
+  replaces the current version: the previous row and private file remain for
+  history, the previous row becomes non-current, and the new current row uses
+  the next version number and replacement link.
 - During correction-required, only a current rejected document can be
   replaced. The old row becomes non-current, the replacement increments the
   version and references it, and the replacement starts `PENDING`.
@@ -88,6 +93,19 @@ and append status history. The reference uses the Cambodia-local submission
 date plus random bytes. Submission retries a reference-number unique conflict
 before returning an internal failure. It does not reserve capacity or create an
 appointment.
+
+Citizen application list/detail/workflow responses expose the nullable paired
+`preferredInspectionStationId` and date-only
+`preferredInspectionDate` fields. This lets a DRAFT review screen recover the
+saved preference after navigation; it does not expose capacity records.
+
+While the application is owned by the citizen and remains `DRAFT`, `GET
+/applications/:applicationId/fee-estimate` returns a read-only current estimate
+of `inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`, `lateDays`, `lateFee`,
+`totalAmount`, and `currency`. It reuses payment/category calculation rules but
+does not create a Payment or invoice, reserve capacity, create an appointment,
+change status, or persist an estimate. It is an estimate only: category fees or
+late days can differ when payment is initialized later.
 
 `CORRECTION_REQUIRED → SUBMITTED` resubmission reuses the required-current
 document validation and confirms existing submission snapshot/reference data.

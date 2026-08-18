@@ -10,13 +10,25 @@ vehicle edit or delete operation.
 
 The HTTP route inventory is maintained in [`docs/api/02-rest-api-contracts.md`](../api/02-rest-api-contracts.md).
 
-## Vehicle record and ownership
+## Vehicle record, ownership, and renewal lookup
 
 `Vehicle` stores a nullable `linked_citizen_id`, registration/chassis identity,
 plate fields, descriptive vehicle fields, inspection dates, registered-owner
 details, active flag, and optional classification fields. Citizen creation sets
 `linkedCitizenId` from the authenticated actor; citizen list/detail queries
 enforce that same ownership. Admin list/detail operations are not owner-scoped.
+
+For the Vehicle Inspection Renewal frontend, Step Zero uses the existing
+citizen-owned list endpoint to locate an already persisted vehicle. `GET
+/vehicles` accepts optional exact `registrationNumber`, `chassisNumber`,
+`plateNumber`, `plateCategory`, and `plateProvince` filters. The service always
+adds `linkedCitizenId = authenticated citizen`; the frontend never supplies a
+citizen ID. Plate filtering follows the same complete provincial/personalized
+plate-identity normalization rules used by vehicle creation.
+
+This renewal lookup is neither authoritative vehicle creation nor an external
+MPWT registry lookup. `POST /vehicles` remains an existing generic citizen API,
+but it is not the Vehicle Inspection Renewal Step Zero path.
 
 `VehiclesService` normalizes registration number and chassis number by trimming,
 collapsing whitespace, and uppercasing Latin script. Required descriptive text

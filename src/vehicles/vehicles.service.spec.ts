@@ -171,7 +171,7 @@ describe('VehiclesService', () => {
     ).rejects.toBe(error);
   });
 
-  it('enforces citizen ownership while distinguishing absent permitted vehicles', async () => {
+  it("prevents a citizen from retrieving another citizen's vehicle", async () => {
     const repository = createRepository();
     const service = createService(repository);
 
@@ -194,7 +194,7 @@ describe('VehiclesService', () => {
     });
   });
 
-  it('scopes citizen lists and applies allowlisted pagination and sorting', async () => {
+  it('preserves unfiltered citizen lists with pagination and sorting', async () => {
     const repository = createRepository();
     const query = createListQuery();
     repository.createQueryBuilder.mockReturnValue(query);
@@ -222,6 +222,133 @@ describe('VehiclesService', () => {
       limit: 10,
       total: 1,
       totalPages: 1,
+    });
+  });
+
+  it('looks up a citizen vehicle by normalized registration number', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      registrationNumber: ' ab-1234 ',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.linkedCitizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.registrationNumber = :registrationNumber',
+      { registrationNumber: 'AB-1234' },
+    );
+  });
+
+  it('looks up a citizen vehicle by normalized chassis number', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      chassisNumber: ' ch  123 ',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.chassisNumber = :chassisNumber',
+      { chassisNumber: 'CH 123' },
+    );
+  });
+
+  it('looks up a citizen vehicle by complete provincial plate identity', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      plateCategory: VehiclePlateCategory.PROVINCE,
+      plateProvince: ' áž—áŸ’áž“áŸ†áž–áŸáž‰ ',
+      plateNumber: ' 2ab-3146 ',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.plateCategory = :plateCategory',
+      { plateCategory: VehiclePlateCategory.PROVINCE },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.plateProvince = :plateProvince',
+      { plateProvince: 'áž—áŸ’áž“áŸ†áž–áŸáž‰' },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.plateNumber = :plateNumber',
+      { plateNumber: '2AB-3146' },
+    );
+  });
+
+  it('looks up a citizen vehicle by personalized Cambodia plate identity', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      plateCategory: VehiclePlateCategory.PERSONALIZED_CAMBODIA,
+      plateNumber: ' tq.aa.a1 ',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.plateCategory = :plateCategory',
+      { plateCategory: VehiclePlateCategory.PERSONALIZED_CAMBODIA },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.plateNumber = :plateNumber',
+      { plateNumber: 'TQ.AA.A1' },
+    );
+    expect(query.andWhere).not.toHaveBeenCalledWith(
+      'vehicle.plateProvince = :plateProvince',
+      expect.anything(),
+    );
+  });
+
+  it('returns no match while retaining the citizen ownership predicate', async () => {
+    const repository = createRepository();
+    const query = createListQuery([], 0);
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    const result = await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      registrationNumber: 'NO-MATCH',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.linkedCitizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
+    expect(result).toEqual({
+      data: [],
+      meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
     });
   });
 
@@ -299,14 +426,14 @@ function createRepository() {
   };
 }
 
-function createListQuery() {
+function createListQuery(vehicles: Vehicle[] = [vehicle()], total = 1) {
   return {
     select: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
-    getManyAndCount: jest.fn().mockResolvedValue([[vehicle()], 1]),
+    getManyAndCount: jest.fn().mockResolvedValue([vehicles, total]),
   };
 }
 

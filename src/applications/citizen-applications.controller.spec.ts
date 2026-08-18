@@ -140,6 +140,35 @@ describe('CitizenApplicationsController', () => {
       input.reason,
     );
   });
+
+  it('forwards a citizen-owned fee estimate request and wraps its response', async () => {
+    const feeEstimate = {
+      inspectionFeeKhr: '25000.00',
+      serviceFeeKhr: '5000.00',
+      baseAmount: '30000.00',
+      lateDays: 2,
+      lateFee: '1000.00',
+      totalAmount: '31000.00',
+      currency: 'KHR',
+    };
+    const payments = {
+      getCitizenFeeEstimate: jest.fn().mockResolvedValue(feeEstimate),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      {} as never,
+      {} as never,
+      payments as never,
+    );
+
+    await expect(
+      controller.getFeeEstimate(actor(), APPLICATION_ID),
+    ).resolves.toEqual({ data: feeEstimate });
+    expect(payments.getCitizenFeeEstimate).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+  });
 });
 
 function actor(): AuthenticatedActor {

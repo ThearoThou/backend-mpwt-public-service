@@ -12,6 +12,8 @@ describe('application response mappers', () => {
       status: ApplicationStatus.DRAFT,
       currentCorrectionReason: null,
       currentRejectionReason: null,
+      preferredInspectionStationId: null,
+      preferredInspectionDate: null,
       submittedAt: null,
       reviewStartedAt: null,
       readyForInspectionAt: null,
@@ -30,6 +32,8 @@ describe('application response mappers', () => {
       expect.objectContaining({
         referenceNumber: null,
         currentRejectionReason: null,
+        preferredInspectionStationId: null,
+        preferredInspectionDate: null,
         submittedAt: null,
         status: ApplicationStatus.DRAFT,
       }),
@@ -71,6 +75,8 @@ describe('application response mappers', () => {
       cancelledByUserId: 'c',
       currentCorrectionReason: null,
       currentRejectionReason: 'The inspection result was rejected.',
+      preferredInspectionStationId: 'station-id',
+      preferredInspectionDate: '2026-08-12',
       reviewStartedAt: null,
       readyForInspectionAt: null,
       completedAt: null,
@@ -84,6 +90,8 @@ describe('application response mappers', () => {
     expect(mapped.currentRejectionReason).toBe(
       'The inspection result was rejected.',
     );
+    expect(mapped.preferredInspectionStationId).toBe('station-id');
+    expect(mapped.preferredInspectionDate).toBe('2026-08-12');
     expect(mapped).not.toHaveProperty('applicantSnapshot');
     expect(mapped).not.toHaveProperty('vehicleSnapshot');
     expect(mapped).not.toHaveProperty('cancelledByUserId');
@@ -103,6 +111,8 @@ describe('application response mappers', () => {
       cancelledByUserId: 'c',
       currentCorrectionReason: null,
       currentRejectionReason: null,
+      preferredInspectionStationId: null,
+      preferredInspectionDate: null,
       reviewStartedAt: null,
       readyForInspectionAt: null,
       completedAt: null,

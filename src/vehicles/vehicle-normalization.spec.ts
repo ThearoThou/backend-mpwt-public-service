@@ -6,7 +6,9 @@ import { validate } from 'class-validator';
 import {
   CreateVehicleRequestDto,
   ListAdminVehiclesQueryDto,
+  ListCitizenVehiclesQueryDto,
 } from './dto/vehicle-request.dtos';
+import { CAMBODIAN_CAPITAL_PROVINCES_KH } from './cambodian-capital-provinces';
 import {
   VehicleNormalizationError,
   normalizeVehicleIdentifier,
@@ -138,6 +140,45 @@ describe('vehicle normalization', () => {
 
     expect(await validate(input)).toHaveLength(0);
     expect(input.manufactureYear).toBe(2020);
+  });
+
+  it('validates and normalizes complete citizen plate lookup identities', async () => {
+    const unfiltered = plainToInstance(ListCitizenVehiclesQueryDto, {});
+    const province = CAMBODIAN_CAPITAL_PROVINCES_KH[0];
+    const provincial = plainToInstance(ListCitizenVehiclesQueryDto, {
+      plateCategory: VehiclePlateCategory.PROVINCE,
+      plateProvince: ` ${province} `,
+      plateNumber: ' 2ab-3146 ',
+    });
+    const personalized = plainToInstance(ListCitizenVehiclesQueryDto, {
+      plateCategory: VehiclePlateCategory.PERSONALIZED_CAMBODIA,
+      plateNumber: ' tq.aa.a1 ',
+    });
+
+    expect(await validate(unfiltered)).toHaveLength(0);
+    expect(await validate(provincial)).toHaveLength(0);
+    expect(provincial.plateProvince).toBe(province);
+    expect(provincial.plateNumber).toBe('2AB-3146');
+    expect(await validate(personalized)).toHaveLength(0);
+    expect(personalized.plateNumber).toBe('TQ.AA.A1');
+  });
+
+  it('rejects incomplete or invalid citizen plate lookup identities', async () => {
+    const incomplete = plainToInstance(ListCitizenVehiclesQueryDto, {
+      plateNumber: '2AB-3146',
+    });
+    const invalidProvince = plainToInstance(ListCitizenVehiclesQueryDto, {
+      plateCategory: VehiclePlateCategory.PROVINCE,
+      plateProvince: 'Unknown',
+      plateNumber: '2AB-3146',
+    });
+
+    expect(
+      (await validate(incomplete)).map((error) => error.property),
+    ).toContain('plateCategory');
+    expect(
+      (await validate(invalidProvince)).map((error) => error.property),
+    ).toContain('plateCategory');
   });
 });
 

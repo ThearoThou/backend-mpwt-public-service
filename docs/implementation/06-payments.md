@@ -19,6 +19,12 @@ admin can retry initialization explicitly.
 Initialization is idempotent: a renewal application has at most one Payment
 and one invoice. No payment status-history row is created by initialization.
 
+Citizens have read/download access to their owned payment, invoice, receipt,
+and inspection sheet only. There is no implemented citizen payment-method
+selection, card/QR/bank checkout, payment proof upload, or payment
+confirmation. `PAY_AT_STATION` is the current initialized method; payment
+confirmation, rejection, and reopening are ADMIN operations.
+
 ## Payment creation and amount snapshots
 
 The MVP creates a `PENDING`, `PAY_AT_STATION` payment in KHR. `BANK_QR` and

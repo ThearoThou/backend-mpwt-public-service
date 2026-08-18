@@ -136,7 +136,7 @@ scheduling workflow.
 | `GET /admin/users`                                       | ADMIN            | Paginated users; supported filters include role, status, phone, email, created date range, and allowlisted sort fields. |
 | `GET /admin/users/:id`                                   | ADMIN            | User detail.                                                                                                            |
 | `PATCH /admin/users/:id/status`                          | ADMIN            | `{ "status": "ACTIVE"                                                                                                   | "DISABLED" }`. |
-| `GET /vehicles`                                          | CITIZEN          | Paginated owned vehicles.                                                                                               |
+| `GET /vehicles`                                          | CITIZEN          | Paginated owned vehicles; optional exact `registrationNumber`, `chassisNumber`, `plateNumber`, `plateCategory`, and `plateProvince` filters remain scoped to the authenticated citizen. |
 | `POST /vehicles`                                         | CITIZEN          | Creates an owned vehicle using `CreateVehicleRequestDto`.                                                               |
 | `GET /vehicles/:vehicleId`                               | CITIZEN          | Owned vehicle detail.                                                                                                   |
 | `GET /admin/vehicles`                                    | ADMIN            | Paginated vehicle list with implemented filters.                                                                        |
@@ -158,14 +158,15 @@ maximum limit is 100. DTO-specific sort/filter allowlists apply.
 Citizen application responses contain:
 
 `id`, `referenceNumber`, `citizenId`, `vehicleId`, `status`,
-`currentCorrectionReason`, `currentRejectionReason`, `submittedAt`,
+`currentCorrectionReason`, `currentRejectionReason`,
+`preferredInspectionStationId`, `preferredInspectionDate`, `submittedAt`,
 `reviewStartedAt`, `readyForInspectionAt`, `completedAt`, `cancelledAt`,
 `cancellationReason`, `createdAt`, and `updatedAt`.
 
 `referenceNumber`, snapshots, and `submittedAt` are `null` while an application
-is a DRAFT. The current citizen response does not expose the stored scheduling
-preference, even though the preference-saving route returns the persisted
-entity for that operation.
+is a DRAFT. `preferredInspectionStationId` and the date-only
+`preferredInspectionDate` are nullable paired fields and are returned in the
+citizen response; capacity data is not returned.
 
 The exact `ApplicationStatus` values are:
 
@@ -186,6 +187,7 @@ The exact `ApplicationStatus` values are:
 | `POST /applications/:applicationId/submit`                         | —                                                       | DRAFT only. Validates documents/profile/vehicle/preference, creates snapshots/reference number, and moves to `SUBMITTED` without reserving. 201.                    |
 | `POST /applications/:applicationId/resubmit`                       | —                                                       | `CORRECTION_REQUIRED` only; validates current required documents and returns to `SUBMITTED`. 201.                                                                   |
 | `POST /applications/:applicationId/appointment-selection`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | `APPOINTMENT_SELECTION_REQUIRED` only. Atomically reserves, saves the new preference, creates an internal daily-capacity appointment, and moves to `APPROVED`. 201. |
+| `GET /applications/:applicationId/fee-estimate`                     | —                                                       | Owned DRAFT only. Read-only current estimate; does not create payment/invoice/appointment or reserve capacity. |
 | `POST /applications/:applicationId/cancel`                         | `{ "reason"?: "string" }`                               | Allowed only from DRAFT, SUBMITTED, CORRECTION_REQUIRED, or APPOINTMENT_SELECTION_REQUIRED. 201.                                                                    |
 | `GET /applications`                                                | pagination query                                        | Lists the caller's applications.                                                                                                                                    |
 | `GET /applications/:applicationId/status-history`                  | pagination query                                        | Lists the caller's immutable status history.                                                                                                                        |
@@ -195,6 +197,17 @@ Required `documentType` values are exactly
 `VEHICLE_REGISTRATION_CARD`, `PREVIOUS_INSPECTION_CERTIFICATE`, and
 `CITIZEN_ID_CARD`. `NATIONAL_ID` is rejected. Uploads accept PDF, JPG/JPEG, or
 PNG with matching MIME type, a non-zero file, and a maximum size of 5 MiB.
+In DRAFT, a second upload of the same type replaces the current version while
+retaining the old file/row in history and incrementing the version. In
+`CORRECTION_REQUIRED`, replacement remains limited to a current rejected
+document.
+
+The DRAFT fee-estimate response is:
+
+`inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`, `lateDays`, `lateFee`,
+`totalAmount`, and `currency`. It uses current active-category and vehicle
+expiry data with Phnom Penh date rules. It is not a persisted payment snapshot
+and may change before payment initialization.
 
 ### Admin application and document routes
 
@@ -279,6 +292,9 @@ category, expiry, or approved/scheduled source data blocks initialization.
 ### Citizen payment routes
 
 All routes require CITIZEN and enforce ownership of `:applicationId`.
+There is no citizen route for payment-method selection, online checkout, QR or
+card payment, payment proof upload, or confirmation; the current method is
+created as `PAY_AT_STATION` after approved scheduling.
 
 | Method and path                                              | Response / rule                                                               |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
@@ -286,6 +302,13 @@ All routes require CITIZEN and enforce ownership of `:applicationId`.
 | `GET /payments/applications/:applicationId/invoice`          | Streams the stored invoice as `application/pdf` when available.               |
 | `GET /payments/applications/:applicationId/receipt`          | Streams the stored receipt as `application/pdf` only when confirmed.          |
 | `GET /payments/applications/:applicationId/inspection-sheet` | Streams the stored inspection sheet as `application/pdf` only when confirmed. |
+
+The citizen payment JSON response includes payment status/reference, invoice and
+receipt numbers, `baseAmount`, expiry/late-day/late-fee/total/currency values,
+payment timestamps and rejection reason, plus invoice/receipt/inspection-sheet
+availability flags. It does not expose the stored separate inspection/service
+fee components. Before payment initialization, the owned application returns
+`PAYMENT_NOT_FOUND`.
 
 ### Admin payment routes
 

@@ -38,6 +38,16 @@ const PAYMENT_CURRENCY = 'KHR';
 const MAX_INVOICE_NUMBER_ATTEMPTS = 3;
 const MAX_RECEIPT_NUMBER_ATTEMPTS = 3;
 
+export interface CitizenFeeEstimateResponse {
+  inspectionFeeKhr: string;
+  serviceFeeKhr: string;
+  baseAmount: string;
+  lateDays: number;
+  lateFee: string;
+  totalAmount: string;
+  currency: string;
+}
+
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
@@ -354,6 +364,45 @@ export class PaymentsService {
     }
 
     return mapPayment(payment);
+  }
+
+  async getCitizenFeeEstimate(
+    citizenId: string,
+    applicationId: string,
+  ): Promise<CitizenFeeEstimateResponse> {
+    return this.dataSource.transaction(async (manager) => {
+      const application = await manager
+        .getRepository(RenewalApplication)
+        .findOne({ where: { id: applicationId } });
+      if (application === null) throw this.applicationNotFound();
+      if (application.citizenId !== citizenId) throw this.notOwned();
+      if (application.status !== ApplicationStatus.DRAFT) {
+        throw new DomainException(
+          ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+          HttpStatus.CONFLICT,
+          'Fee estimation is only available for draft applications',
+        );
+      }
+
+      const vehicle = await this.loadVehicle(manager, application.vehicleId);
+      const category = await this.loadActiveCategory(manager, vehicle);
+      const snapshot = await this.calculateSnapshot(
+        manager,
+        vehicle.inspectionExpiryDate,
+        category.inspectionFeeKhr,
+        category.serviceFeeKhr,
+      );
+
+      return {
+        inspectionFeeKhr: snapshot.inspectionFeeKhr,
+        serviceFeeKhr: snapshot.serviceFeeKhr,
+        baseAmount: snapshot.baseAmount,
+        lateDays: snapshot.lateDays,
+        lateFee: snapshot.lateFee,
+        totalAmount: snapshot.totalAmount,
+        currency: PAYMENT_CURRENCY,
+      };
+    });
   }
 
   async listAdminPayments(

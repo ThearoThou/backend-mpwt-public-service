@@ -35,6 +35,10 @@ import {
   RenewalApplicationStatusHistoryQueryDto,
 } from './dto/application-request.dtos';
 import { ApplicationsService } from './applications.service';
+import {
+  PaymentsService,
+  type CitizenFeeEstimateResponse,
+} from '../payments/payments.service';
 
 @Controller('applications')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -44,6 +48,7 @@ export class CitizenApplicationsController {
     private readonly applicationsService: ApplicationsService,
     private readonly applicationWorkflowService: ApplicationWorkflowService,
     private readonly schedulingPreferences: CitizenSchedulingPreferenceService,
+    private readonly payments: PaymentsService,
   ) {}
 
   @Post()
@@ -101,6 +106,16 @@ export class CitizenApplicationsController {
         id,
         input,
       ),
+    );
+  }
+  @Get(':applicationId/fee-estimate')
+  async getFeeEstimate(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+  ): Promise<ApiDataResponse<CitizenFeeEstimateResponse>> {
+    return createDataResponse(
+      await this.payments.getCitizenFeeEstimate(actor.userId, applicationId),
     );
   }
   @Post(':applicationId/cancel') async cancel(

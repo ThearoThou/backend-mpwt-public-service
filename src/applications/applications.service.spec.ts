@@ -27,7 +27,11 @@ describe('ApplicationsService', () => {
       { citizenId: CITIZEN_ID },
     );
     expect(fixture.applicationQuery.select).toHaveBeenCalledWith(
-      expect.arrayContaining(['application.currentRejectionReason']),
+      expect.arrayContaining([
+        'application.currentRejectionReason',
+        'application.preferredInspectionStationId',
+        'application.preferredInspectionDate',
+      ]),
     );
     expect(fixture.applicationQuery.orderBy).toHaveBeenCalledWith(
       'application.createdAt',
@@ -140,6 +144,8 @@ function application(citizenId: string) {
     status: ApplicationStatus.DRAFT,
     currentCorrectionReason: null,
     currentRejectionReason: null,
+    preferredInspectionStationId: null,
+    preferredInspectionDate: null,
     submittedAt: null,
     reviewStartedAt: null,
     readyForInspectionAt: null,
