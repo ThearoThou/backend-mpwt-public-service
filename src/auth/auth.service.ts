@@ -16,6 +16,7 @@ import {
   LoginRequestDto,
   PasswordResetConfirmRequestDto,
   PasswordResetRequestDto,
+  PasswordResetVerifyRequestDto,
   RegisterRequestDto,
   ResendVerificationRequestDto,
   VerifyAccountRequestDto,
@@ -317,6 +318,41 @@ export class AuthService {
     return createRegistrationResponse({
       verificationRequired: false,
       message: 'Password has been reset successfully.',
+    });
+  }
+
+  async verifyPasswordReset(
+    input: PasswordResetVerifyRequestDto,
+  ): Promise<RegistrationResponse> {
+    const identifier = this.normalizeIdentifier(input.identifier);
+    const now = new Date();
+    const outcome = await this.dataSource.transaction(async (manager) => {
+      const user = await this.usersService.findLockedUserByIdentifier(
+        identifier,
+        manager,
+      );
+
+      if (user === null) {
+        return { kind: 'invalid' } as const;
+      }
+
+      return this.verificationCodeService.validateLockedCode(
+        user.id,
+        identifier,
+        VerificationPurpose.RESET_PASSWORD,
+        input.code,
+        manager,
+        now,
+      );
+    });
+
+    if (outcome.kind !== 'valid') {
+      throw this.verificationOutcomeException(outcome);
+    }
+
+    return createRegistrationResponse({
+      verificationRequired: false,
+      message: 'Verification code is valid.',
     });
   }
 

@@ -19,6 +19,7 @@ import {
   LoginRequestDto,
   PasswordResetConfirmRequestDto,
   PasswordResetRequestDto,
+  PasswordResetVerifyRequestDto,
   RegisterRequestDto,
   ResendVerificationRequestDto,
   VerifyAccountRequestDto,
@@ -98,6 +99,16 @@ export class AuthController {
   ): Promise<ApiDataResponse<RegistrationResponse>> {
     return createDataResponse(
       await this.authService.confirmPasswordReset(input),
+    );
+  }
+
+  @Post('password-reset/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyPasswordReset(
+    @Body() input: PasswordResetVerifyRequestDto,
+  ): Promise<ApiDataResponse<RegistrationResponse>> {
+    return createDataResponse(
+      await this.authService.verifyPasswordReset(input),
     );
   }
 

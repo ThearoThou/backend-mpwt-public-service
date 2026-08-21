@@ -74,6 +74,32 @@ class RegistrationIdentifiersConstraint implements ValidatorConstraintInterface 
   }
 }
 
+@ValidatorConstraint({ name: 'isKhmerName', async: false })
+class KhmerNameConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return (
+      typeof value === 'string' &&
+      /[\u1780-\u17FF]/u.test(value) &&
+      !/[a-z]/i.test(value)
+    );
+  }
+
+  defaultMessage(): string {
+    return 'nameKh must contain Khmer characters and not English letters';
+  }
+}
+
+@ValidatorConstraint({ name: 'isEnglishName', async: false })
+class EnglishNameConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value === 'string' && /^[a-z][a-z .'-]*$/i.test(value);
+  }
+
+  defaultMessage(): string {
+    return 'nameEn must use English letters';
+  }
+}
+
 export function IsCambodianPhone(
   validationOptions?: ValidationOptions,
 ): PropertyDecorator {
@@ -96,4 +122,16 @@ export function HasValidRegistrationIdentifiers(
   validationOptions?: ValidationOptions,
 ): PropertyDecorator {
   return Validate(RegistrationIdentifiersConstraint, validationOptions);
+}
+
+export function IsKhmerName(
+  validationOptions?: ValidationOptions,
+): PropertyDecorator {
+  return Validate(KhmerNameConstraint, validationOptions);
+}
+
+export function IsEnglishName(
+  validationOptions?: ValidationOptions,
+): PropertyDecorator {
+  return Validate(EnglishNameConstraint, validationOptions);
 }

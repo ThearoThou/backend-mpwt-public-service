@@ -16,6 +16,8 @@ import {
 import {
   HasValidRegistrationIdentifiers,
   IsCambodianPhone,
+  IsEnglishName,
+  IsKhmerName,
   IsNormalizedEmail,
   IsSupportedIdentifier,
 } from '../identifier-normalization.validators';
@@ -39,12 +41,12 @@ function normalizeWhenValid(
 }
 
 export class RegisterRequestDto {
-  @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MaxLength(20)
   @Transform(normalizeWhenValid(normalizeCambodianPhone))
   @IsCambodianPhone()
-  phone?: string;
+  phone!: string;
 
   @IsOptional()
   @IsString()
@@ -68,11 +70,13 @@ export class RegisterRequestDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)
+  @IsKhmerName()
   nameKh!: string;
 
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)
+  @IsEnglishName()
   nameEn!: string;
 
   @IsOptional()
@@ -125,7 +129,7 @@ export class PasswordResetRequestDto {
   identifier!: string;
 }
 
-export class PasswordResetConfirmRequestDto {
+export class PasswordResetVerifyRequestDto {
   @IsString()
   @Transform(normalizeWhenValid(normalizeIdentifier))
   @IsSupportedIdentifier()
@@ -134,7 +138,9 @@ export class PasswordResetConfirmRequestDto {
   @IsString()
   @Matches(CODE_PATTERN, { message: 'code must be exactly six numeric digits' })
   code!: string;
+}
 
+export class PasswordResetConfirmRequestDto extends PasswordResetVerifyRequestDto {
   @IsString()
   @MinLength(8)
   @MaxLength(128)

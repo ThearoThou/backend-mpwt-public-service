@@ -82,7 +82,8 @@ describe('identifier normalization', () => {
       nameKh: 'ណាមខ្មែរ',
       nameEn: 'Citizen Name',
     });
-    const missingIdentifiers = plainToInstance(RegisterRequestDto, {
+    const missingPhone = plainToInstance(RegisterRequestDto, {
+      email: 'citizen@example.com',
       password: 'password1',
       nameKh: 'ណាមខ្មែរ',
       nameEn: 'Citizen Name',
@@ -97,8 +98,9 @@ describe('identifier normalization', () => {
 
     expect(validPhoneOnly.phone).toBe('+85512345678');
     expect(await validate(validPhoneOnly)).toHaveLength(0);
-    expect(await validate(missingIdentifiers)).toEqual(
+    expect(await validate(missingPhone)).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ property: 'phone' }),
         expect.objectContaining({ property: 'identifiersValidation' }),
       ]),
     );
@@ -106,6 +108,28 @@ describe('identifier normalization', () => {
       expect.arrayContaining([
         expect.objectContaining({ property: 'identifiersValidation' }),
       ]),
+    );
+  });
+
+  it('requires Khmer and English names to use their respective scripts', async () => {
+    const invalidKhmerName = plainToInstance(RegisterRequestDto, {
+      phone: '012 345 678',
+      password: 'password1',
+      nameKh: 'Citizen Name',
+      nameEn: 'Citizen Name',
+    });
+    const invalidEnglishName = plainToInstance(RegisterRequestDto, {
+      phone: '012 345 678',
+      password: 'password1',
+      nameKh: '\u1780\u1781',
+      nameEn: '\u1780\u1781',
+    });
+
+    await expect(validate(invalidKhmerName)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ property: 'nameKh' })]),
+    );
+    await expect(validate(invalidEnglishName)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ property: 'nameEn' })]),
     );
   });
 });

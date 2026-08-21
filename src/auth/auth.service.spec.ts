@@ -501,6 +501,33 @@ describe('AuthService', () => {
     expect(response).toMatchObject({ verificationRequired: false });
   });
 
+  it('verifies a reset code without changing the password or consuming the code', async () => {
+    const user = createUser();
+    const verificationCode = { id: 'reset-code' } as never;
+    users.findLockedUserByIdentifier.mockResolvedValue(user);
+    verificationCodes.validateLockedCode.mockResolvedValue({
+      kind: 'valid',
+      verificationCode,
+    });
+
+    const response = await service.verifyPasswordReset({
+      identifier: '+85512345678',
+      code: '012345',
+    });
+
+    expect(verificationCodes.validateLockedCode).toHaveBeenCalledWith(
+      USER_ID,
+      '+85512345678',
+      VerificationPurpose.RESET_PASSWORD,
+      '012345',
+      manager,
+      expect.any(Date),
+    );
+    expect(verificationCodes.consumeCode).not.toHaveBeenCalled();
+    expect(users.replacePassword).not.toHaveBeenCalled();
+    expect(response).toMatchObject({ verificationRequired: false });
+  });
+
   it('rotates the same active refresh session without extending its expiry', async () => {
     const user = createUser();
     const session = {

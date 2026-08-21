@@ -60,17 +60,12 @@ export function normalizeIdentifier(value: string): string {
 export function normalizeRegistrationIdentifiers(
   input: RegistrationIdentifiersInput,
 ): NormalizedRegistrationIdentifiers {
-  const phone =
-    input.phone === undefined ? null : normalizeCambodianPhone(input.phone);
+  const phone = normalizeCambodianPhone(
+    input.phone ?? fail('Phone number is required.'),
+  );
   const email = input.email === undefined ? null : normalizeEmail(input.email);
 
-  if (phone === null && email === null) {
-    throw new IdentifierNormalizationError(
-      'At least one phone or email identifier is required.',
-    );
-  }
-
-  if (phone !== null && email !== null) {
+  if (email !== null) {
     if (input.verificationIdentifier === undefined) {
       throw new IdentifierNormalizationError(
         'verificationIdentifier is required when both identifiers are supplied.',
@@ -93,8 +88,7 @@ export function normalizeRegistrationIdentifiers(
   return {
     phone,
     email,
-    verificationIdentifier:
-      phone ?? email ?? fail('A verification destination is required.'),
+    verificationIdentifier: phone,
   };
 }
 
