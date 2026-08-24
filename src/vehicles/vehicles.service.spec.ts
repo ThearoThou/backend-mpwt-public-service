@@ -269,6 +269,56 @@ describe('VehiclesService', () => {
     );
   });
 
+  it('combines chassis number and first registration date lookup filters', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      chassisNumber: ' ch-123 ',
+      firstRegistrationDate: '2020-01-01',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.chassisNumber = :chassisNumber',
+      { chassisNumber: 'CH-123' },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.firstRegistrationDate = :firstRegistrationDate',
+      { firstRegistrationDate: '2020-01-01' },
+    );
+  });
+
+  it('returns no result for a non-matching first registration date while retaining citizen ownership scoping', async () => {
+    const repository = createRepository();
+    const query = createListQuery([], 0);
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    const result = await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      firstRegistrationDate: '1999-01-01',
+    });
+
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.linkedCitizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
+    expect(query.andWhere).toHaveBeenCalledWith(
+      'vehicle.firstRegistrationDate = :firstRegistrationDate',
+      { firstRegistrationDate: '1999-01-01' },
+    );
+    expect(result.data).toEqual([]);
+  });
+
   it('looks up a citizen vehicle by complete provincial plate identity', async () => {
     const repository = createRepository();
     const query = createListQuery();

@@ -266,6 +266,12 @@ export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {
   @MaxLength(100)
   @Transform(normalizePlateProvinceValue)
   plateProvince?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(trimString)
+  @Validate(VehicleCalendarDateOnlyConstraint)
+  firstRegistrationDate?: string;
 }
 
 export class ListAdminVehiclesQueryDto extends VehiclePaginationQueryDto {

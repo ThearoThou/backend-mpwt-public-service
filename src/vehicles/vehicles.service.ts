@@ -118,6 +118,12 @@ export class VehiclesService {
       });
     }
 
+    if (input.firstRegistrationDate !== undefined) {
+      query.andWhere('vehicle.firstRegistrationDate = :firstRegistrationDate', {
+        firstRegistrationDate: input.firstRegistrationDate,
+      });
+    }
+
     return this.executeList(query, input);
   }
 

@@ -84,9 +84,13 @@ describe('vehicle normalization', () => {
       createdFrom: '2024-02-29',
       createdTo: '2026-08-04',
     });
+    const citizenQuery = plainToInstance(ListCitizenVehiclesQueryDto, {
+      firstRegistrationDate: '2024-02-29',
+    });
 
     expect(await validate(create)).toHaveLength(0);
     expect(await validate(query)).toHaveLength(0);
+    expect(await validate(citizenQuery)).toHaveLength(0);
   });
 
   it.each(['2026-02-30', '2025-13-01', '2025-00-10', '2026-08-04T00:00:00Z'])(
@@ -104,6 +108,9 @@ describe('vehicle normalization', () => {
         createdFrom: value,
         createdTo: value,
       });
+      const citizenQuery = plainToInstance(ListCitizenVehiclesQueryDto, {
+        firstRegistrationDate: value,
+      });
 
       expect((await validate(create)).map((error) => error.property)).toEqual(
         expect.arrayContaining([
@@ -115,6 +122,9 @@ describe('vehicle normalization', () => {
       expect((await validate(query)).map((error) => error.property)).toEqual(
         expect.arrayContaining(['createdFrom', 'createdTo']),
       );
+      expect(
+        (await validate(citizenQuery)).map((error) => error.property),
+      ).toContain('firstRegistrationDate');
     },
   );
 
