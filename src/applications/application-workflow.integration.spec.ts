@@ -30,7 +30,7 @@ describe('application workflow integration', () => {
     const workflow = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
       {
-        validateSelectableWithManager: jest.fn().mockResolvedValue({}),
+        validatePreferredDateWithManager: jest.fn().mockResolvedValue(),
       } as never,
     );
     const documents = new ApplicationDocumentsService(

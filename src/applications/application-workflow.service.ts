@@ -17,7 +17,7 @@ import {
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
-import { CitizenSchedulingAvailabilityService } from '../scheduling/citizen-scheduling-availability.service';
+import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
 
 const UNFINISHED_APPLICATION_STATUSES = [
   ApplicationStatus.DRAFT,
@@ -36,7 +36,7 @@ const UNFINISHED_APPLICATION_UNIQUE_INDEX =
 export class ApplicationWorkflowService {
   constructor(
     private readonly dataSource: DataSource,
-    private readonly availability: CitizenSchedulingAvailabilityService,
+    private readonly preferredScheduling: CitizenPreferredSchedulingService,
   ) {}
 
   async createDraft(
@@ -160,7 +160,7 @@ export class ApplicationWorkflowService {
         HttpStatus.CONFLICT,
         'A preferred inspection station and date are required before application submission',
       );
-    await this.availability.validateSelectableWithManager(
+    await this.preferredScheduling.validatePreferredDateWithManager(
       m,
       a.preferredInspectionStationId,
       a.preferredInspectionDate,

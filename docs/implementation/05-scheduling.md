@@ -4,8 +4,9 @@
 
 ### Phase 4 — daily-capacity scheduling
 
-Scheduling currently implements station/date selection and reservation for a
-renewal application. It is not a new citizen hourly-slot booking system. The
+Scheduling currently implements a preferred station/date selection followed by
+possible reservation for a renewal application. It is not a new citizen
+hourly-slot booking system. The
 public route details are in [`docs/api/02-rest-api-contracts.md`](../api/02-rest-api-contracts.md);
 this document describes the service and transaction design.
 
@@ -37,7 +38,24 @@ currently SCHEDULED appointment rows. A `COMPLETED` or `NO_SHOW` appointment
 does not release consumed capacity. There is no counter-reconciliation trigger
 or generic reconciliation job.
 
-A date is selectable only when all of these are true:
+### Normal-renewal preferred inspection date
+
+For normal renewal Step 2, a preferred date is not an appointment or a
+reservation. `PREFERRED_SCHEDULING_WINDOW_DAYS` defaults to 60 and defines the
+inclusive Cambodia-local range from tomorrow through today plus that many
+calendar days. A preferred date requires an active station, a Monday-Friday
+date in that range, and no explicit closed daily-capacity row for that
+station/date. It does not require a capacity row and a full-but-open date is
+still a valid preference.
+
+The 60-day normal-renewal preference window is an MVP/project assumption, not
+a confirmed official MPWT scheduling limit. It must be confirmed and configured
+for a production MPWT deployment. An explicit `is_closed=true` capacity row is
+an operational closure override; it is not an official holiday calendar.
+
+### Confirmed appointment date
+
+A date is reservable only when all of these are true:
 
 - the station is active;
 - capacity date is after Cambodia local today;
@@ -54,6 +72,7 @@ that counter directly.
 | Component                               | Current responsibility                                                                                                 |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `CitizenSchedulingAvailabilityService`  | Lists active stations, lists selectable dates, and validates a selection using active/future/open/non-full predicates. |
+| `CitizenPreferredSchedulingService`     | Generates and validates normal-renewal preferred weekdays within the configured window, excluding explicit closures.     |
 | `InspectionStationDailyCapacityService` | Admin daily-capacity list/get/create/update/close/reopen work and the internal atomic reservation update.              |
 | `CitizenSchedulingPreferenceService`    | Saves a DRAFT preference and owns citizen recovery reservation from `APPOINTMENT_SELECTION_REQUIRED`.                  |
 | `ApplicationWorkflowService`            | Requires and revalidates a DRAFT preference during submission without reserving it.                                    |
@@ -68,27 +87,27 @@ in [Applications](04-applications.md).
 ## Preference and availability flow
 
 A citizen may save `{ stationId, capacityDate }` only while their application
-is `DRAFT`. The station/date DTO requires UUID v4 and a date-only
-`YYYY-MM-DD` value. Saving the preference validates selectability and writes
-the paired application fields, but creates no appointment and changes no
-counter.
+is `DRAFT`. The station/date DTO requires UUID v4 and a date-only `YYYY-MM-DD`
+value. Saving validates the normal-renewal preferred-date rule and writes the
+paired application fields, but creates no appointment, changes no counter, and
+does not guarantee the requested date.
 
 Submission requires those paired preference fields and revalidates them inside
 the application transaction. Submission still does not reserve capacity. This
 keeps a selected date from being treated as a booking before review succeeds.
 
-The citizen discovery service returns active stations sorted by code/ID and
-returns selectable station dates sorted ascending. A station that is absent or
-inactive is not selectable.
+The citizen discovery service returns active stations sorted by code/ID. A
+station that is absent or inactive is not selectable.
 
 `GET /stations` returns only active station `id`, `code`, `nameKh`, `nameEn`,
 `province`, `address`, and nullable `phone` fields. It does not expose station
-activity flags or capacity data. `GET /stations/:stationId/available-dates`
-returns only `{ stationId, capacityDate }` rows; it intentionally does not
-expose remaining capacity. `capacityDate` is always a Cambodia-local, date-only
-`YYYY-MM-DD` value, never a UTC timestamp. Citizens must select a returned
-date, although submission revalidates it because a preference does not reserve
-capacity.
+activity flags or capacity data. `GET /stations/:stationId/preferred-dates`
+returns generated normal-renewal preference dates as `{ stationId,
+capacityDate }` without capacity counts. `GET /stations/:stationId/available-dates`
+continues to return only capacity-reservable dates for appointment flows.
+`capacityDate` is always a Cambodia-local, date-only `YYYY-MM-DD` value, never
+a UTC timestamp. Submission revalidates the saved preference because it is not
+a reservation.
 
 ## Reservation transaction and concurrency
 

@@ -183,7 +183,7 @@ The exact `ApplicationStatus` values are:
 | `GET /applications/:applicationId/documents`                       | —                                                       | Lists current owned documents.                                                                                                                                      |
 | `GET /applications/:applicationId/documents/:documentType/history` | page query                                              | Lists owned document-version history.                                                                                                                               |
 | `GET /applications/:applicationId/documents/:documentId/download`  | —                                                       | Streams an owned document; this is a file response, not the JSON envelope.                                                                                          |
-| `POST /applications/:applicationId/scheduling-preference`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | DRAFT only. Validates availability, saves preference, and makes no reservation. 201.                                                                                |
+| `POST /applications/:applicationId/scheduling-preference`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | DRAFT only. Validates a preferred weekday/date within the configured window, saves preference, and makes no reservation. 201.                                       |
 | `POST /applications/:applicationId/submit`                         | —                                                       | DRAFT only. Validates documents/profile/vehicle/preference, creates snapshots/reference number, and moves to `SUBMITTED` without reserving. 201.                    |
 | `POST /applications/:applicationId/resubmit`                       | —                                                       | `CORRECTION_REQUIRED` only; validates current required documents and returns to `SUBMITTED`. 201.                                                                   |
 | `POST /applications/:applicationId/appointment-selection`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | `APPOINTMENT_SELECTION_REQUIRED` only. Atomically reserves, saves the new preference, creates an internal daily-capacity appointment, and moves to `APPROVED`. 201. |
@@ -235,10 +235,14 @@ not a status-only operation.
 | Method and path                            | Role    | Response data                                                                                                                |
 | ------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `GET /stations`                            | CITIZEN | Active stations only, sorted by code then ID. Each item is `id`, `code`, `nameKh`, `nameEn`, `province`, `address`, `phone`. |
+| `GET /stations/:stationId/preferred-dates` | CITIZEN | Generated normal-renewal `{ stationId, capacityDate }[]`: weekdays from tomorrow through the inclusive configured window, excluding explicit station closures.      |
 | `GET /stations/:stationId/available-dates` | CITIZEN | `{ stationId, capacityDate }[]`, sorted ascending. The station must be active.                                               |
 
 A date appears in availability only if it is later than Cambodia local today,
 the capacity row is open, its station is active, and it has remaining capacity.
+Preferred dates are not appointments: they do not require capacity and may be
+full-but-open. The default 60-day preferred-date window is an MVP/project
+assumption, not a confirmed official MPWT scheduling limit.
 
 ### Admin daily-capacity routes
 

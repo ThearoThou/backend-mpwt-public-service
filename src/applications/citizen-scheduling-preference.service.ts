@@ -4,6 +4,7 @@ import { DataSource, type EntityManager } from 'typeorm';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { CitizenSchedulingAvailabilityService } from '../scheduling/citizen-scheduling-availability.service';
+import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStationDailyCapacityService } from '../scheduling/inspection-station-daily-capacity.service';
 import { Appointment } from '../scheduling/entities/appointment.entity';
@@ -25,6 +26,7 @@ export class CitizenSchedulingPreferenceService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly availability: CitizenSchedulingAvailabilityService,
+    private readonly preferredScheduling: CitizenPreferredSchedulingService,
     private readonly dailyCapacities: InspectionStationDailyCapacityService,
     private readonly payments: PaymentsService,
   ) {}
@@ -37,7 +39,7 @@ export class CitizenSchedulingPreferenceService {
     return this.dataSource.transaction(async (manager) => {
       const application = await this.locked(manager, citizenId, applicationId);
       this.requireStatus(application, ApplicationStatus.DRAFT);
-      await this.availability.validateSelectableWithManager(
+      await this.preferredScheduling.validatePreferredDateWithManager(
         manager,
         input.stationId,
         input.capacityDate,

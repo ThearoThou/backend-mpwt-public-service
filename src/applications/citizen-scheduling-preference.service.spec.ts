@@ -5,6 +5,7 @@ import type { DataSource } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { CitizenSchedulingAvailabilityService } from '../scheduling/citizen-scheduling-availability.service';
+import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStationDailyCapacityService } from '../scheduling/inspection-station-daily-capacity.service';
 import { Appointment } from '../scheduling/entities/appointment.entity';
@@ -21,7 +22,7 @@ const STATION_ID = '44444444-4444-4444-8444-444444444444';
 const DATE = '2026-08-12';
 
 describe('CitizenSchedulingPreferenceService', () => {
-  it('updates both DRAFT preference fields together after availability validation', async () => {
+  it('updates both DRAFT preference fields together after preferred-date validation', async () => {
     const fixture = createFixture();
 
     await expect(
@@ -32,7 +33,7 @@ describe('CitizenSchedulingPreferenceService', () => {
       ),
     ).resolves.toBe(fixture.application);
     expect(
-      fixture.availability.validateSelectableWithManager,
+      fixture.preferredScheduling.validatePreferredDateWithManager,
     ).toHaveBeenCalledWith(fixture.manager, STATION_ID, DATE);
     expect(fixture.application).toMatchObject({
       preferredInspectionStationId: STATION_ID,
@@ -75,7 +76,7 @@ describe('CitizenSchedulingPreferenceService', () => {
         status: HttpStatus.CONFLICT,
       });
       expect(
-        fixture.availability.validateSelectableWithManager,
+        fixture.preferredScheduling.validatePreferredDateWithManager,
       ).not.toHaveBeenCalled();
       expect(fixture.applications.save).not.toHaveBeenCalled();
     },
@@ -83,7 +84,7 @@ describe('CitizenSchedulingPreferenceService', () => {
 
   it('rejects unavailable DRAFT choices without a preference write or reservation', async () => {
     const fixture = createFixture();
-    fixture.availability.validateSelectableWithManager.mockRejectedValue(
+    fixture.preferredScheduling.validatePreferredDateWithManager.mockRejectedValue(
       new Error('not selectable'),
     );
 
@@ -284,6 +285,9 @@ function createFixture(overrides: Partial<RenewalApplication> = {}) {
   const availability = {
     validateSelectableWithManager: jest.fn().mockResolvedValue(capacity()),
   };
+  const preferredScheduling = {
+    validatePreferredDateWithManager: jest.fn().mockResolvedValue(undefined),
+  };
   const dailyCapacities = {
     reserveDailyCapacityWithManager: jest.fn().mockResolvedValue({
       id: dailyCapacity.id,
@@ -297,6 +301,7 @@ function createFixture(overrides: Partial<RenewalApplication> = {}) {
     service: new CitizenSchedulingPreferenceService(
       dataSource as unknown as DataSource,
       availability as unknown as CitizenSchedulingAvailabilityService,
+      preferredScheduling as unknown as CitizenPreferredSchedulingService,
       dailyCapacities as unknown as InspectionStationDailyCapacityService,
       payments as never,
     ),
@@ -304,6 +309,7 @@ function createFixture(overrides: Partial<RenewalApplication> = {}) {
     applications,
     manager,
     availability,
+    preferredScheduling,
     dailyCapacities,
     appointments,
     history,

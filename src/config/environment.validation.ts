@@ -19,6 +19,7 @@ export interface EnvironmentVariables {
   REFRESH_COOKIE_SAME_SITE: 'lax' | 'strict';
   VERIFICATION_CODE_TTL_SECONDS: number;
   VERIFICATION_CODE_MAX_ATTEMPTS: number;
+  PREFERRED_SCHEDULING_WINDOW_DAYS: number;
   EXPOSE_DEVELOPMENT_VERIFICATION_CODE: boolean;
   ADMIN_BOOTSTRAP_ENABLED: boolean;
   ADMIN_BOOTSTRAP_PHONE: string | undefined;
@@ -304,12 +305,17 @@ export function validateEnvironment(
     VERIFICATION_CODE_TTL_SECONDS: positiveInteger(
       environment,
       'VERIFICATION_CODE_TTL_SECONDS',
-      300,
+      60,
     ),
     VERIFICATION_CODE_MAX_ATTEMPTS: positiveInteger(
       environment,
       'VERIFICATION_CODE_MAX_ATTEMPTS',
       5,
+    ),
+    PREFERRED_SCHEDULING_WINDOW_DAYS: positiveInteger(
+      environment,
+      'PREFERRED_SCHEDULING_WINDOW_DAYS',
+      60,
     ),
     EXPOSE_DEVELOPMENT_VERIFICATION_CODE: boolean(
       environment,

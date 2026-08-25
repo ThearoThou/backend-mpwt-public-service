@@ -22,11 +22,30 @@ describe('environment validation', () => {
       REFRESH_COOKIE_NAME: 'mpwt_refresh',
       REFRESH_COOKIE_SECURE: false,
       REFRESH_COOKIE_SAME_SITE: 'lax',
-      VERIFICATION_CODE_TTL_SECONDS: 300,
+      VERIFICATION_CODE_TTL_SECONDS: 60,
       VERIFICATION_CODE_MAX_ATTEMPTS: 5,
+      PREFERRED_SCHEDULING_WINDOW_DAYS: 60,
       EXPOSE_DEVELOPMENT_VERIFICATION_CODE: false,
       ADMIN_BOOTSTRAP_ENABLED: false,
     });
+  });
+
+  it('validates the configurable preferred scheduling window', () => {
+    expect(
+      validateEnvironment({
+        ...validEnvironment,
+        PREFERRED_SCHEDULING_WINDOW_DAYS: '45',
+      }),
+    ).toMatchObject({ PREFERRED_SCHEDULING_WINDOW_DAYS: 45 });
+
+    for (const invalidValue of ['0', '-1', '60.5']) {
+      expect(() =>
+        validateEnvironment({
+          ...validEnvironment,
+          PREFERRED_SCHEDULING_WINDOW_DAYS: invalidValue,
+        }),
+      ).toThrow('PREFERRED_SCHEDULING_WINDOW_DAYS');
+    }
   });
 
   it('requires a frontend origin for credentialed CORS', () => {

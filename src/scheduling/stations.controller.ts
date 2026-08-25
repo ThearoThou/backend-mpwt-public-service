@@ -11,6 +11,7 @@ import { RolesGuard } from '../common/auth/roles.guard';
 import { createDataResponse } from '../common/http/api-response';
 import { UserRole } from '../users/enums/user-role.enum';
 import { CitizenSchedulingAvailabilityService } from './citizen-scheduling-availability.service';
+import { CitizenPreferredSchedulingService } from './citizen-preferred-scheduling.service';
 
 @Controller('stations')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -18,6 +19,7 @@ import { CitizenSchedulingAvailabilityService } from './citizen-scheduling-avail
 export class StationsController {
   constructor(
     private readonly availability: CitizenSchedulingAvailabilityService,
+    private readonly preferredScheduling: CitizenPreferredSchedulingService,
   ) {}
   @Get()
   async listActiveStations() {
@@ -42,6 +44,14 @@ export class StationsController {
   ) {
     return createDataResponse(
       await this.availability.listSelectableDates(stationId),
+    );
+  }
+  @Get(':stationId/preferred-dates')
+  async listPreferredDates(
+    @Param('stationId', new ParseUUIDPipe({ version: '4' })) stationId: string,
+  ) {
+    return createDataResponse(
+      await this.preferredScheduling.listPreferredDates(stationId),
     );
   }
 }

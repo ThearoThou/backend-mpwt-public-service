@@ -13,7 +13,7 @@ review operations, and Phase 4 daily station/date capacity scheduling.
 The Phase 4 scheduling path is:
 
 1. a citizen creates a DRAFT, uploads required documents, and saves a preferred
-   active station and future selectable date;
+   active station and preferred weekday/date within the configured window;
 2. submission validates the preference but does not reserve it;
 3. admin review-pass atomically reserves the preferred capacity and approves,
    or moves the application to `APPOINTMENT_SELECTION_REQUIRED` without a

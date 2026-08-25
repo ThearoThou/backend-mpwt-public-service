@@ -139,8 +139,9 @@ effects when the state is not eligible.
 
 The application domain owns DRAFT creation, document/submission prerequisites,
 regular review transitions, status history, and application ownership. It also
-requires a DRAFT preference before submission and revalidates it without
-reserving capacity.
+requires a DRAFT preferred station/date before submission and revalidates the
+normal-renewal preference rule without reserving capacity. The preferred-date
+window is an MVP project assumption; see [Scheduling](05-scheduling.md).
 
 The review-pass operation is a cross-domain transaction: an available
 preference reserves daily capacity, creates a SCHEDULED daily-capacity

@@ -11,6 +11,7 @@ import { AdminSchedulingController } from './admin-scheduling.controller';
 import { AppointmentsController } from './appointments.controller';
 import { InspectionStationDailyCapacityService } from './inspection-station-daily-capacity.service';
 import { CitizenSchedulingAvailabilityService } from './citizen-scheduling-availability.service';
+import { CitizenPreferredSchedulingService } from './citizen-preferred-scheduling.service';
 import { SchedulingService } from './scheduling.service';
 import { StationsController } from './stations.controller';
 
@@ -34,9 +35,11 @@ import { StationsController } from './stations.controller';
     SchedulingService,
     InspectionStationDailyCapacityService,
     CitizenSchedulingAvailabilityService,
+    CitizenPreferredSchedulingService,
   ],
   exports: [
     CitizenSchedulingAvailabilityService,
+    CitizenPreferredSchedulingService,
     InspectionStationDailyCapacityService,
   ],
 })
