@@ -213,6 +213,35 @@ submission without reservation, start-review, successful review-pass, repeated
 review-pass rejection, closed-capacity fallback, citizen recovery selection,
 and closure without release of an existing reservation.
 
+## Local development Step 2 fixtures
+
+`npm run seed:local-inspection-stations` is an opt-in local-development seed.
+It requires `NODE_ENV=development` and
+`ALLOW_LOCAL_STATION_CAPACITY_SEED=true`; it is never run by application
+startup or migrations. The script uses the validated data source, writes inside
+one transaction, prints the target database/host, and treats an existing
+station/date pair with different data as a conflict rather than updating it.
+For the six exact known legacy fixture rows only, it can migrate the former
+`DEV-PP-*` code to its matching `PP-*` code in place; any conflicting or
+unexpected station data aborts without a write. A code-migration run skips all
+capacity writes for the migrated station, so existing capacity data remains
+unchanged.
+
+The six station location descriptors and Khmer wording are taken from MPWT's
+[Technical Inspection page](https://www.mpwt.gov.kh/en/public-services/technical-inspection).
+The `PP-RUSSEY-KEO`, `PP-NR6A`, `PP-MONG-RETHY`, `PP-CHAMKAR-DOUNG`,
+`PP-VEAL-SBOV`, and `PP-KAMBOL` codes are internal project fixtures, not
+confirmed official MPWT station codes. The source lists the
+general support hotline (1275), but no station-specific phone numbers; fixture
+station `phone` values are therefore `null`.
+
+Daily-capacity totals, reserved counts, and the simulated closed date are
+development test data only. The seed selects future Cambodia-local weekdays at
+runtime, leaves intervening dates unconfigured, and does not introduce a
+weekend rule or an official holiday calendar. The preferred-date endpoint
+generates its own weekday candidates and treats only `is_closed=true` as an
+explicit closure override; the capacity endpoint remains reservable-only.
+
 ## Not implemented
 
 There is no scheduling implementation for appointment retrieval, cancellation,
