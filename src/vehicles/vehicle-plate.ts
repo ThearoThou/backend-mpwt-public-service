@@ -1,8 +1,12 @@
 import { isCambodianCapitalProvinceKh } from './cambodian-capital-provinces';
 import { VehiclePlateCategory } from './enums/vehicle-plate-category.enum';
 
+export const MAX_VEHICLE_PLATE_NUMBER_LENGTH = 8;
+
 const PROVINCE_PLATE_PATTERN = /^[0-9][A-Z]{1,2}-[0-9]{4}$/;
-const PERSONALIZED_CAMBODIA_PLATE_PATTERN = /^(?=.*[A-Z0-9])[A-Z0-9.]{1,8}$/;
+const PERSONALIZED_CAMBODIA_PLATE_PATTERN = new RegExp(
+  `^(?=.*[A-Z0-9])[A-Z0-9.]{1,${MAX_VEHICLE_PLATE_NUMBER_LENGTH}}$`,
+);
 
 export function normalizePlateNumber(value: string): string {
   if (typeof value !== 'string') {

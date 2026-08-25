@@ -91,6 +91,28 @@ describe('ApplicationWorkflowService', () => {
     });
   });
 
+  it('rejects a vehicle with incomplete inspection classification', async () => {
+    const fixture = createFixture();
+    fixture.vehicles.findOne.mockResolvedValue({
+      ...vehicle(CITIZEN_ID),
+      vehicleClass: null,
+      inspectionCategoryId: null,
+      classificationVerifiedAt: null,
+      classificationVerifiedBy: null,
+    });
+
+    await expect(
+      new ApplicationWorkflowService(
+        fixture.dataSource as unknown as DataSource,
+        availabilityStub() as never,
+      ).createDraft(CITIZEN_ID, VEHICLE_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.VEHICLE_CLASSIFICATION_INCOMPLETE,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.applications.create).not.toHaveBeenCalled();
+  });
+
   it('rejects when an unfinished application already exists', async () => {
     const fixture = createFixture();
     fixture.applications.existsBy.mockResolvedValue(true);
@@ -955,5 +977,12 @@ function createFixture() {
 }
 
 function vehicle(linkedCitizenId: string) {
-  return { id: VEHICLE_ID, linkedCitizenId };
+  return {
+    id: VEHICLE_ID,
+    linkedCitizenId,
+    vehicleClass: 'LIGHT',
+    inspectionCategoryId: '44444444-4444-4444-8444-444444444444',
+    classificationVerifiedAt: new Date('2026-08-01T00:00:00.000Z'),
+    classificationVerifiedBy: '55555555-5555-4555-8555-555555555555',
+  };
 }

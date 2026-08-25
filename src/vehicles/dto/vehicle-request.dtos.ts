@@ -27,6 +27,7 @@ import { isCalendarDateOnly } from '../vehicle-date';
 import { VehiclePlateCategory } from '../enums/vehicle-plate-category.enum';
 import {
   isValidVehiclePlate,
+  MAX_VEHICLE_PLATE_NUMBER_LENGTH,
   normalizePlateNumber,
   normalizePlateProvince,
 } from '../vehicle-plate';
@@ -142,7 +143,7 @@ export class CreateVehicleRequestDto {
   @Transform(canonicalizeVehicleIdentifierValue)
   registrationNumber!: string;
 
-  @MaxLength(30)
+  @MaxLength(MAX_VEHICLE_PLATE_NUMBER_LENGTH)
   @IsString()
   @Transform(normalizePlateNumberValue)
   @Validate(VehiclePlateConstraint)
@@ -254,7 +255,7 @@ export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
-  @MaxLength(30)
+  @MaxLength(MAX_VEHICLE_PLATE_NUMBER_LENGTH)
   @Transform(normalizePlateNumberValue)
   plateNumber?: string;
 
@@ -296,7 +297,7 @@ export class ListAdminVehiclesQueryDto extends VehiclePaginationQueryDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
-  @MaxLength(30)
+  @MaxLength(MAX_VEHICLE_PLATE_NUMBER_LENGTH)
   @Transform(canonicalizeVehicleIdentifierValue)
   plateNumber?: string;
 

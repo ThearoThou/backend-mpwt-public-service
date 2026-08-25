@@ -348,6 +348,14 @@ export class ApplicationWorkflowService {
       );
     }
 
+    if (!this.hasCompleteVehicleClassification(vehicle)) {
+      throw new DomainException(
+        ApiErrorCode.VEHICLE_CLASSIFICATION_INCOMPLETE,
+        HttpStatus.CONFLICT,
+        'Vehicle inspection classification is incomplete',
+      );
+    }
+
     const applications = manager.getRepository(RenewalApplication);
     if (
       await applications.existsBy({
@@ -406,6 +414,15 @@ export class ApplicationWorkflowService {
       ApiErrorCode.UNFINISHED_APPLICATION_ALREADY_EXISTS,
       HttpStatus.CONFLICT,
       'An unfinished renewal application already exists for this vehicle',
+    );
+  }
+
+  private hasCompleteVehicleClassification(vehicle: Vehicle): boolean {
+    return (
+      vehicle.vehicleClass !== null &&
+      vehicle.inspectionCategoryId !== null &&
+      vehicle.classificationVerifiedAt !== null &&
+      vehicle.classificationVerifiedBy !== null
     );
   }
 }

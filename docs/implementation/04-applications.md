@@ -16,8 +16,10 @@ The route contract is maintained separately in
 ## Application foundation
 
 Migration 7 introduced persisted `DRAFT` applications. A citizen creates one
-for a vehicle only when that vehicle exists and is linked to the citizen. The
-creation transaction writes the application and an initial immutable
+for a vehicle only when that vehicle exists, is linked to the citizen, and has
+a complete verified inspection classification. Draft creation does not infer
+classification from `vehicleType`; incomplete classification is rejected before
+any application or status-history record is written. The creation transaction writes the application and an initial immutable
 `null → DRAFT` status-history row.
 
 The partial unique index `uq_unfinished_application_per_vehicle` prevents a

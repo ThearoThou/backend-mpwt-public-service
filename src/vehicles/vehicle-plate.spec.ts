@@ -7,7 +7,10 @@ import {
   CAMBODIAN_CAPITAL_PROVINCES_KH,
   CAMBODIAN_PLATE_DISPLAY_LABEL_KH,
 } from './cambodian-capital-provinces';
-import { CreateVehicleRequestDto } from './dto/vehicle-request.dtos';
+import {
+  CreateVehicleRequestDto,
+  ListAdminVehiclesQueryDto,
+} from './dto/vehicle-request.dtos';
 import { VehiclePlateCategory } from './enums/vehicle-plate-category.enum';
 import { mapVehicle } from './vehicle-response.mapper';
 
@@ -126,6 +129,16 @@ describe('Cambodian civilian vehicle plates', () => {
         plateProvince: 'ភ្នំពេញ',
       }),
     ).toContain('plateNumber');
+  });
+
+  it('limits administrative vehicle plate filters to eight characters', async () => {
+    const input = plainToInstance(ListAdminVehiclesQueryDto, {
+      plateNumber: '123456789',
+    });
+
+    expect((await validate(input)).map((error) => error.property)).toContain(
+      'plateNumber',
+    );
   });
 });
 

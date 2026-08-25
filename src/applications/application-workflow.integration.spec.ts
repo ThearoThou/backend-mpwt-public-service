@@ -9,6 +9,7 @@ import { FilesService } from '../files/files.service';
 import { CitizenProfile } from '../users/entities/citizen-profile.entity';
 import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { VehicleClass } from '../vehicles/enums/vehicle-class.enum';
 import { AdminApplicationReviewService } from './admin-application-review.service';
 import { ApplicationDocumentsService } from './application-documents.service';
 import { ApplicationWorkflowService } from './application-workflow.service';
@@ -80,8 +81,8 @@ describe('application workflow integration', () => {
     expect(vehicleSnapshot).toMatchObject({
       vehicleId: VEHICLE_ID,
       plateNumber: '2A-3146',
-      vehicleClass: null,
-      inspectionCategoryId: null,
+      vehicleClass: VehicleClass.LIGHT,
+      inspectionCategoryId: 'category-id',
     });
 
     await review.startReview(ADMIN_ID, application.id);
@@ -297,8 +298,10 @@ function createFixture() {
       plateProvince: 'Phnom Penh',
       plateType: 'PRIVATE',
       vehicleType: 'SUV',
-      vehicleClass: null,
-      inspectionCategoryId: null,
+      vehicleClass: VehicleClass.LIGHT,
+      inspectionCategoryId: 'category-id',
+      classificationVerifiedAt: new Date('2026-08-01T00:00:00.000Z'),
+      classificationVerifiedBy: ADMIN_ID,
       make: 'Toyota',
       model: 'RAV4',
       manufactureYear: 2020,

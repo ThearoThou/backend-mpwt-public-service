@@ -99,6 +99,22 @@ null previous class/category; subsequent records preserve the prior pair.
 Admin history reads are ordered by `(createdAt, id)` descending and expose the
 stored classification history through an explicit mapper.
 
+## Vehicle Inspection Renewal classification requirement
+
+The Vehicle Inspection Renewal Service operates only on existing vehicles that
+have already been classified. `vehicleType` and `vehicleClass` are separate
+data: vehicle type is descriptive, while the inspection class and
+`inspectionCategoryId` are authoritative classification data. An eligible
+renewal vehicle must have a complete, verified classification (`vehicleClass`,
+`inspectionCategoryId`, `classificationVerifiedAt`, and
+`classificationVerifiedBy`).
+
+Step Zero reads this existing data and blocks draft creation when it is
+incomplete. The renewal flow does not derive or modify a class from vehicle
+type, does not choose a fallback category, and does not allow a citizen to
+select an inspection class or category. Automatic vehicle-type-to-class
+mapping is outside the renewal-service scope.
+
 ## Service and API boundary
 
 `VehiclesController` handles citizen create/list/detail. `AdminVehiclesController`
