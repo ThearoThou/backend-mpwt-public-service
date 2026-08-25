@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseEnumPipe,
   ParseUUIDPipe,
@@ -68,6 +71,18 @@ export class ApplicationDocumentsController {
     return createDataResponse(
       await this.documentsService.listCurrent(actor.userId, applicationId),
     );
+  }
+
+  @Delete(':applicationId/documents/:documentId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async delete(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+    @Param('documentId', new ParseUUIDPipe({ version: '4' }))
+    documentId: string,
+  ): Promise<void> {
+    await this.documentsService.delete(actor.userId, applicationId, documentId);
   }
 
   @Get(':applicationId/documents/:documentType/history')

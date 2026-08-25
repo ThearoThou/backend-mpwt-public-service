@@ -14,6 +14,7 @@ describe('ApplicationDocumentsController', () => {
   it('forwards citizen-scoped upload and query arguments', async () => {
     const service = {
       upload: jest.fn().mockResolvedValue({}),
+      delete: jest.fn(),
       listCurrent: jest.fn().mockResolvedValue([]),
       listHistory: jest.fn().mockResolvedValue({ data: [], meta: {} }),
       download: jest.fn().mockResolvedValue({
@@ -35,6 +36,7 @@ describe('ApplicationDocumentsController', () => {
       file,
     );
     await controller.listCurrent(actor, applicationId);
+    await controller.delete(actor, applicationId, documentId);
     await controller.history(
       actor,
       applicationId,
@@ -53,6 +55,11 @@ describe('ApplicationDocumentsController', () => {
     expect(service.listCurrent).toHaveBeenCalledWith(
       actor.userId,
       applicationId,
+    );
+    expect(service.delete).toHaveBeenCalledWith(
+      actor.userId,
+      applicationId,
+      documentId,
     );
     expect(service.listHistory).toHaveBeenCalledWith(
       actor.userId,

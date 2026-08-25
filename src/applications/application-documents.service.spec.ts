@@ -218,6 +218,44 @@ describe('ApplicationDocumentsService upload preflight', () => {
     expect(fixture.files.saveApplicationDocument).toHaveBeenCalledTimes(1);
   });
 
+  it('deletes only a current draft document and removes its stored file', async () => {
+    const fixture = draftReplacementFixture();
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+    const current = fixture.documents.find(
+      (document) => document.documentType === DocumentType.CITIZEN_ID_CARD,
+    );
+    expect(current).toBeDefined();
+
+    await fixture.service.delete(citizenId, applicationId, current!.id);
+
+    expect(fixture.documents).not.toContainEqual(current);
+    expect(fixture.files.deleteIfExists).toHaveBeenCalledWith('new-key');
+  });
+
+  it.each([ApplicationStatus.CORRECTION_REQUIRED, ApplicationStatus.SUBMITTED])(
+    'does not allow deleting a document when the application is %s',
+    async (status) => {
+      const fixture = draftReplacementFixture();
+      fixture.application.status = status;
+
+      await expect(
+        fixture.service.delete(
+          citizenId,
+          applicationId,
+          'registration-document',
+        ),
+      ).rejects.toMatchObject({
+        code: 'APPLICATION_DOCUMENT_DELETE_NOT_ALLOWED',
+      });
+      expect(fixture.files.deleteIfExists).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     'uq_application_documents_application_document_type_version',
     'uq_current_document_per_type',
@@ -417,10 +455,24 @@ function draftReplacementFixture() {
   let nextDocumentId = 1;
   const applications = { findOne: jest.fn().mockResolvedValue(application) };
   const documentRepository = {
-    findOne: jest.fn(({ where }: { where: Partial<StoredDocument> }) =>
-      Promise.resolve(
-        documents.find((document) => matches(document, where)) ?? null,
-      ),
+    findOne: jest.fn(
+      ({
+        where,
+        order,
+      }: {
+        where: Partial<StoredDocument>;
+        order?: { versionNumber?: 'ASC' | 'DESC' };
+      }) => {
+        const matching = documents.filter((document) =>
+          matches(document, where),
+        );
+        if (order?.versionNumber === 'DESC') {
+          matching.sort(
+            (left, right) => right.versionNumber - left.versionNumber,
+          );
+        }
+        return Promise.resolve(matching[0] ?? null);
+      },
     ),
     find: jest.fn(({ where }: { where: Partial<StoredDocument> }) =>
       Promise.resolve(
@@ -451,6 +503,11 @@ function draftReplacementFixture() {
       else documents[existingIndex] = value;
       return Promise.resolve(value);
     }),
+    remove: jest.fn((value: StoredDocument) => {
+      const index = documents.findIndex((document) => document.id === value.id);
+      if (index !== -1) documents.splice(index, 1);
+      return Promise.resolve(value);
+    }),
   };
   const manager = {
     getRepository: jest.fn((entity) =>
@@ -475,6 +532,7 @@ function draftReplacementFixture() {
     service: new ApplicationDocumentsService(source as never, files as never),
     files,
     documents,
+    application,
   };
 }
 

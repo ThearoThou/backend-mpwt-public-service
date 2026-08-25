@@ -89,6 +89,17 @@ export class ApplicationDocumentsService {
     return documents.map(mapApplicationDocument);
   }
 
+  async delete(
+    citizenId: string,
+    applicationId: string,
+    documentId: string,
+  ): Promise<void> {
+    const storageKey = await this.dataSource.transaction((manager) =>
+      this.deleteWithManager(manager, citizenId, applicationId, documentId),
+    );
+    await this.filesService.deleteIfExists(storageKey);
+  }
+
   async listHistory(
     citizenId: string,
     applicationId: string,
@@ -164,6 +175,11 @@ export class ApplicationDocumentsService {
       where: { applicationId, documentType, isCurrent: true },
       lock: { mode: 'pessimistic_write' },
     });
+    const latest = await documents.findOne({
+      where: { applicationId, documentType },
+      order: { versionNumber: 'DESC' },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (
       current !== null &&
       application.status === ApplicationStatus.CORRECTION_REQUIRED &&
@@ -183,7 +199,7 @@ export class ApplicationDocumentsService {
       documents.create({
         applicationId,
         documentType,
-        versionNumber: current === null ? 1 : current.versionNumber + 1,
+        versionNumber: latest === null ? 1 : latest.versionNumber + 1,
         isCurrent: true,
         replacesDocumentId: current?.id ?? null,
         uploadedByUserId: citizenId,
@@ -195,6 +211,38 @@ export class ApplicationDocumentsService {
       }),
     );
     return mapApplicationDocument(document);
+  }
+
+  private async deleteWithManager(
+    manager: EntityManager,
+    citizenId: string,
+    applicationId: string,
+    documentId: string,
+  ): Promise<string> {
+    const applications = manager.getRepository(RenewalApplication);
+    const application = await applications.findOne({
+      where: { id: applicationId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (application === null) throw this.applicationNotFound();
+    if (application.citizenId !== citizenId) throw this.notOwned();
+    if (application.status !== ApplicationStatus.DRAFT) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_DOCUMENT_DELETE_NOT_ALLOWED,
+        HttpStatus.CONFLICT,
+        'Document deletion is only allowed while the application is a draft',
+      );
+    }
+
+    const documents = manager.getRepository(ApplicationDocument);
+    const document = await documents.findOne({
+      where: { id: documentId, applicationId, isCurrent: true },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (document === null) throw this.documentNotFound();
+
+    await documents.remove(document);
+    return document.storageKey;
   }
 
   private validateFile(file: UploadedApplicationFile | undefined): string {
