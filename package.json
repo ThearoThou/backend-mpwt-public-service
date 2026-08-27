@@ -27,8 +27,10 @@
     "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
     "migration:e2e:run": "node -r ts-node/register test/e2e/run-e2e-migration.ts up",
     "migration:e2e:revert": "node -r ts-node/register test/e2e/run-e2e-migration.ts down",
-    "seed:local-step-zero-vehicles": "node -r ts-node/register scripts/seed-local-step-zero-vehicles.ts",
-    "seed:local-inspection-stations": "node -r ts-node/register scripts/seed-local-inspection-stations.ts"
+    "seed:local-demo-vehicle-workflow": "node -r ts-node/register scripts/seed-local-demo-vehicle-workflow.ts",
+    "reset:local-demo-vehicle-workflow": "node -r ts-node/register scripts/reset-local-demo-vehicle-workflow.ts",
+    "seed:local-inspection-stations": "node -r ts-node/register scripts/seed-local-inspection-stations.ts",
+    "seed:cambodia-public-holidays": "node -r ts-node/register scripts/seed-cambodia-public-holidays.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

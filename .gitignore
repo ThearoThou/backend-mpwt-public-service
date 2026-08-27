@@ -15,6 +15,7 @@ coverage/
 # Private runtime uploads
 storage/private/
 storage/e2e-private/
+storage/local-demo-backups/
 
 # Logs
 *.log
