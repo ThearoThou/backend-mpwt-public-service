@@ -18,8 +18,12 @@ import { RenewalApplicationStatusHistory } from './entities/renewal-application-
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentMethod } from '../payments/enums/payment-method.enum';
+import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { inspectionPolicy } from '../config/inspection-policy';
 
-const UNFINISHED_APPLICATION_STATUSES = [
+export const UNFINISHED_APPLICATION_STATUSES = [
   ApplicationStatus.DRAFT,
   ApplicationStatus.SUBMITTED,
   ApplicationStatus.UNDER_REVIEW,
@@ -151,21 +155,22 @@ export class ApplicationWorkflowService {
         HttpStatus.NOT_FOUND,
         'Vehicle not found',
       );
-    if (
-      a.preferredInspectionStationId === null ||
-      a.preferredInspectionDate === null
-    )
+    if (a.preferredInspectionDate === null)
       throw new DomainException(
         ApiErrorCode.CONFLICT,
         HttpStatus.CONFLICT,
-        'A preferred inspection station and date are required before application submission',
+        'A preferred inspection date is required before application submission',
       );
-    await this.preferredScheduling.validatePreferredDateWithManager(
+    const now = new Date();
+    await this.preferredScheduling.validatePreferredDateForSubmission(
+      a.preferredInspectionDate,
+      now,
+    );
+    await this.preferredScheduling.validateOptionalStationWithManager(
       m,
       a.preferredInspectionStationId,
-      a.preferredInspectionDate,
     );
-    const now = new Date();
+    await this.assertStepFourPayment(m, a.id);
     a.referenceNumber = this.ref(now);
     a.applicantSnapshot = {
       userId: u.id,
@@ -282,6 +287,25 @@ export class ApplicationWorkflowService {
         'Rejected required documents must be replaced before submission',
       );
   }
+  private async assertStepFourPayment(
+    manager: EntityManager,
+    applicationId: string,
+  ): Promise<void> {
+    const payment = await manager.getRepository(Payment).findOne({
+      where: { applicationId },
+    });
+    if (
+      payment === null ||
+      payment.method !== PaymentMethod.PAY_AT_STATION ||
+      payment.status !== PaymentStatus.PENDING
+    ) {
+      throw new DomainException(
+        ApiErrorCode.PAYMENT_STEP_FOUR_REQUIRED,
+        HttpStatus.CONFLICT,
+        'A pending pay-at-station invoice is required before application submission',
+      );
+    }
+  }
   private async history(
     m: EntityManager,
     id: string,
@@ -366,6 +390,8 @@ export class ApplicationWorkflowService {
       throw this.unfinishedApplicationExists();
     }
 
+    await this.assertRenewalEligibility(manager, vehicle.inspectionExpiryDate);
+
     const application = await applications.save(
       applications.create({
         citizenId,
@@ -424,5 +450,36 @@ export class ApplicationWorkflowService {
       vehicle.classificationVerifiedAt !== null &&
       vehicle.classificationVerifiedBy !== null
     );
+  }
+
+  private async assertRenewalEligibility(
+    manager: EntityManager,
+    inspectionExpiryDate: string,
+  ): Promise<void> {
+    const [eligibility] = await manager.query<{ daysUntilExpiry: number }[]>(
+      `
+        SELECT
+          ($1::date - (now() AT TIME ZONE 'Asia/Phnom_Penh')::date)::integer
+            AS "daysUntilExpiry"
+      `,
+      [inspectionExpiryDate],
+    );
+
+    if (eligibility === undefined) {
+      throw new Error(
+        'Renewal eligibility calculation did not return a result',
+      );
+    }
+
+    if (
+      eligibility.daysUntilExpiry >
+      inspectionPolicy.renewalEligibility.advanceWindowDays
+    ) {
+      throw new DomainException(
+        ApiErrorCode.VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL,
+        HttpStatus.CONFLICT,
+        'Vehicle is not yet eligible for renewal',
+      );
+    }
   }
 }

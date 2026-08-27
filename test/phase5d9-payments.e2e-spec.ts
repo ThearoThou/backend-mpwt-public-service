@@ -51,9 +51,13 @@ interface Fixture {
 
 interface CambodiaDateFixtures {
   future: string;
+  thirtyDaysAhead: string;
+  thirtyOneDaysAhead: string;
   today: string;
   yesterday: string;
-  tenDaysAgo: string;
+  thirtyDaysAgo: string;
+  thirtyOneDaysAgo: string;
+  fortyDaysAgo: string;
 }
 
 describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
@@ -94,8 +98,12 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
       SELECT
         cambodia_date::text AS "today",
         (cambodia_date + 1)::text AS "future",
+        (cambodia_date + 30)::text AS "thirtyDaysAhead",
+        (cambodia_date + 31)::text AS "thirtyOneDaysAhead",
         (cambodia_date - 1)::text AS "yesterday",
-        (cambodia_date - 10)::text AS "tenDaysAgo"
+        (cambodia_date - 30)::text AS "thirtyDaysAgo",
+        (cambodia_date - 31)::text AS "thirtyOneDaysAgo",
+        (cambodia_date - 40)::text AS "fortyDaysAgo"
       FROM (
         SELECT (now() AT TIME ZONE 'Asia/Phnom_Penh')::date AS cambodia_date
       ) AS dates
@@ -125,6 +133,42 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
     }
     await truncateApprovedE2eData(dataSource, loadE2eEnvironment());
     await app.close();
+  });
+
+  it('enforces Cambodia-local renewal eligibility at 31 and 30 days before expiry', async () => {
+    const notYetEligible = await createFixture(
+      ApplicationStatus.DRAFT,
+      cambodiaDates.thirtyOneDaysAhead,
+      false,
+      VehicleClass.LIGHT,
+      false,
+    );
+    const api = app.getHttpServer();
+    const rejection = await request(api)
+      .post('/api/applications')
+      .set('Authorization', `Bearer ${notYetEligible.citizenToken}`)
+      .send({ vehicleId: notYetEligible.vehicleId })
+      .expect(409);
+    expect(rejection.body).toMatchObject({
+      code: 'VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL',
+    });
+
+    const eligible = await createFixture(
+      ApplicationStatus.DRAFT,
+      cambodiaDates.thirtyDaysAhead,
+      false,
+      VehicleClass.LIGHT,
+      false,
+    );
+    const creation = await request(api)
+      .post('/api/applications')
+      .set('Authorization', `Bearer ${eligible.citizenToken}`)
+      .send({ vehicleId: eligible.vehicleId })
+      .expect(201);
+    expect(creation.body.data).toMatchObject({
+      status: ApplicationStatus.DRAFT,
+      vehicleId: eligible.vehicleId,
+    });
   });
 
   it('initializes from review-pass, preserves snapshots, protects citizen documents, and completes transitions', async () => {
@@ -165,8 +209,8 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
       baseAmount: '60000.00',
       previousInspectionExpiryDate: cambodiaDates.yesterday,
       lateDays: 1,
-      lateFee: '500.00',
-      totalAmount: '60500.00',
+      lateFee: '0.00',
+      totalAmount: '60000.00',
       currency: 'KHR',
       receiptNumber: null,
       receiptFileKey: null,
@@ -203,7 +247,7 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
       immutable.baseAmount,
       immutable.lateFee,
       immutable.totalAmount,
-    ]).toEqual(['55000.00', '5000.00', '60000.00', '500.00', '60500.00']);
+    ]).toEqual(['55000.00', '5000.00', '60000.00', '0.00', '60000.00']);
 
     const citizen = await request(api)
       .get(`/api/payments/applications/${fixture.applicationId}`)
@@ -211,8 +255,8 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
       .expect(200);
     expect(citizen.body.data).toMatchObject({
       baseAmount: '60000.00',
-      lateFee: '500.00',
-      totalAmount: '60500.00',
+      lateFee: '0.00',
+      totalAmount: '60000.00',
       invoiceAvailable: true,
       receiptAvailable: false,
       inspectionSheetAvailable: false,
@@ -412,7 +456,7 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
     }
   });
 
-  it('initializes after citizen appointment selection and supports admin retry after best-effort initialization failure', async () => {
+  it('does not reserve capacity, create an appointment, or initialize payment when review passes', async () => {
     const api = app.getHttpServer();
     const selection = await createFixture(
       ApplicationStatus.UNDER_REVIEW,
@@ -426,82 +470,23 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
       .set('Authorization', `Bearer ${selection.adminToken}`)
       .expect(201)
       .expect(({ body }) =>
-        expect(body.data.status).toBe(
-          ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-        ),
+        expect(body.data.status).toBe(ApplicationStatus.APPROVED),
       );
     expect(
       await dataSource
         .getRepository(Payment)
         .countBy({ applicationId: selection.applicationId }),
     ).toBe(0);
-    await dataSource.getRepository(InspectionStationDailyCapacity).save({
-      id: randomUUID(),
-      stationId: selection.stationId,
-      capacityDate: '2099-01-02',
-      dailyCapacity: 1,
-      reservedCount: 0,
-      isClosed: false,
-    });
-    await request(api)
-      .post(
-        `/api/applications/${selection.applicationId}/appointment-selection`,
-      )
-      .set('Authorization', `Bearer ${selection.citizenToken}`)
-      .send({ stationId: selection.stationId, capacityDate: '2099-01-02' })
-      .expect(201)
-      .expect(({ body }) =>
-        expect(body.data.status).toBe(ApplicationStatus.APPROVED),
-      );
     expect(
       await dataSource
-        .getRepository(Payment)
-        .findOneByOrFail({ applicationId: selection.applicationId }),
-    ).toMatchObject({ status: PaymentStatus.PENDING });
-
-    const retry = await createFixture(
-      ApplicationStatus.UNDER_REVIEW,
-      cambodiaDates.today,
-    );
-    await dataSource.getRepository(Vehicle).update(retry.vehicleId, {
-      vehicleClass: null,
-      inspectionCategoryId: null,
-      classificationVerifiedAt: null,
-      classificationVerifiedBy: null,
-    });
-    await request(api)
-      .post(`/api/admin/applications/${retry.applicationId}/review-pass`)
-      .set('Authorization', `Bearer ${retry.adminToken}`)
-      .expect(201);
-    expect(
-      await dataSource
-        .getRepository(Payment)
-        .countBy({ applicationId: retry.applicationId }),
+        .getRepository(Appointment)
+        .countBy({ applicationId: selection.applicationId }),
     ).toBe(0);
-    await dataSource.getRepository(Vehicle).update(retry.vehicleId, {
-      vehicleClass: VehicleClass.LIGHT,
-      inspectionCategoryId: retry.categoryId,
-      classificationVerifiedAt: new Date(),
-      classificationVerifiedBy: retry.adminId,
-    });
-    const first = await request(api)
-      .post(
-        `/api/admin/payments/applications/${retry.applicationId}/initialize`,
-      )
-      .set('Authorization', `Bearer ${retry.adminToken}`)
-      .expect(201);
-    const second = await request(api)
-      .post(
-        `/api/admin/payments/applications/${retry.applicationId}/initialize`,
-      )
-      .set('Authorization', `Bearer ${retry.adminToken}`)
-      .expect(201);
-    expect(second.body.data.id).toBe(first.body.data.id);
     expect(
       await dataSource
-        .getRepository(Payment)
-        .countBy({ applicationId: retry.applicationId }),
-    ).toBe(1);
+        .getRepository(InspectionStationDailyCapacity)
+        .findOneByOrFail({ id: selection.capacityId }),
+    ).toMatchObject({ reservedCount: 1 });
   });
 
   it('allows confirmation from rejected and retains its rejection history', async () => {
@@ -548,37 +533,77 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
     ]);
   });
 
-  it('calculates Cambodia-local late fees for relative expiry dates', async () => {
-    for (const { expiry, lateDays, lateFee, totalAmount } of [
+  it('calculates Cambodia-local no-penalty threshold and class-specific late fees', async () => {
+    for (const { expiry, vehicleClass, lateDays, lateFee, totalAmount } of [
       {
         expiry: cambodiaDates.future,
+        vehicleClass: VehicleClass.LIGHT,
         lateDays: 0,
         lateFee: '0.00',
         totalAmount: '60000.00',
       },
       {
         expiry: cambodiaDates.today,
+        vehicleClass: VehicleClass.LIGHT,
         lateDays: 0,
         lateFee: '0.00',
         totalAmount: '60000.00',
       },
       {
         expiry: cambodiaDates.yesterday,
+        vehicleClass: VehicleClass.LIGHT,
         lateDays: 1,
-        lateFee: '500.00',
-        totalAmount: '60500.00',
+        lateFee: '0.00',
+        totalAmount: '60000.00',
       },
       {
-        expiry: cambodiaDates.tenDaysAgo,
-        lateDays: 10,
-        lateFee: '5000.00',
-        totalAmount: '65000.00',
+        expiry: cambodiaDates.thirtyDaysAgo,
+        vehicleClass: VehicleClass.LIGHT,
+        lateDays: 30,
+        lateFee: '0.00',
+        totalAmount: '60000.00',
+      },
+      {
+        expiry: cambodiaDates.thirtyDaysAgo,
+        vehicleClass: VehicleClass.HEAVY,
+        lateDays: 30,
+        lateFee: '0.00',
+        totalAmount: '60000.00',
+      },
+      {
+        expiry: cambodiaDates.thirtyOneDaysAgo,
+        vehicleClass: VehicleClass.LIGHT,
+        lateDays: 31,
+        lateFee: '15500.00',
+        totalAmount: '75500.00',
+      },
+      {
+        expiry: cambodiaDates.fortyDaysAgo,
+        vehicleClass: VehicleClass.LIGHT,
+        lateDays: 40,
+        lateFee: '20000.00',
+        totalAmount: '80000.00',
+      },
+      {
+        expiry: cambodiaDates.thirtyOneDaysAgo,
+        vehicleClass: VehicleClass.HEAVY,
+        lateDays: 31,
+        lateFee: '62000.00',
+        totalAmount: '122000.00',
+      },
+      {
+        expiry: cambodiaDates.fortyDaysAgo,
+        vehicleClass: VehicleClass.HEAVY,
+        lateDays: 40,
+        lateFee: '80000.00',
+        totalAmount: '140000.00',
       },
     ]) {
       const fixture = await createFixture(
         ApplicationStatus.APPROVED,
         expiry,
         true,
+        vehicleClass,
       );
       const response = await request(app.getHttpServer())
         .post(
@@ -609,6 +634,8 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
     status: ApplicationStatus,
     expiry: string,
     scheduled = false,
+    vehicleClass = VehicleClass.LIGHT,
+    createApplication = true,
   ): Promise<Fixture> {
     const suffix = randomUUID().replaceAll('-', '');
     const fixture: Fixture = {
@@ -678,7 +705,7 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
         code: `P5-${suffix}`,
         nameKh: 'test',
         nameEn: 'test',
-        vehicleClass: VehicleClass.LIGHT,
+        vehicleClass,
         validityMonths: 12,
         inspectionFeeKhr: '55000.00',
         serviceFeeKhr: '5000.00',
@@ -693,7 +720,7 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
         plateProvince: 'Phnom Penh',
         plateType: 'PRIVATE',
         vehicleType: 'CAR',
-        vehicleClass: VehicleClass.LIGHT,
+        vehicleClass,
         inspectionCategoryId: fixture.categoryId,
         classificationVerifiedAt: new Date(),
         classificationVerifiedBy: fixture.adminId,
@@ -727,27 +754,29 @@ describe('Phase 5D.9 payment workflow (PostgreSQL/API)', () => {
         reservedCount: scheduled ? 1 : 0,
         isClosed: false,
       });
-      await manager.getRepository(RenewalApplication).save({
-        id: fixture.applicationId,
-        referenceNumber: `P5-${suffix}`,
-        citizenId: fixture.citizenId,
-        vehicleId: fixture.vehicleId,
-        status,
-        applicantSnapshot: null,
-        vehicleSnapshot: null,
-        currentCorrectionReason: null,
-        currentRejectionReason: null,
-        preferredInspectionStationId: fixture.stationId,
-        preferredInspectionDate: capacityDate,
-        submittedAt: new Date(),
-        reviewStartedAt:
-          status === ApplicationStatus.UNDER_REVIEW ? new Date() : null,
-        readyForInspectionAt: null,
-        completedAt: null,
-        cancelledAt: null,
-        cancelledByUserId: null,
-        cancellationReason: null,
-      });
+      if (createApplication) {
+        await manager.getRepository(RenewalApplication).save({
+          id: fixture.applicationId,
+          referenceNumber: `P5-${suffix}`,
+          citizenId: fixture.citizenId,
+          vehicleId: fixture.vehicleId,
+          status,
+          applicantSnapshot: null,
+          vehicleSnapshot: null,
+          currentCorrectionReason: null,
+          currentRejectionReason: null,
+          preferredInspectionStationId: fixture.stationId,
+          preferredInspectionDate: capacityDate,
+          submittedAt: new Date(),
+          reviewStartedAt:
+            status === ApplicationStatus.UNDER_REVIEW ? new Date() : null,
+          readyForInspectionAt: null,
+          completedAt: null,
+          cancelledAt: null,
+          cancelledByUserId: null,
+          cancellationReason: null,
+        });
+      }
       if (scheduled)
         await manager.getRepository(Appointment).save({
           id: randomUUID(),

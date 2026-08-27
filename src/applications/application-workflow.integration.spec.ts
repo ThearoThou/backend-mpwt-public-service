@@ -19,6 +19,9 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentMethod } from '../payments/enums/payment-method.enum';
+import { PaymentStatus } from '../payments/enums/payment-status.enum';
 
 const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
@@ -30,7 +33,8 @@ describe('application workflow integration', () => {
     const workflow = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
       {
-        validatePreferredDateWithManager: jest.fn().mockResolvedValue(),
+        validatePreferredDateForSubmission: jest.fn(),
+        validateOptionalStationWithManager: jest.fn().mockResolvedValue(),
       } as never,
     );
     const documents = new ApplicationDocumentsService(
@@ -39,10 +43,6 @@ describe('application workflow integration', () => {
     );
     const review = new AdminApplicationReviewService(
       fixture.dataSource as unknown as DataSource,
-      {
-        reserveDailyCapacityWithManager: jest.fn().mockResolvedValue(null),
-      } as never,
-      { initializePayment: jest.fn().mockResolvedValue({}) } as never,
     );
 
     const draft = await workflow.createDraft(CITIZEN_ID, VEHICLE_ID);
@@ -61,6 +61,13 @@ describe('application workflow integration', () => {
         pdfFile(documentType),
       );
     }
+
+    fixture.payments.push({
+      id: 'payment-id',
+      applicationId: application.id,
+      method: PaymentMethod.PAY_AT_STATION,
+      status: PaymentStatus.PENDING,
+    } as Payment);
 
     await workflow.submit(CITIZEN_ID, application.id);
     const referenceNumber = application.referenceNumber;
@@ -271,6 +278,7 @@ function createFixture() {
   const documents: ApplicationDocument[] = [];
   const history: RenewalApplicationStatusHistory[] = [];
   const auditLogs: AuditLog[] = [];
+  const payments: Payment[] = [];
   const users = [
     {
       id: CITIZEN_ID,
@@ -323,9 +331,11 @@ function createFixture() {
     [User, repository(users, 'user')],
     [CitizenProfile, repository(profiles, 'profile')],
     [Vehicle, repository(vehicles, 'vehicle')],
+    [Payment, repository(payments, 'payment')],
   ]);
   const manager = {
     getRepository: (entity: unknown) => repositories.get(entity),
+    query: () => Promise.resolve([{ daysUntilExpiry: 0 }]),
   };
   const dataSource = {
     getRepository: manager.getRepository,
@@ -349,6 +359,7 @@ function createFixture() {
     documents,
     history,
     auditLogs,
+    payments,
   };
 }
 

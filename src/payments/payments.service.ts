@@ -4,7 +4,10 @@ import { randomInt } from 'node:crypto';
 import { DataSource, type EntityManager, type Repository } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
+import { DocumentStatus } from '../applications/enums/document-status.enum';
+import { DocumentType } from '../applications/enums/document-type.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
@@ -12,7 +15,11 @@ import { FilesService } from '../files/files.service';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
+import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
+import { CitizenProfile } from '../users/entities/citizen-profile.entity';
+import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { VehicleClass } from '../vehicles/enums/vehicle-class.enum';
 import {
   type AdminPaymentSortField,
   type ListAdminPaymentsQueryDto,
@@ -32,8 +39,9 @@ import {
   type PaymentStatusHistoryResponse,
 } from './payment-status-history-response.mapper';
 import { PaymentPdfService } from './payment-pdf.service';
+import { inspectionPolicy } from '../config/inspection-policy';
+import { maximumChargeableLateDays } from './late-penalty-policy';
 
-const LATE_FEE_PER_DAY_KHR = 500;
 const PAYMENT_CURRENCY = 'KHR';
 const MAX_INVOICE_NUMBER_ATTEMPTS = 3;
 const MAX_RECEIPT_NUMBER_ATTEMPTS = 3;
@@ -46,6 +54,28 @@ export interface CitizenFeeEstimateResponse {
   lateFee: string;
   totalAmount: string;
   currency: string;
+}
+
+export interface CitizenPaymentInvoiceResponse extends PaymentResponse {
+  applicationReferenceNumber: string | null;
+  preferredInspectionStationId: string | null;
+  preferredInspectionDate: string | null;
+  vehicle: {
+    registrationNumber: string;
+    plateNumber: string;
+    plateCategory: string;
+    plateProvince: string | null;
+    plateType: string;
+    make: string;
+    model: string;
+    manufactureYear: number | null;
+    chassisNumber: string;
+  };
+  applicant: {
+    nameKh: string | null;
+    nameEn: string | null;
+    phone: string | null;
+  };
 }
 
 @Injectable()
@@ -62,9 +92,33 @@ export class PaymentsService {
     private readonly applications: Repository<RenewalApplication>,
     private readonly files: FilesService,
     private readonly paymentPdf: PaymentPdfService,
+    private readonly preferredScheduling: CitizenPreferredSchedulingService,
   ) {}
 
   async initializePayment(applicationId: string): Promise<Payment> {
+    return this.initializePaymentForApplication(applicationId);
+  }
+
+  async initializeCitizenDraftPayment(
+    citizenId: string,
+    applicationId: string,
+  ): Promise<CitizenPaymentInvoiceResponse> {
+    const payment = await this.initializePaymentForApplication(
+      applicationId,
+      citizenId,
+    );
+
+    return this.citizenPaymentInvoiceResponse(
+      citizenId,
+      applicationId,
+      payment,
+    );
+  }
+
+  private async initializePaymentForApplication(
+    applicationId: string,
+    citizenId?: string,
+  ): Promise<Payment> {
     for (let attempt = 0; attempt < MAX_INVOICE_NUMBER_ATTEMPTS; attempt++) {
       let invoiceFileKey: string | null = null;
 
@@ -81,27 +135,46 @@ export class PaymentsService {
             throw this.applicationNotFound();
           }
 
+          if (citizenId !== undefined) {
+            if (application.citizenId !== citizenId) throw this.notOwned();
+            this.assertDraft(application);
+          }
+
           const payments = manager.getRepository(Payment);
           const existing = await payments.findOne({
             where: { applicationId: application.id },
           });
           if (existing !== null) {
+            if (citizenId !== undefined) {
+              this.assertPendingStationPayment(existing);
+            }
             return existing;
           }
 
-          this.assertApproved(application);
-          await this.assertExactlyOneScheduledAppointment(
-            manager,
-            application.id,
-          );
+          if (citizenId === undefined) {
+            this.assertApproved(application);
+            await this.assertExactlyOneScheduledAppointment(
+              manager,
+              application.id,
+            );
+          } else {
+            await this.assertCitizenDraftReady(manager, application);
+          }
           const vehicle = await this.loadVehicle(
             manager,
             application.vehicleId,
           );
+          if (
+            citizenId !== undefined &&
+            vehicle.linkedCitizenId !== citizenId
+          ) {
+            throw this.notOwned();
+          }
           const category = await this.loadActiveCategory(manager, vehicle);
           const snapshot = await this.calculateSnapshot(
             manager,
             vehicle.inspectionExpiryDate,
+            vehicle.vehicleClass,
             category.inspectionFeeKhr,
             category.serviceFeeKhr,
           );
@@ -111,7 +184,7 @@ export class PaymentsService {
           const invoice = await this.paymentPdf.generateInvoice({
             invoiceNumber,
             issuedDate: snapshot.paymentDate,
-            applicationReferenceNumber: this.applicationReference(application),
+            applicationReferenceNumber: application.referenceNumber,
             vehiclePlate: vehicle.plateNumber,
             vehicleMakeModel: `${vehicle.make} ${vehicle.model}`,
             previousInspectionExpiryDate: vehicle.inspectionExpiryDate,
@@ -389,6 +462,7 @@ export class PaymentsService {
       const snapshot = await this.calculateSnapshot(
         manager,
         vehicle.inspectionExpiryDate,
+        vehicle.vehicleClass,
         category.inspectionFeeKhr,
         category.serviceFeeKhr,
       );
@@ -401,6 +475,61 @@ export class PaymentsService {
         lateFee: snapshot.lateFee,
         totalAmount: snapshot.totalAmount,
         currency: PAYMENT_CURRENCY,
+      };
+    });
+  }
+
+  private async citizenPaymentInvoiceResponse(
+    citizenId: string,
+    applicationId: string,
+    payment: Payment,
+  ): Promise<CitizenPaymentInvoiceResponse> {
+    return this.dataSource.transaction(async (manager) => {
+      const application = await manager
+        .getRepository(RenewalApplication)
+        .findOne({ where: { id: applicationId } });
+      if (application === null) throw this.applicationNotFound();
+      if (application.citizenId !== citizenId) throw this.notOwned();
+
+      const vehicle = await manager.getRepository(Vehicle).findOne({
+        where: { id: application.vehicleId },
+      });
+      if (vehicle === null) {
+        throw new DomainException(
+          ApiErrorCode.VEHICLE_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'Vehicle not found',
+        );
+      }
+
+      const [user, profile] = await Promise.all([
+        manager.getRepository(User).findOne({ where: { id: citizenId } }),
+        manager
+          .getRepository(CitizenProfile)
+          .findOne({ where: { userId: citizenId } }),
+      ]);
+
+      return {
+        ...mapPayment(payment),
+        applicationReferenceNumber: application.referenceNumber,
+        preferredInspectionStationId: application.preferredInspectionStationId,
+        preferredInspectionDate: application.preferredInspectionDate,
+        vehicle: {
+          registrationNumber: vehicle.registrationNumber,
+          plateNumber: vehicle.plateNumber,
+          plateCategory: vehicle.plateCategory,
+          plateProvince: vehicle.plateProvince,
+          plateType: vehicle.plateType,
+          make: vehicle.make,
+          model: vehicle.model,
+          manufactureYear: vehicle.manufactureYear,
+          chassisNumber: vehicle.chassisNumber,
+        },
+        applicant: {
+          nameKh: profile?.nameKh ?? null,
+          nameEn: profile?.nameEn ?? null,
+          phone: user?.phone ?? null,
+        },
       };
     });
   }
@@ -567,6 +696,92 @@ export class PaymentsService {
     }
   }
 
+  private assertDraft(application: RenewalApplication): void {
+    if (application.status !== ApplicationStatus.DRAFT) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+        HttpStatus.CONFLICT,
+        'Payment initialization is only available for draft applications',
+      );
+    }
+  }
+
+  private assertPendingStationPayment(payment: Payment): void {
+    if (
+      payment.method !== PaymentMethod.PAY_AT_STATION ||
+      payment.status !== PaymentStatus.PENDING
+    ) {
+      throw new DomainException(
+        ApiErrorCode.PAYMENT_INVALID_TRANSITION,
+        HttpStatus.CONFLICT,
+        'The existing payment is not a pending station payment',
+      );
+    }
+  }
+
+  private async assertCitizenDraftReady(
+    manager: EntityManager,
+    application: RenewalApplication,
+  ): Promise<void> {
+    const documents = await manager.getRepository(ApplicationDocument).find({
+      where: { applicationId: application.id, isCurrent: true },
+    });
+    const requiredTypes = Object.values(DocumentType);
+    if (
+      requiredTypes.some(
+        (type) => !documents.some((document) => document.documentType === type),
+      )
+    ) {
+      throw new DomainException(
+        ApiErrorCode.REQUIRED_DOCUMENTS_MISSING,
+        HttpStatus.CONFLICT,
+        'Required documents are missing',
+      );
+    }
+    if (
+      documents.some(
+        (document) =>
+          requiredTypes.includes(document.documentType) &&
+          document.status === DocumentStatus.REJECTED,
+      )
+    ) {
+      throw new DomainException(
+        ApiErrorCode.REQUIRED_DOCUMENTS_NOT_READY,
+        HttpStatus.CONFLICT,
+        'Rejected required documents must be replaced before payment initialization',
+      );
+    }
+
+    const [user, profile] = await Promise.all([
+      manager
+        .getRepository(User)
+        .findOne({ where: { id: application.citizenId } }),
+      manager
+        .getRepository(CitizenProfile)
+        .findOne({ where: { userId: application.citizenId } }),
+    ]);
+    if (user === null || profile === null) {
+      throw new DomainException(
+        ApiErrorCode.CITIZEN_PROFILE_REQUIRED,
+        HttpStatus.CONFLICT,
+        'Citizen profile is required before payment initialization',
+      );
+    }
+
+    if (application.preferredInspectionDate === null) {
+      throw this.invalidPaymentSource(
+        'A preferred inspection date is required before payment initialization',
+      );
+    }
+    await this.preferredScheduling.validatePreferredDate(
+      application.preferredInspectionDate,
+    );
+    await this.preferredScheduling.validateOptionalStationWithManager(
+      manager,
+      application.preferredInspectionStationId,
+    );
+  }
+
   private async assertExactlyOneScheduledAppointment(
     manager: EntityManager,
     applicationId: string,
@@ -587,7 +802,7 @@ export class PaymentsService {
   private async loadVehicle(
     manager: EntityManager,
     vehicleId: string,
-  ): Promise<Vehicle> {
+  ): Promise<Vehicle & { vehicleClass: VehicleClass }> {
     const vehicle = await manager.getRepository(Vehicle).findOne({
       where: { id: vehicleId },
     });
@@ -604,8 +819,18 @@ export class PaymentsService {
         'Vehicle inspection expiry date is invalid',
       );
     }
+    if (
+      vehicle.vehicleClass !== VehicleClass.LIGHT &&
+      vehicle.vehicleClass !== VehicleClass.HEAVY
+    ) {
+      throw new DomainException(
+        ApiErrorCode.VEHICLE_CLASSIFICATION_INCOMPLETE,
+        HttpStatus.CONFLICT,
+        'Vehicle inspection classification is incomplete',
+      );
+    }
 
-    return vehicle;
+    return vehicle as Vehicle & { vehicleClass: VehicleClass };
   }
 
   private async loadActiveCategory(
@@ -651,9 +876,15 @@ export class PaymentsService {
   private async calculateSnapshot(
     manager: EntityManager,
     inspectionExpiryDate: string,
+    vehicleClass: VehicleClass,
     inspectionFeeKhr: string,
     serviceFeeKhr: string,
   ): Promise<PaymentCalculationSnapshot> {
+    const { latePenalty } = inspectionPolicy;
+    const maximumLateDays = maximumChargeableLateDays(
+      inspectionExpiryDate,
+      latePenalty.maxPenaltyYears,
+    );
     const [snapshot] = await manager.query<PaymentCalculationSnapshot[]>(
       `
         SELECT
@@ -667,20 +898,65 @@ export class PaymentsService {
           $3::numeric(12,2)::text AS "serviceFeeKhr",
           ($2::numeric(12,2) + $3::numeric(12,2))::numeric(12,2)::text AS "baseAmount",
           (
-            GREATEST(
+            CASE
+            WHEN GREATEST(
               (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
               0
-            ) * ${LATE_FEE_PER_DAY_KHR}
+            ) <= $5::integer THEN 0
+            WHEN $4::text = '${VehicleClass.LIGHT}' THEN
+              LEAST(
+                GREATEST(
+                  (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                  0
+                ),
+                $6::integer
+              ) * $7::integer
+            ELSE
+              LEAST(
+                GREATEST(
+                  (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                  0
+                ),
+                $6::integer
+              ) * $8::integer
+          END
           )::numeric(12,2)::text AS "lateFee",
           (
             $2::numeric(12,2) + $3::numeric(12,2) +
-            GREATEST(
-              (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
-              0
-            ) * ${LATE_FEE_PER_DAY_KHR}
+            CASE
+              WHEN GREATEST(
+                (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                0
+              ) <= $5::integer THEN 0
+              WHEN $4::text = '${VehicleClass.LIGHT}' THEN
+                LEAST(
+                  GREATEST(
+                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                    0
+                  ),
+                  $6::integer
+                ) * $7::integer
+              ELSE
+                LEAST(
+                  GREATEST(
+                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                    0
+                  ),
+                  $6::integer
+                ) * $8::integer
+            END
           )::numeric(12,2)::text AS "totalAmount"
       `,
-      [inspectionExpiryDate, inspectionFeeKhr, serviceFeeKhr],
+      [
+        inspectionExpiryDate,
+        inspectionFeeKhr,
+        serviceFeeKhr,
+        vehicleClass,
+        latePenalty.startsAfterDays,
+        maximumLateDays,
+        latePenalty.lightRateKhrPerDay,
+        latePenalty.heavyRateKhrPerDay,
+      ],
     );
 
     if (snapshot === undefined) {

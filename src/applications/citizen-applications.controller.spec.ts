@@ -169,6 +169,32 @@ describe('CitizenApplicationsController', () => {
       APPLICATION_ID,
     );
   });
+
+  it('initializes a citizen-owned Step 4 payment invoice and wraps its response', async () => {
+    const payment = {
+      id: 'payment-id',
+      applicationId: APPLICATION_ID,
+      invoiceNumber: 'INV-20260826-000001',
+      status: 'PENDING',
+    };
+    const payments = {
+      initializeCitizenDraftPayment: jest.fn().mockResolvedValue(payment),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      {} as never,
+      {} as never,
+      payments as never,
+    );
+
+    await expect(
+      controller.initializePayment(actor(), APPLICATION_ID),
+    ).resolves.toEqual({ data: payment });
+    expect(payments.initializeCitizenDraftPayment).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+  });
 });
 
 function actor(): AuthenticatedActor {

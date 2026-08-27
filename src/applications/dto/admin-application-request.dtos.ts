@@ -34,6 +34,7 @@ export const ADMIN_APPLICATION_STATUSES = [
   ApplicationStatus.REJECTED,
   ApplicationStatus.REINSPECTION_REQUIRED,
   ApplicationStatus.INSPECTION_FAILED,
+  ApplicationStatus.EXPIRED,
   ApplicationStatus.CANCELLED,
   ApplicationStatus.COMPLETED,
 ] as const;

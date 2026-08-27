@@ -38,6 +38,7 @@ import { ApplicationsService } from './applications.service';
 import {
   PaymentsService,
   type CitizenFeeEstimateResponse,
+  type CitizenPaymentInvoiceResponse,
 } from '../payments/payments.service';
 
 @Controller('applications')
@@ -72,6 +73,19 @@ export class CitizenApplicationsController {
       await this.applicationWorkflowService.submit(actor.userId, id),
     );
   }
+  @Post(':applicationId/payment/initialize')
+  async initializePayment(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+  ): Promise<ApiDataResponse<CitizenPaymentInvoiceResponse>> {
+    return createDataResponse(
+      await this.payments.initializeCitizenDraftPayment(
+        actor.userId,
+        applicationId,
+      ),
+    );
+  }
   @Post(':applicationId/resubmit') async resubmit(
     @CurrentActor() actor: AuthenticatedActor,
     @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
@@ -88,20 +102,6 @@ export class CitizenApplicationsController {
   ) {
     return createDataResponse(
       await this.schedulingPreferences.updateDraftPreference(
-        actor.userId,
-        id,
-        input,
-      ),
-    );
-  }
-  @Post(':applicationId/appointment-selection')
-  async reserveAppointmentSelection(
-    @CurrentActor() actor: AuthenticatedActor,
-    @Param('applicationId', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Body() input: CitizenSchedulingPreferenceRequestDto,
-  ) {
-    return createDataResponse(
-      await this.schedulingPreferences.reserveAppointmentSelection(
         actor.userId,
         id,
         input,

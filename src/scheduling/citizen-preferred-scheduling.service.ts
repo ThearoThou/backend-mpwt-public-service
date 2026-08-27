@@ -1,16 +1,21 @@
-import { ConfigService } from '@nestjs/config';
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, type EntityManager, type Repository } from 'typeorm';
+import { type EntityManager, type Repository } from 'typeorm';
 
-import type { EnvironmentVariables } from '../config/environment.validation';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { InspectionStation } from './entities/inspection-station.entity';
-import { InspectionStationDailyCapacity } from './entities/inspection-station-daily-capacity.entity';
+import {
+  InspectionCalendarService,
+  isCalendarDate,
+} from './inspection-calendar.service';
+import { inspectionPolicy } from '../config/inspection-policy';
 
 const PHNOM_PENH_TIME_ZONE = 'Asia/Phnom_Penh';
-const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+export const PREFERRED_INSPECTION_WINDOW_DAYS =
+  inspectionPolicy.application.initialInspectionPeriodDays;
+const PREFERRED_INSPECTION_LAST_DAY_OFFSET =
+  PREFERRED_INSPECTION_WINDOW_DAYS - 1;
 
 export interface CitizenPreferredInspectionDate {
   stationId: string;
@@ -22,9 +27,7 @@ export class CitizenPreferredSchedulingService {
   constructor(
     @InjectRepository(InspectionStation)
     private readonly stations: Repository<InspectionStation>,
-    @InjectRepository(InspectionStationDailyCapacity)
-    private readonly dailyCapacities: Repository<InspectionStationDailyCapacity>,
-    private readonly configService: ConfigService<EnvironmentVariables>,
+    private readonly calendar: InspectionCalendarService,
   ) {}
 
   async listPreferredDates(
@@ -32,62 +35,80 @@ export class CitizenPreferredSchedulingService {
   ): Promise<CitizenPreferredInspectionDate[]> {
     await this.requireActiveStation(this.stations, stationId);
 
-    const { earliest, latest } = this.bounds();
-    const closures = await this.dailyCapacities.find({
-      select: { capacityDate: true },
-      where: {
-        stationId,
-        isClosed: true,
-        capacityDate: Between(earliest, latest),
-      },
-    });
-    const closedDates = new Set(
-      closures.map((closure) => closure.capacityDate),
+    const { earliest } = this.bounds();
+    const dates = await Promise.all(
+      calendarDates(earliest, PREFERRED_INSPECTION_WINDOW_DAYS).map(
+        async (capacityDate) => {
+          try {
+            await this.validatePreferredDate(capacityDate);
+            return { stationId, capacityDate };
+          } catch (error) {
+            if (error instanceof DomainException) return null;
+            throw error;
+          }
+        },
+      ),
     );
-
-    return calendarDates(earliest, this.windowDays())
-      .filter((date) => isWeekday(date) && !closedDates.has(date))
-      .map((capacityDate) => ({ stationId, capacityDate }));
+    return dates.filter(
+      (date): date is CitizenPreferredInspectionDate => date !== null,
+    );
   }
 
-  async validatePreferredDateWithManager(
+  async validatePreferredDate(preferredInspectionDate: string): Promise<void> {
+    const { earliest, latest } = this.bounds();
+    if (
+      !isCalendarDate(preferredInspectionDate) ||
+      preferredInspectionDate < earliest ||
+      preferredInspectionDate > latest ||
+      !isWeekday(preferredInspectionDate) ||
+      (preferredInspectionDate === earliest && isAfterDailyCutoff()) ||
+      (await this.calendar.isActiveClosure(preferredInspectionDate))
+    ) {
+      throw this.dateNotSelectable();
+    }
+  }
+
+  async validateOptionalStationWithManager(
     manager: EntityManager,
-    stationId: string,
-    capacityDate: string,
+    stationId: string | null,
   ): Promise<void> {
+    if (stationId === null) return;
     await this.requireActiveStation(
       manager.getRepository(InspectionStation),
       stationId,
     );
+  }
 
-    const { earliest, latest } = this.bounds();
+  async validatePreferredDateForSubmission(
+    preferredInspectionDate: string,
+    submittedAt: Date,
+  ): Promise<void> {
+    // Day 1 is the Cambodia-local submission date, so the inclusive window is
+    // submitted date through submitted date + 29 calendar days.
+    const submittedDate = cambodiaToday(submittedAt);
+    const lastAllowedDate = addCalendarDays(
+      submittedDate,
+      PREFERRED_INSPECTION_LAST_DAY_OFFSET,
+    );
     if (
-      !isCalendarDate(capacityDate) ||
-      capacityDate < earliest ||
-      capacityDate > latest ||
-      !isWeekday(capacityDate)
+      !isCalendarDate(preferredInspectionDate) ||
+      !isWeekday(preferredInspectionDate) ||
+      preferredInspectionDate < submittedDate ||
+      preferredInspectionDate > lastAllowedDate ||
+      (preferredInspectionDate === submittedDate &&
+        isAfterDailyCutoff(submittedAt)) ||
+      (await this.calendar.isActiveClosure(preferredInspectionDate))
     ) {
       throw this.dateNotSelectable();
     }
-
-    const closure = await manager
-      .getRepository(InspectionStationDailyCapacity)
-      .findOne({ where: { stationId, capacityDate, isClosed: true } });
-    if (closure !== null) throw this.dateNotSelectable();
   }
 
   private bounds(): { earliest: string; latest: string } {
     const today = cambodiaToday();
     return {
-      earliest: addCalendarDays(today, 1),
-      latest: addCalendarDays(today, this.windowDays()),
+      earliest: today,
+      latest: addCalendarDays(today, PREFERRED_INSPECTION_LAST_DAY_OFFSET),
     };
-  }
-
-  private windowDays(): number {
-    return this.configService.getOrThrow<number>(
-      'PREFERRED_SCHEDULING_WINDOW_DAYS',
-    );
   }
 
   private async requireActiveStation(
@@ -144,15 +165,19 @@ function calendarDates(firstDate: string, count: number): string[] {
   );
 }
 
-function isCalendarDate(value: string): boolean {
-  if (!DATE_ONLY_PATTERN.test(value)) return false;
-  const date = new Date(`${value}T00:00:00Z`);
-  return (
-    !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value
-  );
-}
-
 function isWeekday(date: string): boolean {
   const day = new Date(`${date}T00:00:00Z`).getUTCDay();
   return day >= 1 && day <= 5;
+}
+
+function isAfterDailyCutoff(now = new Date()): boolean {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone: PHNOM_PENH_TIME_ZONE,
+    hour: '2-digit',
+    hourCycle: 'h23',
+  })
+    .formatToParts(now)
+    .find((part) => part.type === 'hour')?.value;
+  if (hour === undefined) throw new Error('Missing Cambodia hour.');
+  return Number(hour) >= inspectionPolicy.scheduling.sameDayCutoffHour;
 }

@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { DataSource, type EntityManager } from 'typeorm';
 
 import { AuditLog } from '../activity/entities/audit-log.entity';
@@ -18,21 +18,10 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
-import { InspectionStationDailyCapacityService } from '../scheduling/inspection-station-daily-capacity.service';
-import { Appointment } from '../scheduling/entities/appointment.entity';
-import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
-import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
-import { PaymentsService } from '../payments/payments.service';
 
 @Injectable()
 export class AdminApplicationReviewService {
-  private readonly logger = new Logger(AdminApplicationReviewService.name);
-
-  constructor(
-    private readonly dataSource: DataSource,
-    private readonly dailyCapacities: InspectionStationDailyCapacityService,
-    private readonly payments: PaymentsService,
-  ) {}
+  constructor(private readonly dataSource: DataSource) {}
 
   async startReview(
     adminId: string,
@@ -77,13 +66,9 @@ export class AdminApplicationReviewService {
     adminId: string,
     applicationId: string,
   ): Promise<AdminApplicationDetailResponse> {
-    const result = await this.dataSource.transaction((manager) =>
+    return this.dataSource.transaction((manager) =>
       this.passReviewWithManager(manager, adminId, applicationId),
     );
-    if (result.status === ApplicationStatus.APPROVED) {
-      await this.initializePaymentAfterScheduling(applicationId);
-    }
-    return result;
   }
 
   private async startReviewWithManager(
@@ -272,51 +257,9 @@ export class AdminApplicationReviewService {
     if (application.status !== ApplicationStatus.UNDER_REVIEW) {
       throw this.invalidTransition();
     }
-    if (
-      application.preferredInspectionStationId === null ||
-      application.preferredInspectionDate === null
-    ) {
+    if (application.preferredInspectionDate === null) {
       throw this.invalidTransition();
     }
-
-    const reservedCapacity =
-      await this.dailyCapacities.reserveDailyCapacityWithManager(
-        manager,
-        application.preferredInspectionStationId,
-        application.preferredInspectionDate,
-      );
-
-    if (reservedCapacity === null) {
-      application.status = ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED;
-      await manager.getRepository(RenewalApplication).save(application);
-      await this.writeHistory(
-        manager,
-        application.id,
-        ApplicationStatus.UNDER_REVIEW,
-        ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-        adminId,
-      );
-      return mapAdminApplicationDetail(application);
-    }
-
-    const dailyCapacity = await manager
-      .getRepository(InspectionStationDailyCapacity)
-      .findOneByOrFail({ id: reservedCapacity.id });
-    const appointments = manager.getRepository(Appointment);
-    await appointments.save(
-      appointments.create({
-        applicationId: application.id,
-        slotId: null,
-        dailyCapacity,
-        status: AppointmentStatus.SCHEDULED,
-        completedAt: null,
-        cancelledAt: null,
-        cancelledByUserId: null,
-        cancellationReason: null,
-        noShowMarkedAt: null,
-        noShowMarkedByUserId: null,
-      }),
-    );
     application.status = ApplicationStatus.APPROVED;
     await manager.getRepository(RenewalApplication).save(application);
     await this.writeHistory(
@@ -402,18 +345,5 @@ export class AdminApplicationReviewService {
       HttpStatus.CONFLICT,
       'Application transition is invalid',
     );
-  }
-
-  private async initializePaymentAfterScheduling(
-    applicationId: string,
-  ): Promise<void> {
-    try {
-      await this.payments.initializePayment(applicationId);
-    } catch (error) {
-      this.logger.error(
-        `Automatic payment initialization failed after review-pass scheduling: ${applicationId}`,
-        error instanceof Error ? error.stack : String(error),
-      );
-    }
   }
 }

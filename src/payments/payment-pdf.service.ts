@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 export interface InvoicePdfData {
   invoiceNumber: string;
   issuedDate: string;
-  applicationReferenceNumber: string;
+  applicationReferenceNumber?: string | null;
   vehiclePlate: string;
   vehicleMakeModel?: string | null;
   previousInspectionExpiryDate: string;
@@ -59,7 +59,10 @@ export class PaymentPdfService {
       rows: [
         ['Invoice number', data.invoiceNumber],
         ['Issued date', data.issuedDate],
-        ['Application reference', data.applicationReferenceNumber],
+        ...optionalRow(
+          'Application reference',
+          data.applicationReferenceNumber,
+        ),
         ['Vehicle plate', data.vehiclePlate],
         ...optionalRow('Vehicle', data.vehicleMakeModel),
         ['Previous inspection expiry date', data.previousInspectionExpiryDate],

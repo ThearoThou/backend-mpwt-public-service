@@ -13,7 +13,13 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
-import { ApplicationWorkflowService } from './application-workflow.service';
+import {
+  ApplicationWorkflowService,
+  UNFINISHED_APPLICATION_STATUSES,
+} from './application-workflow.service';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentMethod } from '../payments/enums/payment-method.enum';
+import { PaymentStatus } from '../payments/enums/payment-status.enum';
 
 const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_CITIZEN_ID = '22222222-2222-4222-8222-222222222222';
@@ -128,6 +134,45 @@ describe('ApplicationWorkflowService', () => {
     });
   });
 
+  it.each([
+    [31, ApiErrorCode.VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL],
+    [30, undefined],
+    [1, undefined],
+    [0, undefined],
+    [-1, undefined],
+  ])(
+    'applies the Cambodia-local renewal boundary at %i days until expiry',
+    async (daysUntilExpiry, expectedErrorCode) => {
+      const fixture = createFixture();
+      fixture.manager.query.mockResolvedValue([{ daysUntilExpiry }]);
+      const service = new ApplicationWorkflowService(
+        fixture.dataSource as unknown as DataSource,
+        preferredSchedulingStub() as never,
+      );
+
+      if (expectedErrorCode !== undefined) {
+        await expect(
+          service.createDraft(CITIZEN_ID, VEHICLE_ID),
+        ).rejects.toMatchObject({
+          code: expectedErrorCode,
+          status: HttpStatus.CONFLICT,
+        });
+        expect(fixture.applications.create).not.toHaveBeenCalled();
+        return;
+      }
+
+      await expect(
+        service.createDraft(CITIZEN_ID, VEHICLE_ID),
+      ).resolves.toMatchObject({
+        status: ApplicationStatus.DRAFT,
+      });
+      expect(fixture.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('Asia/Phnom_Penh'),
+        ['2027-01-01'],
+      );
+    },
+  );
+
   it('maps only the unfinished-application unique conflict', async () => {
     const fixture = createFixture();
     fixture.dataSource.transaction.mockRejectedValue({
@@ -152,6 +197,12 @@ describe('ApplicationWorkflowService', () => {
     fixture.dataSource.transaction.mockRejectedValue(unrelatedUniqueError);
     await expect(service.createDraft(CITIZEN_ID, VEHICLE_ID)).rejects.toBe(
       unrelatedUniqueError,
+    );
+  });
+
+  it('does not treat EXPIRED as an unfinished application', () => {
+    expect(UNFINISHED_APPLICATION_STATUSES).not.toContain(
+      ApplicationStatus.EXPIRED,
     );
   });
 
@@ -263,7 +314,7 @@ describe('ApplicationWorkflowService.submit', () => {
     expect(fixture.history.save).not.toHaveBeenCalled();
   });
 
-  it('requires a complete preferred inspection station and date before submission', async () => {
+  it('requires a preferred inspection date before submission', async () => {
     const fixture = createSubmitFixture({
       preferredInspectionStationId: null,
       preferredInspectionDate: null,
@@ -276,28 +327,58 @@ describe('ApplicationWorkflowService.submit', () => {
       status: HttpStatus.CONFLICT,
     });
     expect(
-      fixture.preferredScheduling.validatePreferredDateWithManager,
+      fixture.preferredScheduling.validatePreferredDateForSubmission,
     ).not.toHaveBeenCalled();
     expect(fixture.applications.save).not.toHaveBeenCalled();
     expect(fixture.history.save).not.toHaveBeenCalled();
   });
 
-  it('revalidates the selected station and date before submission without reserving capacity', async () => {
+  it('submits when the required preferred date has no station preference', async () => {
+    const fixture = createSubmitFixture({ preferredInspectionStationId: null });
+
+    await expect(
+      fixture.service.submit(CITIZEN_ID, 'application-id'),
+    ).resolves.toMatchObject({ status: ApplicationStatus.SUBMITTED });
+    expect(
+      fixture.preferredScheduling.validateOptionalStationWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, null);
+  });
+
+  it('validates the selected date against the submission instant without reserving capacity', async () => {
     const fixture = createSubmitFixture();
 
     await fixture.service.submit(CITIZEN_ID, 'application-id');
 
     expect(
-      fixture.preferredScheduling.validatePreferredDateWithManager,
-    ).toHaveBeenCalledWith(fixture.manager, 'station-id', '2026-08-12');
+      fixture.preferredScheduling.validatePreferredDateForSubmission,
+    ).toHaveBeenCalledWith('2026-08-12', expect.any(Date));
+    expect(
+      fixture.preferredScheduling.validateOptionalStationWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, 'station-id');
     expect(fixture.application).not.toHaveProperty('reservedCount');
   });
 
-  it('keeps the application DRAFT when the selected station date is no longer available', async () => {
+  it('requires a pending pay-at-station invoice before submission', async () => {
     const fixture = createSubmitFixture();
-    const unavailable = new Error('date is full');
-    fixture.preferredScheduling.validatePreferredDateWithManager.mockRejectedValue(
-      unavailable,
+    fixture.payments.findOne.mockResolvedValue(null);
+
+    await expect(
+      fixture.service.submit(CITIZEN_ID, 'application-id'),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.PAYMENT_STEP_FOUR_REQUIRED,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.applications.save).not.toHaveBeenCalled();
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
+  it('keeps the application DRAFT when the preferred date is outside the submission period', async () => {
+    const fixture = createSubmitFixture();
+    const unavailable = new Error('date is outside the inspection period');
+    fixture.preferredScheduling.validatePreferredDateForSubmission.mockImplementation(
+      () => {
+        throw unavailable;
+      },
     );
 
     await expect(
@@ -365,6 +446,23 @@ describe('ApplicationWorkflowService.submit', () => {
     );
     expect(fixture.manager.getRepository).toHaveBeenCalledWith(
       RenewalApplicationStatusHistory,
+    );
+  });
+
+  it('creates an applicant snapshot when the citizen has no English name', async () => {
+    const fixture = createSubmitFixture();
+    fixture.profiles.findOne.mockResolvedValue({
+      userId: CITIZEN_ID,
+      nameKh: 'អ្នកសាកល្បង',
+      nameEn: null,
+      nationalIdNumber: null,
+      address: null,
+    });
+
+    await fixture.service.submit(CITIZEN_ID, 'application-id');
+
+    expect(fixture.application.applicantSnapshot).toEqual(
+      expect.objectContaining({ nameKh: 'អ្នកសាកល្បង', nameEn: null }),
     );
   });
 
@@ -779,6 +877,13 @@ function createSubmitFixture(
     create: jest.fn((input: Record<string, unknown>) => input),
     save: jest.fn().mockResolvedValue(undefined),
   };
+  const payments = {
+    findOne: jest.fn().mockResolvedValue({
+      applicationId: 'application-id',
+      method: PaymentMethod.PAY_AT_STATION,
+      status: PaymentStatus.PENDING,
+    }),
+  };
   const manager = {
     getRepository: jest.fn((entity) => {
       if (entity === RenewalApplication) return applications;
@@ -786,9 +891,11 @@ function createSubmitFixture(
       if (entity === User) return users;
       if (entity === CitizenProfile) return profiles;
       if (entity === Vehicle) return vehicles;
+      if (entity === Payment) return payments;
       if (entity === RenewalApplicationStatusHistory) return history;
       throw new Error('Unexpected repository');
     }),
+    query: jest.fn().mockResolvedValue([{ daysUntilExpiry: 30 }]),
   };
   const dataSource = {
     transaction: jest.fn(
@@ -806,6 +913,7 @@ function createSubmitFixture(
     history,
     manager,
     profiles,
+    payments,
     preferredScheduling,
     service: new ApplicationWorkflowService(
       dataSource as unknown as DataSource,
@@ -816,7 +924,8 @@ function createSubmitFixture(
 
 function preferredSchedulingStub() {
   return {
-    validatePreferredDateWithManager: jest.fn().mockResolvedValue(undefined),
+    validatePreferredDateForSubmission: jest.fn(),
+    validateOptionalStationWithManager: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -961,6 +1070,7 @@ function createFixture() {
       if (entity === RenewalApplication) return applications;
       return history;
     }),
+    query: jest.fn().mockResolvedValue([{ daysUntilExpiry: 30 }]),
   };
   const dataSource = {
     transaction: jest.fn(
@@ -980,5 +1090,6 @@ function vehicle(linkedCitizenId: string) {
     inspectionCategoryId: '44444444-4444-4444-8444-444444444444',
     classificationVerifiedAt: new Date('2026-08-01T00:00:00.000Z'),
     classificationVerifiedBy: '55555555-5555-4555-8555-555555555555',
+    inspectionExpiryDate: '2027-01-01',
   };
 }

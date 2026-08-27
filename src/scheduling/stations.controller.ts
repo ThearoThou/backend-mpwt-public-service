@@ -47,6 +47,10 @@ export class StationsController {
     );
   }
   @Get(':stationId/preferred-dates')
+  /**
+   * @deprecated New preference creation is date-first and does not call this
+   * station-specific legacy availability endpoint.
+   */
   async listPreferredDates(
     @Param('stationId', new ParseUUIDPipe({ version: '4' })) stationId: string,
   ) {

@@ -14,6 +14,7 @@ import { Appointment } from '../scheduling/entities/appointment.entity';
 import { AppointmentSlot } from '../scheduling/entities/appointment-slot.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStation } from '../scheduling/entities/inspection-station.entity';
+import { InspectionServiceClosure } from '../scheduling/entities/inspection-service-closure.entity';
 import { Sticker } from '../stickers/entities/sticker.entity';
 import { CitizenProfile } from '../users/entities/citizen-profile.entity';
 import { User } from '../users/entities/user.entity';
@@ -32,6 +33,7 @@ export const databaseEntities = [
   RenewalApplicationStatusHistory,
   ApplicationDocument,
   InspectionStation,
+  InspectionServiceClosure,
   InspectionStationDailyCapacity,
   AppointmentSlot,
   Appointment,

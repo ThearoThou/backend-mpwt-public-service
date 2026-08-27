@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 
-import { HttpStatus, Logger } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
@@ -13,7 +13,6 @@ import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
-import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 
 const ADMIN_ID = '11111111-1111-4111-8111-111111111111';
 const APPLICATION_ID = '22222222-2222-4222-8222-222222222222';
@@ -228,7 +227,7 @@ describe('AdminApplicationReviewService', () => {
     },
   );
 
-  it('passes review only by reserving daily capacity, creating a daily appointment, and approving in one transaction', async () => {
+  it('passes review without reserving capacity or creating an appointment', async () => {
     const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
 
     await expect(
@@ -241,24 +240,10 @@ describe('AdminApplicationReviewService', () => {
     });
     expect(
       fixture.dailyCapacities.reserveDailyCapacityWithManager,
-    ).toHaveBeenCalledWith(fixture.manager, 'station-id', '2026-08-12');
-    expect(fixture.appointments.create).toHaveBeenCalledWith({
-      applicationId: APPLICATION_ID,
-      slotId: null,
-      dailyCapacity: fixture.reservedDailyCapacity,
-      status: AppointmentStatus.SCHEDULED,
-      completedAt: null,
-      cancelledAt: null,
-      cancelledByUserId: null,
-      cancellationReason: null,
-      noShowMarkedAt: null,
-      noShowMarkedByUserId: null,
-    });
-    expect(fixture.appointments.save).toHaveBeenCalledTimes(1);
+    ).not.toHaveBeenCalled();
+    expect(fixture.appointments.save).not.toHaveBeenCalled();
     expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
-    expect(fixture.payments.initializePayment).toHaveBeenCalledWith(
-      APPLICATION_ID,
-    );
+    expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
     expect(fixture.application.preferredInspectionStationId).toBe('station-id');
     expect(fixture.application.preferredInspectionDate).toBe('2026-08-12');
     expect(fixture.history.create).toHaveBeenCalledWith({
@@ -277,20 +262,18 @@ describe('AdminApplicationReviewService', () => {
     'today',
     'past date',
   ])(
-    'uses appointment selection fallback when reservation finds %s',
+    'does not use an appointment-selection fallback when legacy capacity is %s',
     async () => {
       const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
-      fixture.dailyCapacities.reserveDailyCapacityWithManager.mockResolvedValue(
-        null,
-      );
-
       await expect(
         fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
       ).resolves.toMatchObject({
-        status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+        status: ApplicationStatus.APPROVED,
       });
       expect(fixture.appointments.save).not.toHaveBeenCalled();
-      expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
+      expect(
+        fixture.dailyCapacities.reserveDailyCapacityWithManager,
+      ).not.toHaveBeenCalled();
       expect(fixture.application.preferredInspectionStationId).toBe(
         'station-id',
       );
@@ -298,7 +281,7 @@ describe('AdminApplicationReviewService', () => {
       expect(fixture.history.create).toHaveBeenCalledWith({
         applicationId: APPLICATION_ID,
         previousStatus: ApplicationStatus.UNDER_REVIEW,
-        newStatus: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
+        newStatus: ApplicationStatus.APPROVED,
         changedByUserId: ADMIN_ID,
       });
     },
@@ -327,24 +310,12 @@ describe('AdminApplicationReviewService', () => {
     expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
   });
 
-  it('keeps the committed review-pass response when payment initialization fails', async () => {
+  it('does not initialize another payment on review pass', async () => {
     const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
-    const loggerError = jest
-      .spyOn(Logger.prototype, 'error')
-      .mockImplementation(() => undefined);
-    fixture.payments.initializePayment.mockRejectedValue(
-      new Error('invoice generation failed'),
-    );
-
     await expect(
       fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
     ).resolves.toMatchObject({ status: ApplicationStatus.APPROVED });
-    expect(fixture.payments.initializePayment).toHaveBeenCalledTimes(1);
-    expect(loggerError).toHaveBeenCalledWith(
-      expect.stringContaining(APPLICATION_ID),
-      expect.any(String),
-    );
-    loggerError.mockRestore();
+    expect(fixture.payments.initializePayment).not.toHaveBeenCalled();
   });
 
   it('fails safely for a corrupted UNDER_REVIEW application without a complete preference pair', async () => {
@@ -367,17 +338,12 @@ describe('AdminApplicationReviewService', () => {
     expect(fixture.applications.save).not.toHaveBeenCalled();
   });
 
-  it('does not proceed to an application status change when appointment creation fails', async () => {
+  it('does not create an appointment while passing review', async () => {
     const fixture = createFixture({ status: ApplicationStatus.UNDER_REVIEW });
-    const failure = new Error('appointment insert failed');
-    fixture.appointments.save.mockRejectedValue(failure);
-
     await expect(
       fixture.service.passReview(ADMIN_ID, APPLICATION_ID),
-    ).rejects.toBe(failure);
-    expect(fixture.application.status).toBe(ApplicationStatus.UNDER_REVIEW);
-    expect(fixture.applications.save).not.toHaveBeenCalled();
-    expect(fixture.history.save).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ status: ApplicationStatus.APPROVED });
+    expect(fixture.appointments.save).not.toHaveBeenCalled();
   });
 });
 
@@ -474,8 +440,6 @@ function createFixture(overrides: Record<string, unknown> = {}) {
   return {
     service: new AdminApplicationReviewService(
       dataSource as unknown as DataSource,
-      dailyCapacities as never,
-      payments as never,
     ),
     dataSource,
     manager,

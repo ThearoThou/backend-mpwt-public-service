@@ -4,13 +4,19 @@ import { HttpStatus } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
+import { DocumentStatus } from '../applications/enums/document-status.enum';
+import { DocumentType } from '../applications/enums/document-type.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { FilesService } from '../files/files.service';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
+import { CitizenProfile } from '../users/entities/citizen-profile.entity';
+import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { VehicleClass } from '../vehicles/enums/vehicle-class.enum';
 import { Payment } from './entities/payment.entity';
 import { PaymentStatusHistory } from './entities/payment-status-history.entity';
 import { PaymentMethod } from './enums/payment-method.enum';
@@ -50,7 +56,16 @@ describe('PaymentsService payment initialization', () => {
     });
     expect(fixture.query).toHaveBeenCalledWith(
       expect.stringContaining('Asia/Phnom_Penh'),
-      ['2026-08-01', '25000.00', '5000.00'],
+      [
+        '2026-08-01',
+        '25000.00',
+        '5000.00',
+        VehicleClass.LIGHT,
+        30,
+        731,
+        500,
+        2000,
+      ],
     );
     expect(fixture.paymentPdf.generateInvoice).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -59,8 +74,8 @@ describe('PaymentsService payment initialization', () => {
         serviceFeeKhr: '5000.00',
         baseAmount: '30000.00',
         lateDays: 10,
-        lateFee: '5000.00',
-        totalAmount: '35000.00',
+        lateFee: '0.00',
+        totalAmount: '30000.00',
         currency: 'KHR',
         invoiceNumber: expect.stringMatching(/^INV-20260812-\d{6}$/) as unknown,
       }),
@@ -80,8 +95,8 @@ describe('PaymentsService payment initialization', () => {
         serviceFeeKhr: '5000.00',
         baseAmount: '30000.00',
         lateDays: 10,
-        lateFee: '5000.00',
-        totalAmount: '35000.00',
+        lateFee: '0.00',
+        totalAmount: '30000.00',
         currency: 'KHR',
         invoiceFileKey: 'payment-artifacts/application-id/invoice/invoice.pdf',
         receiptFileKey: null,
@@ -169,19 +184,183 @@ describe('PaymentsService payment initialization', () => {
       serviceFeeKhr: '5000.00',
       baseAmount: '30000.00',
       lateDays: 10,
-      lateFee: '5000.00',
-      totalAmount: '35000.00',
+      lateFee: '0.00',
+      totalAmount: '30000.00',
       currency: 'KHR',
     });
     expect(fixture.query).toHaveBeenCalledWith(
       expect.stringContaining('Asia/Phnom_Penh'),
-      ['2026-08-01', '25000.00', '5000.00'],
+      [
+        '2026-08-01',
+        '25000.00',
+        '5000.00',
+        VehicleClass.LIGHT,
+        30,
+        731,
+        500,
+        2000,
+      ],
     );
     expect(fixture.paymentRepository.create).not.toHaveBeenCalled();
     expect(fixture.paymentRepository.save).not.toHaveBeenCalled();
     expect(fixture.appointmentRepository.find).not.toHaveBeenCalled();
     expect(fixture.files.savePaymentArtifact).not.toHaveBeenCalled();
     expect(draft.status).toBe(ApplicationStatus.DRAFT);
+  });
+
+  it('uses the stored HEAVY vehicle class in the shared Cambodia-local late-fee calculation', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue(
+      application(ApplicationStatus.DRAFT, CITIZEN_ID),
+    );
+    fixture.vehicleRepository.findOne.mockResolvedValue(
+      vehicle({ vehicleClass: VehicleClass.HEAVY }),
+    );
+
+    await fixture.service.getCitizenFeeEstimate(CITIZEN_ID, APPLICATION_ID);
+
+    const [query, values] = fixture.query.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain('<= $5::integer THEN 0');
+    expect(query).toContain("WHEN $4::text = 'LIGHT'");
+    expect(query).toContain('* $7::integer');
+    expect(query).toContain('* $8::integer');
+    expect(values).toEqual([
+      '2026-08-01',
+      '25000.00',
+      '5000.00',
+      VehicleClass.HEAVY,
+      30,
+      731,
+      500,
+      2000,
+    ]);
+  });
+
+  it('initializes one pending station-payment invoice for an owned draft without reserving capacity', async () => {
+    const fixture = createFixture();
+    const draft = {
+      ...application(ApplicationStatus.DRAFT, CITIZEN_ID),
+      referenceNumber: null,
+    };
+    fixture.applicationRepository.findOne.mockResolvedValue(draft);
+
+    const result = await fixture.service.initializeCitizenDraftPayment(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+
+    expect(
+      fixture.preferredScheduling.validatePreferredDate,
+    ).toHaveBeenCalledWith('2026-08-12');
+    expect(
+      fixture.preferredScheduling.validateOptionalStationWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, 'station-id');
+    expect(fixture.appointmentRepository.find).not.toHaveBeenCalled();
+    expect(fixture.paymentRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: PaymentMethod.PAY_AT_STATION,
+        status: PaymentStatus.PENDING,
+        inspectionFeeKhr: '25000.00',
+        serviceFeeKhr: '5000.00',
+        lateDays: 10,
+        totalAmount: '30000.00',
+      }),
+    );
+    expect(result).toMatchObject({
+      applicationId: APPLICATION_ID,
+      applicationReferenceNumber: null,
+      method: PaymentMethod.PAY_AT_STATION,
+      status: PaymentStatus.PENDING,
+      preferredInspectionDate: '2026-08-12',
+      vehicle: {
+        registrationNumber: 'REG-001',
+        chassisNumber: 'CHASSIS-001',
+      },
+    });
+    expect(result.invoiceNumber).toMatch(/^INV-\d{8}-\d{6}$/);
+    expect(draft.status).toBe(ApplicationStatus.DRAFT);
+  });
+
+  it('initializes a draft invoice when the preferred station is omitted', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue({
+      ...application(ApplicationStatus.DRAFT, CITIZEN_ID),
+      preferredInspectionStationId: null,
+    });
+
+    await expect(
+      fixture.service.initializeCitizenDraftPayment(CITIZEN_ID, APPLICATION_ID),
+    ).resolves.toMatchObject({ method: PaymentMethod.PAY_AT_STATION });
+    expect(
+      fixture.preferredScheduling.validateOptionalStationWithManager,
+    ).toHaveBeenCalledWith(fixture.manager, null);
+  });
+
+  it('returns an invoice applicant with a null English name when the citizen only has a Khmer name', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue({
+      ...application(ApplicationStatus.DRAFT, CITIZEN_ID),
+      referenceNumber: null,
+    });
+    fixture.profileRepository.findOne.mockResolvedValue({
+      userId: CITIZEN_ID,
+      nameKh: 'ពលរដ្ឋ',
+      nameEn: null,
+    });
+
+    const result = await fixture.service.initializeCitizenDraftPayment(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+
+    expect(result.applicant).toEqual({
+      nameKh: 'ពលរដ្ឋ',
+      nameEn: null,
+      phone: '012345678',
+    });
+  });
+
+  it('restores an existing draft invoice without creating another payment or invoice number', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue(
+      application(ApplicationStatus.DRAFT, CITIZEN_ID),
+    );
+    const existing = payment();
+    fixture.paymentRepository.findOne.mockResolvedValue(existing);
+
+    await expect(
+      fixture.service.initializeCitizenDraftPayment(CITIZEN_ID, APPLICATION_ID),
+    ).resolves.toMatchObject({
+      id: PAYMENT_ID,
+      invoiceNumber: existing.invoiceNumber,
+    });
+    expect(fixture.paymentPdf.generateInvoice).not.toHaveBeenCalled();
+    expect(fixture.paymentRepository.save).not.toHaveBeenCalled();
+    expect(fixture.appointmentRepository.find).not.toHaveBeenCalled();
+  });
+
+  it('rejects another citizen and non-draft applications before initialization', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue(
+      application(ApplicationStatus.DRAFT, OTHER_CITIZEN_ID),
+    );
+
+    await expect(
+      fixture.service.initializeCitizenDraftPayment(CITIZEN_ID, APPLICATION_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.RESOURCE_NOT_OWNED,
+      status: HttpStatus.FORBIDDEN,
+    });
+
+    fixture.applicationRepository.findOne.mockResolvedValue(
+      application(ApplicationStatus.SUBMITTED, CITIZEN_ID),
+    );
+    await expect(
+      fixture.service.initializeCitizenDraftPayment(CITIZEN_ID, APPLICATION_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
   });
 
   it('returns a zero late fee when the shared calculator reports no late days', async () => {
@@ -351,6 +530,28 @@ function createFixture() {
   const appointmentRepository = {
     find: jest.fn().mockResolvedValue([appointment()]),
   };
+  const documentRepository = {
+    find: jest.fn().mockResolvedValue([
+      ...Object.values(DocumentType).map((documentType) => ({
+        applicationId: APPLICATION_ID,
+        documentType,
+        isCurrent: true,
+        status: DocumentStatus.PENDING,
+      })),
+    ]),
+  };
+  const userRepository = {
+    findOne: jest
+      .fn()
+      .mockResolvedValue({ id: CITIZEN_ID, phone: '012345678' }),
+  };
+  const profileRepository = {
+    findOne: jest.fn().mockResolvedValue({
+      userId: CITIZEN_ID,
+      nameKh: 'Citizen Khmer',
+      nameEn: 'Citizen English',
+    }),
+  };
   const vehicleRepository = { findOne: jest.fn().mockResolvedValue(vehicle()) };
   const categoryRepository = {
     findOne: jest.fn().mockResolvedValue(category()),
@@ -363,8 +564,8 @@ function createFixture() {
       inspectionFeeKhr: '25000.00',
       serviceFeeKhr: '5000.00',
       baseAmount: '30000.00',
-      lateFee: '5000.00',
-      totalAmount: '35000.00',
+      lateFee: '0.00',
+      totalAmount: '30000.00',
     },
   ]);
   const manager = {
@@ -372,6 +573,9 @@ function createFixture() {
       if (target === RenewalApplication) return applicationRepository;
       if (target === Payment) return paymentRepository;
       if (target === Appointment) return appointmentRepository;
+      if (target === ApplicationDocument) return documentRepository;
+      if (target === User) return userRepository;
+      if (target === CitizenProfile) return profileRepository;
       if (target === Vehicle) return vehicleRepository;
       if (target === InspectionVehicleCategory) return categoryRepository;
       throw new Error('Unexpected repository');
@@ -394,6 +598,10 @@ function createFixture() {
   const paymentPdf = {
     generateInvoice: jest.fn().mockResolvedValue(Buffer.from('%PDF-unit')),
   };
+  const preferredScheduling = {
+    validatePreferredDate: jest.fn(),
+    validateOptionalStationWithManager: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     service: new PaymentsService(
@@ -403,16 +611,21 @@ function createFixture() {
       {} as Repository<RenewalApplication>,
       files as unknown as FilesService,
       paymentPdf as unknown as PaymentPdfService,
+      preferredScheduling as never,
     ),
     directPayments,
     query,
     applicationRepository,
     paymentRepository,
     appointmentRepository,
+    documentRepository,
+    profileRepository,
     vehicleRepository,
     categoryRepository,
     files,
+    manager,
     paymentPdf,
+    preferredScheduling,
     transaction,
   };
 }
@@ -427,6 +640,8 @@ function application(
     vehicleId: 'vehicle-id',
     referenceNumber: 'VIR-20260812-ABCDEF123456',
     status,
+    preferredInspectionStationId: 'station-id',
+    preferredInspectionDate: '2026-08-12',
   } as RenewalApplication;
 }
 
@@ -441,11 +656,16 @@ function appointment(): Appointment {
 function vehicle(overrides: Partial<Vehicle> = {}): Vehicle {
   return {
     id: 'vehicle-id',
+    linkedCitizenId: CITIZEN_ID,
+    registrationNumber: 'REG-001',
     plateNumber: '2A-3146',
     make: 'Toyota',
     model: 'RAV4',
+    manufactureYear: 2022,
+    chassisNumber: 'CHASSIS-001',
     inspectionExpiryDate: '2026-08-01',
     inspectionCategoryId: 'category-id',
+    vehicleClass: VehicleClass.LIGHT,
     ...overrides,
   } as Vehicle;
 }

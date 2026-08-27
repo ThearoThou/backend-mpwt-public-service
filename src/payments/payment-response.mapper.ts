@@ -9,6 +9,8 @@ export interface PaymentResponse {
   receiptNumber: string | null;
   method: PaymentMethod;
   status: PaymentStatus;
+  inspectionFeeKhr: string;
+  serviceFeeKhr: string;
   baseAmount: string;
   previousInspectionExpiryDate: string;
   lateDays: number;
@@ -40,6 +42,8 @@ export function mapPayment(payment: Payment): PaymentResponse {
     receiptNumber: payment.receiptNumber,
     method: payment.method,
     status: payment.status,
+    inspectionFeeKhr: payment.inspectionFeeKhr,
+    serviceFeeKhr: payment.serviceFeeKhr,
     baseAmount: payment.baseAmount,
     previousInspectionExpiryDate: payment.previousInspectionExpiryDate,
     lateDays: payment.lateDays,

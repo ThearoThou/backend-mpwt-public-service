@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { FilesModule } from '../files/files.module';
 import { CommonAuthModule } from '../common/auth/common-auth.module';
+import { SchedulingModule } from '../scheduling/scheduling.module';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
 import { User } from '../users/entities/user.entity';
 import { Payment } from './entities/payment.entity';
@@ -18,6 +19,7 @@ import { PaymentsService } from './payments.service';
   imports: [
     FilesModule,
     CommonAuthModule,
+    SchedulingModule,
     TypeOrmModule.forFeature([
       Payment,
       PaymentStatusHistory,
