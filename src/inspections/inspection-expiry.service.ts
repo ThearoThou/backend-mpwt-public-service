@@ -4,6 +4,8 @@ import { RenewalApplicationStatusHistory } from '../applications/entities/renewa
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { DomainException } from '../common/errors/domain.exception';
+import { calendarDayDifference } from '../common/dates/calendar-date';
+import { inspectionPolicy } from '../config/inspection-policy';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
@@ -14,6 +16,12 @@ import { InspectionStatus } from './enums/inspection-status.enum';
 
 const BATCH_SIZE = 100;
 type ProcessResult = { scanned: number; processed: number; skipped: number };
+const INITIAL_INSPECTION_EXPIRY_STATUSES: readonly ApplicationStatus[] = [
+  ApplicationStatus.SUBMITTED,
+  ApplicationStatus.UNDER_REVIEW,
+  ApplicationStatus.CORRECTION_REQUIRED,
+  ApplicationStatus.APPROVED,
+];
 
 @Injectable()
 export class InspectionExpiryService {
@@ -23,16 +31,57 @@ export class InspectionExpiryService {
   ) {}
 
   async processDueActions(): Promise<{
+    initialInspectionExpiries: ProcessResult;
     noShows: ProcessResult;
     noShowRebookingExpiries: ProcessResult;
     reinspectionDeadlineExpiries: ProcessResult;
   }> {
     return {
+      // This rule is intentionally independent of legacy appointment-based
+      // workflows, and runs first so they cannot change an overdue renewal
+      // application to a different terminal state.
+      initialInspectionExpiries: await this.processInitialInspectionExpiries(),
       noShows: await this.processPastScheduledNoShows(),
       noShowRebookingExpiries: await this.processNoShowRebookingExpiries(),
       reinspectionDeadlineExpiries:
         await this.processReinspectionDeadlineExpiries(),
     };
+  }
+
+  async processInitialInspectionExpiries(): Promise<ProcessResult> {
+    const ids = await this.dataSource
+      .getRepository(RenewalApplication)
+      .createQueryBuilder('application')
+      .select('application."id"', 'id')
+      .where('application."submitted_at" IS NOT NULL')
+      .andWhere('application."status" IN (:...statuses)', {
+        statuses: INITIAL_INSPECTION_EXPIRY_STATUSES,
+      })
+      .andWhere(
+        `((application."submitted_at" AT TIME ZONE 'Asia/Phnom_Penh')::date + (:periodDays - 1)) < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date`,
+        {
+          periodDays: inspectionPolicy.application.initialInspectionPeriodDays,
+        },
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1 FROM "inspections" first_attempt
+          WHERE first_attempt."application_id" = application."id"
+            AND first_attempt."attempt_number" = 1
+            AND first_attempt."status" = :completed
+            AND first_attempt."result" IS NOT NULL
+            AND first_attempt."completed_at" IS NOT NULL
+        )`,
+        { completed: InspectionStatus.COMPLETED },
+      )
+      .orderBy('application."submitted_at"', 'ASC')
+      .addOrderBy('application."id"', 'ASC')
+      .take(BATCH_SIZE)
+      .getRawMany<{ id: string }>();
+    return this.process(
+      ids.map(({ id }) => id),
+      (id) => this.expireInitialInspection(id),
+    );
   }
 
   async processPastScheduledNoShows(): Promise<ProcessResult> {
@@ -212,6 +261,60 @@ export class InspectionExpiryService {
     });
   }
 
+  private async expireInitialInspection(
+    applicationId: string,
+  ): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const application = await manager
+        .getRepository(RenewalApplication)
+        .findOne({
+          where: { id: applicationId },
+          lock: { mode: 'pessimistic_write' },
+        });
+      if (
+        application === null ||
+        !INITIAL_INSPECTION_EXPIRY_STATUSES.includes(application.status) ||
+        application.submittedAt === null
+      ) {
+        return false;
+      }
+      const [clock] = await manager.query<
+        { today: string; recordedAt: Date; submittedAtDate: string | null }[]
+      >(
+        `SELECT now() AS "recordedAt", (now() AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "today", ($1::timestamptz AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "submittedAtDate"`,
+        [application.submittedAt],
+      );
+      if (clock === undefined || clock.submittedAtDate === null)
+        throw new Error('Initial inspection expiry clock unavailable');
+      if (!isInitialInspectionPeriodOverdue(clock.submittedAtDate, clock.today))
+        return false;
+
+      const firstAttempt = await manager.getRepository(Inspection).findOne({
+        where: {
+          applicationId: application.id,
+          attemptNumber: 1,
+          status: InspectionStatus.COMPLETED,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (
+        firstAttempt !== null &&
+        firstAttempt.result !== null &&
+        firstAttempt.completedAt !== null
+      ) {
+        return false;
+      }
+      await this.transition(
+        manager,
+        application,
+        ApplicationStatus.EXPIRED,
+        'INITIAL_INSPECTION_PERIOD_EXPIRED',
+        clock.recordedAt,
+      );
+      return true;
+    });
+  }
+
   private async expireReinspection(applicationId: string): Promise<boolean> {
     return this.dataSource.transaction(async (manager) => {
       const state = await this.lockState(manager, applicationId);
@@ -310,6 +413,7 @@ export class InspectionExpiryService {
     reason: string,
     recordedAt: Date,
   ): Promise<void> {
+    const previousStatus = application.status;
     application.status = status;
     if (status === ApplicationStatus.CANCELLED) {
       application.cancelledAt = recordedAt;
@@ -321,7 +425,7 @@ export class InspectionExpiryService {
     await history.save(
       history.create({
         applicationId: application.id,
-        previousStatus: ApplicationStatus.APPROVED,
+        previousStatus,
         newStatus: status,
         changedByUserId: null,
         reason,
@@ -342,6 +446,15 @@ function plus30(date: string): string {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + 30);
   return value.toISOString().slice(0, 10);
+}
+function isInitialInspectionPeriodOverdue(
+  submittedAtDate: string,
+  today: string,
+): boolean {
+  return (
+    calendarDayDifference(submittedAtDate, today) >=
+    inspectionPolicy.application.initialInspectionPeriodDays
+  );
 }
 function cambodiaDate(value: Date): string {
   return new Intl.DateTimeFormat('en-CA', {
