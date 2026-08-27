@@ -86,6 +86,21 @@ export class VehiclesService {
       { citizenId },
     );
 
+    if (input.search !== undefined) {
+      this.vehicleSearchTokens(input.search).forEach((token, index) => {
+        const textParameter = `searchText${index}`;
+        const yearParameter = `searchYear${index}`;
+
+        query.andWhere(
+          `(vehicle.plateNumber ILIKE :${textParameter} OR vehicle.registrationNumber ILIKE :${textParameter} OR vehicle.make ILIKE :${textParameter} OR vehicle.model ILIKE :${textParameter} OR CAST(vehicle.manufactureYear AS TEXT) = :${yearParameter})`,
+          {
+            [textParameter]: `%${token}%`,
+            [yearParameter]: token,
+          },
+        );
+      });
+    }
+
     if (input.registrationNumber !== undefined) {
       query.andWhere('vehicle.registrationNumber = :registrationNumber', {
         registrationNumber: normalizeVehicleIdentifier(
@@ -235,6 +250,10 @@ export class VehiclesService {
         'vehicle.createdAt',
         'vehicle.updatedAt',
       ]);
+  }
+
+  private vehicleSearchTokens(search: string): string[] {
+    return search.trim().split(/\s+/).filter(Boolean);
   }
 
   private async executeList(

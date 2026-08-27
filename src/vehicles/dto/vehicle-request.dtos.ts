@@ -240,6 +240,12 @@ class VehiclePaginationQueryDto extends BasePaginationQueryDto {
 export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  @Transform(trimString)
+  search?: string;
+
+  @IsOptional()
+  @IsString()
   @IsNotEmpty()
   @MaxLength(50)
   @Transform(canonicalizeVehicleIdentifierValue)

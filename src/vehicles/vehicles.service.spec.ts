@@ -249,6 +249,128 @@ describe('VehiclesService', () => {
     );
   });
 
+  it.each([
+    ['2021', { searchText0: '%2021%', searchYear0: '2021' }],
+    ['Toyota', { searchText0: '%Toyota%', searchYear0: 'Toyota' }],
+    ['3AH-8724', { searchText0: '%3AH-8724%', searchYear0: '3AH-8724' }],
+    [
+      'REG-KD-2021-8724',
+      { searchText0: '%REG-KD-2021-8724%', searchYear0: 'REG-KD-2021-8724' },
+    ],
+  ])(
+    'searches citizen vehicles by %s before pagination',
+    async (search, parameters) => {
+      const repository = createRepository();
+      const query = createListQuery();
+      repository.createQueryBuilder.mockReturnValue(query);
+      const service = createService(repository);
+
+      await service.listCitizenVehicles(CITIZEN_ID, {
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc',
+        sortBy: 'createdAt',
+        search,
+      });
+
+      expect(query.andWhere).toHaveBeenCalledWith(
+        '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+        parameters,
+      );
+      expect(query.skip).toHaveBeenCalledWith(0);
+      expect(query.take).toHaveBeenCalledWith(20);
+    },
+  );
+
+  it.each([
+    ['Toyota 2021', '%Toyota%', 'Toyota', '%2021%', '2021'],
+    ['Hilux 2021', '%Hilux%', 'Hilux', '%2021%', '2021'],
+  ])(
+    'requires every token in a citizen vehicle search: %s',
+    async (search, firstText, firstYear, secondText, secondYear) => {
+      const repository = createRepository();
+      const query = createListQuery();
+      repository.createQueryBuilder.mockReturnValue(query);
+      const service = createService(repository);
+
+      await service.listCitizenVehicles(CITIZEN_ID, {
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc',
+        sortBy: 'createdAt',
+        search,
+      });
+
+      expect(query.andWhere).toHaveBeenNthCalledWith(
+        1,
+        'vehicle.linkedCitizenId = :citizenId',
+        { citizenId: CITIZEN_ID },
+      );
+      expect(query.andWhere).toHaveBeenNthCalledWith(
+        2,
+        '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+        { searchText0: firstText, searchYear0: firstYear },
+      );
+      expect(query.andWhere).toHaveBeenNthCalledWith(
+        3,
+        '(vehicle.plateNumber ILIKE :searchText1 OR vehicle.registrationNumber ILIKE :searchText1 OR vehicle.make ILIKE :searchText1 OR vehicle.model ILIKE :searchText1 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear1)',
+        { searchText1: secondText, searchYear1: secondYear },
+      );
+    },
+  );
+
+  it('returns empty searched pagination while retaining the authenticated citizen scope', async () => {
+    const repository = createRepository();
+    const query = createListQuery([], 0);
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    const result = await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      search: 'nonexistent',
+    });
+
+    expect(query.andWhere).toHaveBeenNthCalledWith(
+      1,
+      'vehicle.linkedCitizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
+    expect(result).toEqual({
+      data: [],
+      meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+    });
+  });
+
+  it("does not include another citizen's matching manufacture year", async () => {
+    const repository = createRepository();
+    const query = createListQuery([], 0);
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    const result = await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      search: '2021',
+    });
+
+    expect(query.andWhere).toHaveBeenNthCalledWith(
+      1,
+      'vehicle.linkedCitizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
+    expect(query.andWhere).toHaveBeenNthCalledWith(
+      2,
+      '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+      { searchText0: '%2021%', searchYear0: '2021' },
+    );
+    expect(result.data).toEqual([]);
+  });
+
   it('looks up a citizen vehicle by normalized chassis number', async () => {
     const repository = createRepository();
     const query = createListQuery();
