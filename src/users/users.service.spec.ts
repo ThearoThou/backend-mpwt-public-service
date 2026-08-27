@@ -172,6 +172,22 @@ describe('UsersService', () => {
     expect(response).not.toHaveProperty('profileImageKey');
   });
 
+  it('persists a cleared optional English name as null', async () => {
+    const profile = createCitizenProfile({ nameEn: null });
+    const profiles = {
+      findOne: jest.fn().mockResolvedValue(profile),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const service = createService({}, profiles);
+
+    await service.updateCurrentCitizenProfile(USER_ID, { nameEn: null });
+
+    expect(profiles.update).toHaveBeenCalledWith(
+      { userId: USER_ID },
+      { nameEn: null },
+    );
+  });
+
   it('returns the existing safe profile without a write when no editable fields are supplied', async () => {
     const profile = createCitizenProfile();
     const profiles = {

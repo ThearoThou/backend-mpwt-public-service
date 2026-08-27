@@ -34,7 +34,7 @@ export interface CreatePendingCitizenInput {
   email: string | null;
   passwordHash: string;
   nameKh: string;
-  nameEn: string;
+  nameEn: string | null;
   nationalIdNumber?: string;
   address?: string;
 }

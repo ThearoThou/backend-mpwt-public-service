@@ -40,6 +40,16 @@ function normalizeWhenValid(
   };
 }
 
+function normalizeOptionalEnglishName(params: { value: unknown }): unknown {
+  if (typeof params.value !== 'string') return params.value;
+  const value = params.value.trim();
+  return value === '' ? null : value;
+}
+
+function trimString(params: { value: unknown }): unknown {
+  return typeof params.value === 'string' ? params.value.trim() : params.value;
+}
+
 export class RegisterRequestDto {
   @IsString()
   @IsNotEmpty()
@@ -71,13 +81,15 @@ export class RegisterRequestDto {
   @IsNotEmpty()
   @MaxLength(150)
   @IsKhmerName()
+  @Transform(trimString)
   nameKh!: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(150)
   @IsEnglishName()
-  nameEn!: string;
+  @Transform(normalizeOptionalEnglishName)
+  nameEn?: string | null;
 
   @IsOptional()
   @IsString()

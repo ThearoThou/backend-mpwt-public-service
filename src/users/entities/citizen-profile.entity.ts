@@ -21,8 +21,8 @@ export class CitizenProfile {
   @Column({ name: 'name_kh', type: 'varchar', length: 150 })
   nameKh!: string;
 
-  @Column({ name: 'name_en', type: 'varchar', length: 150 })
-  nameEn!: string;
+  @Column({ name: 'name_en', type: 'varchar', length: 150, nullable: true })
+  nameEn!: string | null;
 
   @Column({
     name: 'national_id_number',

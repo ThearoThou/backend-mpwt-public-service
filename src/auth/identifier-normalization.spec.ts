@@ -132,4 +132,41 @@ describe('identifier normalization', () => {
       expect.arrayContaining([expect.objectContaining({ property: 'nameEn' })]),
     );
   });
+
+  it('requires a Khmer name while allowing an omitted, null, or blank English name', async () => {
+    const base = {
+      phone: '012 345 678',
+      password: 'password1',
+      nameKh: 'ណាមខ្មែរ',
+    };
+    const omittedEnglish = plainToInstance(RegisterRequestDto, base);
+    const nullEnglish = plainToInstance(RegisterRequestDto, {
+      ...base,
+      nameEn: null,
+    });
+    const blankEnglish = plainToInstance(RegisterRequestDto, {
+      ...base,
+      nameEn: '   ',
+    });
+    const missingKhmer = plainToInstance(RegisterRequestDto, {
+      ...base,
+      nameKh: undefined,
+      nameEn: 'John Smith',
+    });
+    const blankKhmer = plainToInstance(RegisterRequestDto, {
+      ...base,
+      nameKh: '   ',
+    });
+
+    await expect(validate(omittedEnglish)).resolves.toHaveLength(0);
+    await expect(validate(nullEnglish)).resolves.toHaveLength(0);
+    await expect(validate(blankEnglish)).resolves.toHaveLength(0);
+    expect(blankEnglish.nameEn).toBeNull();
+    await expect(validate(missingKhmer)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ property: 'nameKh' })]),
+    );
+    await expect(validate(blankKhmer)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ property: 'nameKh' })]),
+    );
+  });
 });

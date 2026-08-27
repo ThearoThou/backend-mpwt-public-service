@@ -19,7 +19,7 @@ export interface CitizenProfileResponse {
   id: string;
   userId: string;
   nameKh: string;
-  nameEn: string;
+  nameEn: string | null;
   nationalIdNumber: string | null;
   address: string | null;
   profileImageUrl: string | null;

@@ -86,7 +86,7 @@ export class AuthService {
             email: identifiers.email,
             passwordHash: await this.hashingService.hashSecret(input.password),
             nameKh: input.nameKh,
-            nameEn: input.nameEn,
+            nameEn: input.nameEn ?? null,
             nationalIdNumber: input.nationalIdNumber,
             address: input.address,
           },

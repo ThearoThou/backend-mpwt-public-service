@@ -7,10 +7,13 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 import {
   IsCambodianPhone,
+  IsEnglishName,
+  IsKhmerName,
   IsNormalizedEmail,
 } from '../../auth/identifier-normalization.validators';
 import {
@@ -53,20 +56,27 @@ function trimString(params: { value: unknown }): unknown {
   return typeof params.value === 'string' ? params.value.trim() : params.value;
 }
 
+function normalizeOptionalEnglishName(params: { value: unknown }): unknown {
+  if (typeof params.value !== 'string') return params.value;
+  const value = params.value.trim();
+  return value === '' ? null : value;
+}
+
 export class UpdateCitizenProfileRequestDto {
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()
   @MaxLength(150)
+  @IsKhmerName()
   @Transform(trimString)
   nameKh?: string;
 
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(150)
-  @Transform(trimString)
-  nameEn?: string;
+  @IsEnglishName()
+  @Transform(normalizeOptionalEnglishName)
+  nameEn?: string | null;
 
   @IsOptional()
   @IsString()

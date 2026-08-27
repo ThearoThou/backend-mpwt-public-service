@@ -213,6 +213,27 @@ describe('AuthService', () => {
     expect(tokens.signAccessToken).not.toHaveBeenCalled();
   });
 
+  it('registers a Khmer-only citizen with a null optional English name', async () => {
+    const pendingUser = createUser({ status: UserStatus.PENDING_VERIFICATION });
+    users.hasIdentifierConflict.mockResolvedValue(false);
+    users.createPendingCitizen.mockResolvedValue(pendingUser);
+    verificationCodes.createCode.mockResolvedValue({
+      code: '012345',
+      expiresAt: new Date(NOW.getTime() + 300_000),
+    });
+
+    await service.register({
+      phone: '012345678',
+      password: 'password1',
+      nameKh: 'ណាមខ្មែរ',
+    });
+
+    expect(users.createPendingCitizen).toHaveBeenCalledWith(
+      expect.objectContaining({ nameKh: 'ណាមខ្មែរ', nameEn: null }),
+      manager,
+    );
+  });
+
   it('maps registration phone and email unique violations to USER_IDENTIFIER_CONFLICT', async () => {
     for (const constraint of [
       'UQ_a000cca60bcf04454e727699490',
