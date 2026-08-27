@@ -27,6 +27,7 @@ import { type RenewalApplicationResponse } from './application-response.mapper';
 import type { RenewalApplicationStatusHistoryResponse } from './application-status-history-response.mapper';
 import { ApplicationWorkflowService } from './application-workflow.service';
 import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
+import { RenewAgainService } from './renew-again.service';
 import { CitizenSchedulingPreferenceRequestDto } from '../scheduling/dto/scheduling-request.dtos';
 import {
   CancelRenewalApplicationRequestDto,
@@ -50,6 +51,7 @@ export class CitizenApplicationsController {
     private readonly applicationWorkflowService: ApplicationWorkflowService,
     private readonly schedulingPreferences: CitizenSchedulingPreferenceService,
     private readonly payments: PaymentsService,
+    private readonly renewAgainService: RenewAgainService,
   ) {}
 
   @Post()
@@ -61,6 +63,20 @@ export class CitizenApplicationsController {
       await this.applicationWorkflowService.createDraft(
         actor.userId,
         input.vehicleId,
+      ),
+    );
+  }
+
+  @Post(':expiredApplicationId/renew-again')
+  async renewAgain(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('expiredApplicationId', new ParseUUIDPipe({ version: '4' }))
+    expiredApplicationId: string,
+  ): Promise<ApiDataResponse<RenewalApplicationResponse>> {
+    return createDataResponse(
+      await this.renewAgainService.renewAgain(
+        actor.userId,
+        expiredApplicationId,
       ),
     );
   }

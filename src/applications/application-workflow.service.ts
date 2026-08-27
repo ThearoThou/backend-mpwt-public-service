@@ -348,10 +348,11 @@ export class ApplicationWorkflowService {
     );
   }
 
-  private async createDraftWithManager(
+  async createDraftWithManager(
     manager: EntityManager,
     citizenId: string,
     vehicleId: string,
+    applicationId?: string,
   ): Promise<RenewalApplicationResponse> {
     const vehicles = manager.getRepository(Vehicle);
     const vehicle = await vehicles.findOne({ where: { id: vehicleId } });
@@ -394,12 +395,15 @@ export class ApplicationWorkflowService {
 
     const application = await applications.save(
       applications.create({
+        ...(applicationId === undefined ? {} : { id: applicationId }),
         citizenId,
         vehicleId,
         status: ApplicationStatus.DRAFT,
         referenceNumber: null,
         applicantSnapshot: null,
         vehicleSnapshot: null,
+        preferredInspectionDate: null,
+        preferredInspectionStationId: null,
         submittedAt: null,
       }),
     );

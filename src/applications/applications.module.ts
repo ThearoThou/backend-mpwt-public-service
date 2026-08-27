@@ -21,6 +21,7 @@ import { ApplicationWorkflowService } from './application-workflow.service';
 import { ApplicationDocumentsService } from './application-documents.service';
 import { SchedulingModule } from '../scheduling/scheduling.module';
 import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
+import { RenewAgainService } from './renew-again.service';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { CitizenSchedulingPreferenceService } from './citizen-scheduling-prefere
     ApplicationWorkflowService,
     ApplicationDocumentsService,
     CitizenSchedulingPreferenceService,
+    RenewAgainService,
   ],
 })
 export class ApplicationsModule {}

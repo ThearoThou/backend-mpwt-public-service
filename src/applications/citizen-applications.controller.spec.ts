@@ -26,6 +26,28 @@ describe('CitizenApplicationsController', () => {
     expect(workflow.createDraft).toHaveBeenCalledWith(CITIZEN_ID, VEHICLE_ID);
   });
 
+  it('forwards the authenticated citizen and expired source ID for Renew Again', async () => {
+    const renewedDraft = { id: 'new-draft', status: 'DRAFT' };
+    const renewAgain = {
+      renewAgain: jest.fn().mockResolvedValue(renewedDraft),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      renewAgain as never,
+    );
+
+    await expect(
+      controller.renewAgain(actor(), APPLICATION_ID),
+    ).resolves.toEqual({ data: renewedDraft });
+    expect(renewAgain.renewAgain).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+  });
+
   it('forwards citizen-scoped list, detail, and history requests', async () => {
     const applications = {
       listCitizenApplications: jest

@@ -13,6 +13,7 @@ import { VehicleClass } from '../vehicles/enums/vehicle-class.enum';
 import { AdminApplicationReviewService } from './admin-application-review.service';
 import { ApplicationDocumentsService } from './application-documents.service';
 import { ApplicationWorkflowService } from './application-workflow.service';
+import { RenewAgainService } from './renew-again.service';
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
@@ -28,6 +29,95 @@ const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
 const VEHICLE_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('application workflow integration', () => {
+  it('submits a renewed draft through the normal payment and snapshot flow', async () => {
+    const fixture = createFixture();
+    const workflow = new ApplicationWorkflowService(
+      fixture.dataSource as unknown as DataSource,
+      {
+        validatePreferredDateForSubmission: jest.fn(),
+        validateOptionalStationWithManager: jest.fn().mockResolvedValue(),
+      } as never,
+    );
+    const renewAgain = new RenewAgainService(
+      fixture.dataSource as unknown as DataSource,
+      fixture.filesService as FilesService,
+      workflow,
+    );
+    const source = expiredApplication();
+    const sourceBefore = structuredClone(source);
+    fixture.applications.push(source);
+    fixture.documents.push(
+      ...Object.values(DocumentType).map((documentType) =>
+        expiredSourceDocument(documentType),
+      ),
+    );
+    fixture.payments.push({
+      id: 'source-payment-id',
+      applicationId: source.id,
+      invoiceNumber: 'INV-20260701-000001',
+      method: PaymentMethod.PAY_AT_STATION,
+      status: PaymentStatus.CONFIRMED,
+    } as Payment);
+
+    const renewed = await renewAgain.renewAgain(CITIZEN_ID, source.id);
+    const draft = fixture.applications.find(
+      (application) => application.id === renewed.id,
+    );
+    if (draft === undefined) throw new Error('Expected renewed draft');
+
+    expect(draft).toMatchObject({
+      status: ApplicationStatus.DRAFT,
+      vehicleId: VEHICLE_ID,
+      referenceNumber: null,
+      applicantSnapshot: null,
+      vehicleSnapshot: null,
+      preferredInspectionDate: null,
+      preferredInspectionStationId: null,
+      submittedAt: null,
+    });
+    expect(
+      fixture.documents
+        .filter((document) => document.applicationId === draft.id)
+        .map((document) => document.storageKey),
+    ).not.toEqual(
+      fixture.documents
+        .filter((document) => document.applicationId === source.id)
+        .map((document) => document.storageKey),
+    );
+    expect(source).toEqual(sourceBefore);
+    expect(fixture.payments).toHaveLength(1);
+    expect(fixture.payments[0]?.applicationId).toBe(source.id);
+
+    draft.preferredInspectionDate = '2026-08-12';
+    draft.preferredInspectionStationId = 'station-id';
+    fixture.payments.push({
+      id: 'new-payment-id',
+      applicationId: draft.id,
+      method: PaymentMethod.PAY_AT_STATION,
+      status: PaymentStatus.PENDING,
+    } as Payment);
+
+    await workflow.submit(CITIZEN_ID, draft.id);
+
+    expect(draft.status).toBe(ApplicationStatus.SUBMITTED);
+    expect(draft.referenceNumber).toMatch(/^VIR-\d{8}-[A-F0-9]{12}$/);
+    expect(draft.applicantSnapshot).toMatchObject({
+      nameKh: 'Citizen Khmer',
+      nameEn: 'Citizen English',
+    });
+    expect(draft.vehicleSnapshot).toMatchObject({
+      vehicleId: VEHICLE_ID,
+      plateNumber: '2A-3146',
+    });
+    expect(draft.submittedAt).toBeInstanceOf(Date);
+    expect(draft.referenceNumber).not.toBe(source.referenceNumber);
+    expect(draft.applicantSnapshot).not.toEqual(source.applicantSnapshot);
+    expect(draft.vehicleSnapshot).not.toEqual(source.vehicleSnapshot);
+    expect(fixture.payments).toHaveLength(2);
+    expect(fixture.payments[0]?.applicationId).toBe(source.id);
+    expect(fixture.payments[1]?.applicationId).toBe(draft.id);
+  });
+
   it('runs the citizen correction and admin rejection/reopen loop through real services', async () => {
     const fixture = createFixture();
     const workflow = new ApplicationWorkflowService(
@@ -349,6 +439,7 @@ function createFixture() {
         storageKey: `private/application-document-${++storedFile}.pdf`,
       }),
     ),
+    read: jest.fn(() => Promise.resolve(Buffer.from('stored source file'))),
     deleteIfExists: jest.fn(),
   };
 
@@ -373,7 +464,19 @@ function repository<T extends { id: string }>(rows: T[], prefix: string) {
       Promise.resolve(rows.find((row) => matches(row, where)) ?? null),
     find: ({ where }: { where: Partial<T> }) =>
       Promise.resolve(rows.filter((row) => matches(row, where))),
-    existsBy: () => Promise.resolve(rows.length > 0),
+    existsBy: (where: Partial<T>) =>
+      Promise.resolve(
+        rows.some((row) =>
+          Object.entries(where).every(([key, value]) => {
+            const rowValue = row[key as keyof T];
+            const findOperatorValue = (value as { _value?: unknown })._value;
+            if (Array.isArray(findOperatorValue)) {
+              return findOperatorValue.includes(rowValue);
+            }
+            return rowValue === value;
+          }),
+        ),
+      ),
   };
 
   function save(input: T): T {
@@ -425,6 +528,57 @@ function documentSnapshot(documents: ApplicationDocument[]) {
     reviewedAt: document.reviewedAt?.toISOString() ?? null,
     rejectionReason: document.rejectionReason,
   }));
+}
+
+function expiredApplication(): RenewalApplication {
+  const now = new Date('2026-08-01T00:00:00.000Z');
+  return {
+    id: 'expired-application-id',
+    citizenId: CITIZEN_ID,
+    vehicleId: VEHICLE_ID,
+    status: ApplicationStatus.EXPIRED,
+    referenceNumber: 'VIR-20260701-ABCDEF123456',
+    applicantSnapshot: { nameKh: 'Old citizen data' },
+    vehicleSnapshot: { plateNumber: 'OLD-PLATE' },
+    currentCorrectionReason: null,
+    currentRejectionReason: null,
+    preferredInspectionStationId: 'old-station-id',
+    preferredInspectionDate: '2026-07-15',
+    submittedAt: new Date('2026-07-01T00:00:00.000Z'),
+    reviewStartedAt: null,
+    readyForInspectionAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    cancelledByUserId: null,
+    cancellationReason: null,
+    createdAt: now,
+    updatedAt: now,
+  } as RenewalApplication;
+}
+
+function expiredSourceDocument(
+  documentType: DocumentType,
+): ApplicationDocument {
+  return {
+    id: `expired-${documentType}`,
+    applicationId: 'expired-application-id',
+    documentType,
+    versionNumber: 2,
+    isCurrent: true,
+    replacesDocumentId: 'old-document-id',
+    uploadedByUserId: CITIZEN_ID,
+    storageKey: `expired/${documentType}.pdf`,
+    originalFileName: `${documentType.toLowerCase()}.pdf`,
+    mimeType: 'application/pdf',
+    fileSizeBytes: '24',
+    status: DocumentStatus.APPROVED,
+    reviewedByUserId: ADMIN_ID,
+    reviewedAt: new Date('2026-07-02T00:00:00.000Z'),
+    rejectionReason: null,
+    uploadedAt: new Date('2026-07-01T00:00:00.000Z'),
+    createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-07-02T00:00:00.000Z'),
+  } as ApplicationDocument;
 }
 
 function pdfFile(documentType: DocumentType) {
