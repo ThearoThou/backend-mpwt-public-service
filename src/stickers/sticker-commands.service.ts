@@ -69,11 +69,17 @@ export class StickerCommandsService {
       throw this.ineligible();
     }
     const pass = passes[0];
-    const appointment = await manager
-      .getRepository(Appointment)
-      .findOne({ where: { id: pass.appointmentId } });
-    if (appointment === null || appointment.dailyCapacityId === null)
-      throw this.ineligible();
+    if (pass.actualStationId === null) {
+      const appointment = await manager.getRepository(Appointment).findOne({
+        where: { id: pass.appointmentId as string },
+      });
+      if (
+        appointment === null ||
+        (appointment.dailyCapacityId === null && appointment.slotId === null)
+      ) {
+        throw this.ineligible();
+      }
+    }
     const stickers = manager.getRepository(Sticker);
     if (
       (await stickers.exists({ where: { applicationId } })) ||

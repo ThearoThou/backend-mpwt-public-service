@@ -1,4 +1,5 @@
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
+import { ApiErrorCode } from '../common/errors/api-error-code';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionReadsService } from './inspection-reads.service';
@@ -295,6 +296,8 @@ describe('InspectionReadsService citizen reads', () => {
           stationNameEn: 'Station',
           registrationNumber: 'REG-1',
           plateNumber: '2AB-1234',
+          plateCategory: 'PROVINCE',
+          plateProvince: 'Phnom Penh',
           make: 'Toyota',
           model: 'Prius',
           total: 1,
@@ -312,13 +315,96 @@ describe('InspectionReadsService citizen reads', () => {
     expect(result.data[0]).toMatchObject({
       failureReason: 'Brake issue',
       attemptNumber: 1,
+      vehicle: { plateCategory: 'PROVINCE', plateProvince: 'Phnom Penh' },
     });
     expect(result.data[0]).not.toHaveProperty('recordedByUserId');
     expect(statements[0]).toContain('application."citizen_id" = $1');
     expect(statements[0]).toContain('inspection."status" = \'COMPLETED\'');
+    expect(statements[0]).toContain('inspection."actual_station_id"');
+    expect(statements[0]).toContain('COALESCE(actual_station."id"');
     expect(statements[0]).toContain(
       'ORDER BY inspection."completed_at" DESC, inspection."id" DESC',
     );
+  });
+
+  it('filters an owned vehicle before history pagination and preserves reinspection attempts', async () => {
+    const statements: string[] = [];
+    const query = jest.fn((statement: string) => {
+      statements.push(statement);
+      if (statement.includes('FROM "vehicles"')) {
+        return Promise.resolve([{ id: 'vehicle-id' }]);
+      }
+      return Promise.resolve([
+        {
+          applicationId: 'application-id',
+          referenceNumber: 'VIR-1',
+          attemptNumber: 1,
+          result: InspectionResult.FAIL,
+          inspectedAt: new Date('2026-08-01T10:00:00.000Z'),
+          failureReason: 'Brake issue',
+          stationId: 'station-id',
+          stationNameKh: 'Station Kh',
+          stationNameEn: 'Station',
+          registrationNumber: 'REG-1',
+          plateNumber: '2AB-1234',
+          make: 'Toyota',
+          model: 'Prius',
+          total: 2,
+        },
+        {
+          applicationId: 'application-id',
+          referenceNumber: 'VIR-1',
+          attemptNumber: 2,
+          result: InspectionResult.PASS,
+          inspectedAt: new Date('2026-08-15T10:00:00.000Z'),
+          failureReason: null,
+          stationId: 'station-id',
+          stationNameKh: 'Station Kh',
+          stationNameEn: 'Station',
+          registrationNumber: 'REG-1',
+          plateNumber: '2AB-1234',
+          make: 'Toyota',
+          model: 'Prius',
+          total: 2,
+        },
+      ]);
+    });
+    const service = new InspectionReadsService({ query } as never);
+
+    const result = await service.listCitizenInspectionHistory('citizen-id', {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      vehicleId: 'vehicle-id',
+    });
+
+    expect(result.data.map((inspection) => inspection.attemptNumber)).toEqual([
+      1, 2,
+    ]);
+    expect(result.meta).toMatchObject({ total: 2, totalPages: 1 });
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('FROM "vehicles"'),
+      ['vehicle-id', 'citizen-id'],
+    );
+    expect(statements[1]).toContain('application."vehicle_id" = $2');
+    expect(statements[1]).toContain('LIMIT $3 OFFSET $4');
+  });
+
+  it('rejects a vehicle that is outside the citizen ownership scope', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new InspectionReadsService({ query } as never);
+
+    await expect(
+      service.listCitizenInspectionHistory('citizen-id', {
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc',
+        vehicleId: 'other-citizen-vehicle-id',
+      }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.VEHICLE_NOT_FOUND,
+      status: 404,
+    });
   });
 });
 

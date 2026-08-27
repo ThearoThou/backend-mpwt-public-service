@@ -10,6 +10,7 @@ import {
 import { AppointmentSlot } from './appointment-slot.entity';
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
 import { InspectionStationDailyCapacity } from './inspection-station-daily-capacity.entity';
+import { Inspection } from '../../inspections/entities/inspection.entity';
 
 @Entity({ name: 'inspection_stations' })
 export class InspectionStation {
@@ -72,4 +73,10 @@ export class InspectionStation {
     },
   )
   preferredRenewalApplications!: RenewalApplication[];
+
+  @OneToMany(() => Inspection, (inspection) => inspection.actualStation, {
+    cascade: false,
+    eager: false,
+  })
+  inspections!: Inspection[];
 }

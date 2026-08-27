@@ -29,6 +29,8 @@ describe('StickerReadsService', () => {
     expect(querySql(query, 0)).toContain(
       'passed."completedAt" ASC, application."id" ASC',
     );
+    expect(querySql(query, 0)).toContain('i."actual_station_id"');
+    expect(querySql(query, 0)).toContain('COALESCE(actual_station."id"');
     expect(querySql(query, 1)).toContain("AT TIME ZONE 'Asia/Phnom_Penh'");
   });
 

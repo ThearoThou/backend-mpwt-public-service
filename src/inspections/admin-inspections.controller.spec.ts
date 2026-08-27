@@ -52,4 +52,41 @@ describe('AdminInspectionsController', () => {
       'admin-id',
     );
   });
+
+  it('records attempt #1 for a renewal application without using an appointment', async () => {
+    const detail = {
+      application: { id: 'application-id', referenceNumber: 'VIR-1' },
+      inspection: { attemptNumber: 1, station: { id: 'station-id' } },
+    };
+    const reads = {
+      getAdminApplicationInspectionDetail: jest.fn().mockResolvedValue(detail),
+    };
+    const commands = {
+      recordApplicationFirstResult: jest.fn().mockResolvedValue(undefined),
+    };
+    const controller = new AdminInspectionsController(
+      reads as never,
+      commands as never,
+    );
+    const input = {
+      actualStationId: '550e8400-e29b-41d4-a716-446655440000',
+      result: InspectionResult.PASS,
+    };
+
+    await expect(
+      controller.recordApplicationFirstResult(
+        '550e8400-e29b-41d4-a716-446655440001',
+        { userId: 'admin-id', role: 'ADMIN', sessionId: 'session-id' },
+        input,
+      ),
+    ).resolves.toEqual({ data: detail });
+    expect(commands.recordApplicationFirstResult).toHaveBeenCalledWith(
+      '550e8400-e29b-41d4-a716-446655440001',
+      'admin-id',
+      input,
+    );
+    expect(reads.getAdminApplicationInspectionDetail).toHaveBeenCalledWith(
+      '550e8400-e29b-41d4-a716-446655440001',
+    );
+  });
 });

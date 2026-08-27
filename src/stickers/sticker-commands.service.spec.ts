@@ -57,7 +57,13 @@ describe('StickerCommandsService', () => {
     ['multiple PASS', { passes: [pass(), pass()] }, HttpStatus.CONFLICT],
     [
       'legacy slot pass',
-      { appointment: { id: 'appointment-id', dailyCapacityId: null } },
+      {
+        appointment: {
+          id: 'appointment-id',
+          dailyCapacityId: null,
+          slotId: null,
+        },
+      },
       HttpStatus.CONFLICT,
     ],
     ['already issued', { appSticker: true }, HttpStatus.CONFLICT],
@@ -77,12 +83,38 @@ describe('StickerCommandsService', () => {
     ).rejects.toMatchObject({ status });
     expect(fixture.stickerSave).not.toHaveBeenCalled();
   });
+
+  it('issues from an appointment-free PASS when its actual station is recorded', async () => {
+    const fixture = managerFixture({
+      passes: [
+        {
+          ...pass(),
+          appointmentId: null,
+          actualStationId: 'station-id',
+        },
+      ],
+    });
+    const service = new StickerCommandsService(
+      {
+        transaction: (work: (manager: unknown) => Promise<unknown>) =>
+          work(fixture.manager),
+      } as never,
+      {
+        getAdminDetail: jest.fn().mockResolvedValue({ state: 'ISSUED' }),
+      } as never,
+    );
+
+    await expect(
+      service.issue('application-id', 'admin-id', { stickerNumber: 'ABC123' }),
+    ).resolves.toMatchObject({ state: 'ISSUED' });
+  });
 });
 
 function pass() {
   return {
     id: 'inspection-id',
     appointmentId: 'appointment-id',
+    actualStationId: null,
     applicationId: 'application-id',
     status: InspectionStatus.COMPLETED,
     result: InspectionResult.PASS,
@@ -115,6 +147,7 @@ function managerFixture(changes: Record<string, unknown> = {}) {
       changes.appointment ?? {
         id: 'appointment-id',
         dailyCapacityId: 'capacity-id',
+        slotId: null,
       },
     ),
   };

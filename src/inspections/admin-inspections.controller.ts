@@ -21,6 +21,7 @@ import {
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminInspectionQueueQueryDto } from './dto/inspection-query.dtos';
 import { RecordInspectionResultDto } from './dto/record-inspection-result.dto';
+import { RecordApplicationInspectionResultDto } from './dto/record-application-inspection-result.dto';
 import { InspectionCommandsService } from './inspection-commands.service';
 import { InspectionReadsService } from './inspection-reads.service';
 
@@ -59,6 +60,23 @@ export class AdminInspectionsController {
     await this.commands.recordResult(appointmentId, actor.userId, input);
     return createDataResponse(
       await this.reads.getAdminAppointmentDetail(appointmentId),
+    );
+  }
+
+  @Post('applications/:applicationId/result')
+  async recordApplicationFirstResult(
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body() input: RecordApplicationInspectionResultDto,
+  ) {
+    await this.commands.recordApplicationFirstResult(
+      applicationId,
+      actor.userId,
+      input,
+    );
+    return createDataResponse(
+      await this.reads.getAdminApplicationInspectionDetail(applicationId),
     );
   }
 

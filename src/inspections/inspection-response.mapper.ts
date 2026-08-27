@@ -54,6 +54,19 @@ export interface AdminInspectionDetailResponse {
   canMarkNoShow: boolean;
 }
 
+export interface AdminApplicationInspectionDetailResponse {
+  application: {
+    id: string;
+    referenceNumber: string | null;
+    status: ApplicationStatus;
+  };
+  inspection:
+    | (InspectionSummaryResponse & {
+        station: { id: string; code: string; nameKh: string; nameEn: string };
+      })
+    | null;
+}
+
 export interface CitizenInspectionStatusResponse {
   applicationId: string;
   applicationStatus: ApplicationStatus;
@@ -75,6 +88,9 @@ export interface CitizenInspectionHistoryResponse {
   result: InspectionResult;
   inspectedAt: Date;
   failureReason: string | null;
-  station: { id: string; nameKh: string; nameEn: string };
-  vehicle: AdminInspectionQueueResponse['vehicle'];
+  station: { id: string; nameKh: string; nameEn: string } | null;
+  vehicle: AdminInspectionQueueResponse['vehicle'] & {
+    plateCategory: string | null;
+    plateProvince: string | null;
+  };
 }

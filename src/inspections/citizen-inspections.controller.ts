@@ -6,8 +6,8 @@ import type { AuthenticatedActor } from '../common/auth/authenticated-actor';
 import { Roles } from '../common/auth/roles.decorator';
 import { RolesGuard } from '../common/auth/roles.guard';
 import { createPaginatedResponse } from '../common/http/api-response';
-import { BasePaginationQueryDto } from '../common/pagination/base-pagination-query.dto';
 import { UserRole } from '../users/enums/user-role.enum';
+import { CitizenInspectionHistoryQueryDto } from './dto/inspection-query.dtos';
 import { InspectionReadsService } from './inspection-reads.service';
 
 @Controller('inspections')
@@ -19,7 +19,7 @@ export class CitizenInspectionsController {
   @Get()
   async history(
     @CurrentActor() actor: AuthenticatedActor,
-    @Query() input: BasePaginationQueryDto,
+    @Query() input: CitizenInspectionHistoryQueryDto,
   ) {
     const result = await this.reads.listCitizenInspectionHistory(
       actor.userId,

@@ -5,6 +5,7 @@ import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
+import { InspectionStation } from '../scheduling/entities/inspection-station.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { Inspection } from './entities/inspection.entity';
 import { InspectionCommandsService } from './inspection-commands.service';
@@ -208,6 +209,99 @@ describe('InspectionCommandsService', () => {
     ).rejects.toMatchObject({ status: 409 });
     expect(fixture.inspections.save).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['Day 1', '2026-08-14', '2026-08-14'],
+    ['Day 30', '2026-07-16', '2026-08-14'],
+  ])(
+    'records the first physical inspection attempt for the renewal application on %s without an appointment',
+    async (_name, submittedAtDate, today) => {
+      const fixture = commandFixture({ submittedAtDate, today });
+      const service = new InspectionCommandsService(
+        fixture.dataSource as never,
+      );
+
+      await service.recordApplicationFirstResult('application-id', 'admin-id', {
+        actualStationId: 'station-id',
+        result: InspectionResult.PASS,
+      });
+
+      expect(fixture.inspections.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          applicationId: 'application-id',
+          appointmentId: null,
+          actualStationId: 'station-id',
+          attemptNumber: 1,
+          result: InspectionResult.PASS,
+          completedAt: fixture.recordedAt,
+          failureReason: null,
+        }),
+      );
+      expect(fixture.appointments.save).not.toHaveBeenCalled();
+      expect(fixture.capacities.save).not.toHaveBeenCalled();
+      expect(fixture.payments.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('records a trimmed FAIL as attempt #1 at an active actual station regardless of planning preferences', async () => {
+    const fixture = commandFixture({
+      preferredInspectionStationId: null,
+      preferredInspectionDate: '2026-08-01',
+    });
+    const service = new InspectionCommandsService(fixture.dataSource as never);
+
+    await service.recordApplicationFirstResult('application-id', 'admin-id', {
+      actualStationId: 'station-id',
+      result: InspectionResult.FAIL,
+      failureReason: '  Brake issue  ',
+    });
+
+    expect(fixture.inspections.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appointmentId: null,
+        actualStationId: 'station-id',
+        attemptNumber: 1,
+        result: InspectionResult.FAIL,
+        failureReason: 'Brake issue',
+      }),
+    );
+    expect(fixture.application.preferredInspectionStationId).toBeNull();
+    expect(fixture.application.preferredInspectionDate).toBe('2026-08-01');
+  });
+
+  it.each([
+    [
+      'application is not approved',
+      { applicationStatus: ApplicationStatus.REJECTED },
+      409,
+    ],
+    ['submittedAt is missing', { submittedAt: null }, 409],
+    ['payment is missing', { payment: null }, 404],
+    ['payment is pending', { paymentStatus: PaymentStatus.PENDING }, 409],
+    ['station is unknown or inactive', { station: null }, 404],
+    [
+      'Day 31 is outside the initial period',
+      { submittedAtDate: '2026-07-15' },
+      409,
+    ],
+    ['a completed attempt already exists', { prior: [completedFail()] }, 409],
+  ])(
+    'rejects application attempt #1 when %s',
+    async (_name, changes, status) => {
+      const fixture = commandFixture(changes);
+      const service = new InspectionCommandsService(
+        fixture.dataSource as never,
+      );
+
+      await expect(
+        service.recordApplicationFirstResult('application-id', 'admin-id', {
+          actualStationId: 'station-id',
+          result: InspectionResult.PASS,
+        }),
+      ).rejects.toMatchObject({ status });
+      expect(fixture.inspections.save).not.toHaveBeenCalled();
+    },
+  );
 });
 
 function commandFixture(overrides: Record<string, unknown> = {}) {
@@ -215,6 +309,9 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
   const application = {
     id: 'application-id',
     status: ApplicationStatus.APPROVED,
+    submittedAt: new Date('2026-08-14T03:00:00.000Z'),
+    preferredInspectionStationId: 'preferred-station-id',
+    preferredInspectionDate: '2026-08-14',
   };
   const appointment = {
     id: 'appointment-id',
@@ -230,10 +327,16 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     applicationId: application.id,
     status: PaymentStatus.CONFIRMED,
   };
+  const station = { id: 'station-id', isActive: true };
   const applications = repository(application);
   const appointments = repository(appointment);
   const capacities = repository(capacity);
   const payments = repository(payment);
+  const stations = repository(
+    Object.prototype.hasOwnProperty.call(overrides, 'station')
+      ? overrides.station
+      : station,
+  );
   const inspections = repository(overrides.existingInspection ?? null);
   inspections.findOne.mockImplementation(({ where }: { where: object }) =>
     'appointmentId' in where
@@ -249,12 +352,20 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     [Appointment, appointments],
     [InspectionStationDailyCapacity, capacities],
     [Payment, payments],
+    [InspectionStation, stations],
     [Inspection, inspections],
     [RenewalApplicationStatusHistory, histories],
   ]);
   const manager = {
     getRepository: jest.fn((entity: unknown) => repositories.get(entity)),
-    query: jest.fn().mockResolvedValue([{ recordedAt, today: '2026-08-14' }]),
+    query: jest.fn().mockResolvedValue([
+      {
+        recordedAt,
+        today: (overrides.today as string | undefined) ?? '2026-08-14',
+        submittedAtDate:
+          (overrides.submittedAtDate as string | undefined) ?? '2026-08-14',
+      },
+    ]),
   };
   const dataSource = {
     getRepository: jest.fn(() => ({
@@ -276,6 +387,14 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
   if (overrides.payment === null) payments.findOne.mockResolvedValue(null);
   if (overrides.paymentStatus !== undefined)
     payment.status = overrides.paymentStatus as PaymentStatus;
+  if (overrides.submittedAt !== undefined)
+    application.submittedAt = overrides.submittedAt as Date | null;
+  if (overrides.preferredInspectionStationId !== undefined)
+    application.preferredInspectionStationId =
+      overrides.preferredInspectionStationId as string | null;
+  if (overrides.preferredInspectionDate !== undefined)
+    application.preferredInspectionDate = overrides.preferredInspectionDate as
+      string | null;
   appointments.count = jest.fn().mockResolvedValue(overrides.noShowCount ?? 1);
 
   return {
@@ -286,6 +405,7 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     applications,
     appointments,
     payments,
+    capacities,
     inspections,
     histories,
   };

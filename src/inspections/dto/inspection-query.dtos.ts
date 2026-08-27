@@ -42,3 +42,9 @@ export class AdminInspectionQueueQueryDto extends BasePaginationQueryDto {
   @Validate(CalendarDateOnlyConstraint)
   capacityDate?: string;
 }
+
+export class CitizenInspectionHistoryQueryDto extends BasePaginationQueryDto {
+  @IsOptional()
+  @IsUUID('4')
+  vehicleId?: string;
+}

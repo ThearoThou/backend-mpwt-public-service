@@ -12,6 +12,7 @@ import {
 
 import { RenewalApplication } from '../../applications/entities/renewal-application.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
+import { InspectionStation } from '../../scheduling/entities/inspection-station.entity';
 import { User } from '../../users/entities/user.entity';
 import { Sticker } from '../../stickers/entities/sticker.entity';
 import { InspectionResult } from '../enums/inspection-result.enum';
@@ -28,8 +29,11 @@ export class Inspection {
   @Column({ name: 'application_id', type: 'uuid' })
   applicationId!: string;
 
-  @Column({ name: 'appointment_id', type: 'uuid' })
-  appointmentId!: string;
+  @Column({ name: 'appointment_id', type: 'uuid', nullable: true })
+  appointmentId!: string | null;
+
+  @Column({ name: 'actual_station_id', type: 'uuid', nullable: true })
+  actualStationId!: string | null;
 
   @Column({ name: 'attempt_number', type: 'smallint' })
   attemptNumber!: number;
@@ -89,11 +93,20 @@ export class Inspection {
   @OneToOne(() => Appointment, (appointment) => appointment.inspection, {
     cascade: false,
     eager: false,
-    nullable: false,
+    nullable: true,
     onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'appointment_id' })
-  appointment!: Appointment;
+  appointment!: Appointment | null;
+
+  @ManyToOne(() => InspectionStation, (station) => station.inspections, {
+    cascade: false,
+    eager: false,
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
+  @JoinColumn({ name: 'actual_station_id' })
+  actualStation!: InspectionStation | null;
 
   @ManyToOne(() => User, (user) => user.recordedInspections, {
     cascade: false,

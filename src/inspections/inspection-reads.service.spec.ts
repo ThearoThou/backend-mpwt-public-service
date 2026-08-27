@@ -226,6 +226,38 @@ describe('InspectionReadsService', () => {
       service.getAdminAppointmentDetail('appointment-id'),
     ).rejects.toMatchObject({ status: 409 });
   });
+
+  it('returns an application-based attempt with its recorded actual station', async () => {
+    const query = jest.fn().mockResolvedValue([
+      {
+        applicationId: 'application-id',
+        referenceNumber: 'VIR-1',
+        applicationStatus: 'APPROVED',
+        inspectionId: 'inspection-id',
+        inspectionStatus: 'COMPLETED',
+        inspectionAttemptNumber: 1,
+        inspectionResult: 'PASS',
+        inspectedAt: new Date('2026-08-14T03:00:00.000Z'),
+        failureReason: null,
+        stationId: 'actual-station-id',
+        stationCode: 'ST-2',
+        stationNameKh: 'Station Kh',
+        stationNameEn: 'Station',
+      },
+    ]);
+    const service = new InspectionReadsService({ query } as never);
+
+    await expect(
+      service.getAdminApplicationInspectionDetail('application-id'),
+    ).resolves.toMatchObject({
+      application: { referenceNumber: 'VIR-1' },
+      inspection: {
+        attemptNumber: 1,
+        station: { id: 'actual-station-id', code: 'ST-2' },
+      },
+    });
+    expect(querySql(query, 0)).toContain('inspection."actual_station_id"');
+  });
 });
 
 function queueInput(
@@ -283,4 +315,10 @@ function detailRow(overrides: Record<string, unknown> = {}) {
     isPast: false,
     ...overrides,
   };
+}
+
+function querySql(query: jest.Mock, index: number): string {
+  const calls = query.mock.calls as unknown as unknown[][];
+  const statement = calls[index]?.[0];
+  return typeof statement === 'string' ? statement : '';
 }

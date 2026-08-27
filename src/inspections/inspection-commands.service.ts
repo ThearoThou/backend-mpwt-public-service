@@ -6,12 +6,16 @@ import { RenewalApplication } from '../applications/entities/renewal-application
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
+import { calendarDayDifference } from '../common/dates/calendar-date';
+import { inspectionPolicy } from '../config/inspection-policy';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
+import { InspectionStation } from '../scheduling/entities/inspection-station.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { RecordInspectionResultDto } from './dto/record-inspection-result.dto';
+import { RecordApplicationInspectionResultDto } from './dto/record-application-inspection-result.dto';
 import { Inspection } from './entities/inspection.entity';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
@@ -35,6 +39,33 @@ export class InspectionCommandsService {
           applicationId,
           appointmentId,
           adminId,
+          normalizedInput,
+        ),
+      );
+    } catch (error) {
+      if (isUniqueViolation(error)) throw this.inspectionConflict();
+      throw error;
+    }
+  }
+
+  /**
+   * Records attempt #1: the first physical inspection attempt for this renewal
+   * application. It is intentionally independent of the legacy appointment
+   * and capacity workflow retained for historical/reinspection compatibility.
+   */
+  async recordApplicationFirstResult(
+    applicationId: string,
+    adminId: string,
+    input: RecordApplicationInspectionResultDto,
+  ): Promise<void> {
+    const normalizedInput = this.normalizeInput(input);
+    try {
+      await this.dataSource.transaction((manager) =>
+        this.recordApplicationFirstResultWithManager(
+          manager,
+          applicationId,
+          adminId,
+          input.actualStationId,
           normalizedInput,
         ),
       );
@@ -172,6 +203,77 @@ export class InspectionCommandsService {
     }
   }
 
+  private async recordApplicationFirstResultWithManager(
+    manager: EntityManager,
+    applicationId: string,
+    adminId: string,
+    actualStationId: string,
+    input: RecordInspectionResultDto,
+  ): Promise<void> {
+    const applications = manager.getRepository(RenewalApplication);
+    const application = await applications.findOne({
+      where: { id: applicationId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (application === null) throw this.applicationNotFound();
+    if (application.status !== ApplicationStatus.APPROVED) {
+      throw this.applicationConflict();
+    }
+    if (application.submittedAt === null) throw this.applicationConflict();
+
+    const timestamp = await this.currentTimestamp(
+      manager,
+      application.submittedAt,
+    );
+    this.assertInitialApplicationPeriod(timestamp);
+
+    const payment = await manager.getRepository(Payment).findOne({
+      where: { applicationId: application.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (payment === null) throw this.paymentNotFound();
+    this.assertPaymentConfirmed(payment);
+
+    const station = await manager.getRepository(InspectionStation).findOne({
+      where: { id: actualStationId, isActive: true },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (station === null) throw this.stationNotFound();
+
+    const inspections = manager.getRepository(Inspection);
+    const completed = await inspections
+      .createQueryBuilder('inspection')
+      .setLock('pessimistic_write')
+      .where('inspection.applicationId = :applicationId', {
+        applicationId: application.id,
+      })
+      .andWhere('inspection.status = :status', {
+        status: InspectionStatus.COMPLETED,
+      })
+      .getMany();
+    // Any completed row means attempt #1 already exists or legacy data is
+    // inconsistent. Attempt #2 is deliberately outside Phase 2.
+    if (completed.length !== 0) throw this.inspectionConflict();
+
+    const inspection = inspections.create({
+      applicationId: application.id,
+      appointmentId: null,
+      actualStationId: station.id,
+      attemptNumber: 1,
+      status: InspectionStatus.COMPLETED,
+      result: input.result,
+      recordedByUserId: adminId,
+      startedAt: null,
+      completedAt: timestamp.recordedAt,
+      failureReason:
+        input.result === InspectionResult.FAIL
+          ? (input.failureReason ?? null)
+          : null,
+      notes: null,
+    });
+    await inspections.save(inspection);
+  }
+
   private async markNoShowWithManager(
     manager: EntityManager,
     applicationId: string,
@@ -294,13 +396,41 @@ export class InspectionCommandsService {
     return { result: input.result, failureReason };
   }
 
-  private async currentTimestamp(manager: EntityManager): Promise<Timestamp> {
+  private async currentTimestamp(
+    manager: EntityManager,
+    submittedAt?: Date,
+  ): Promise<Timestamp> {
     const [timestamp] = await manager.query<Timestamp[]>(
-      `SELECT now() AS "recordedAt", (now() AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "today"`,
+      `SELECT now() AS "recordedAt", (now() AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "today", ($1::timestamptz AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "submittedAtDate"`,
+      [submittedAt ?? null],
     );
     if (timestamp === undefined)
       throw new Error('Inspection timestamp unavailable');
     return timestamp;
+  }
+
+  private assertInitialApplicationPeriod(timestamp: Timestamp): void {
+    if (timestamp.submittedAtDate === null) throw this.applicationConflict();
+    const elapsedDays = calendarDayDifference(
+      timestamp.submittedAtDate,
+      timestamp.today,
+    );
+    if (
+      elapsedDays < 0 ||
+      elapsedDays >= inspectionPolicy.application.initialInspectionPeriodDays
+    ) {
+      throw this.applicationConflict();
+    }
+  }
+
+  private assertPaymentConfirmed(payment: Payment): void {
+    if (payment.status !== PaymentStatus.CONFIRMED) {
+      throw new DomainException(
+        ApiErrorCode.PAYMENT_NOT_CONFIRMED,
+        HttpStatus.CONFLICT,
+        'Payment must be confirmed before recording an inspection result',
+      );
+    }
   }
 
   private assertEligibility(
@@ -369,6 +499,13 @@ export class InspectionCommandsService {
       'Payment not found',
     );
   }
+  private stationNotFound(): DomainException {
+    return new DomainException(
+      ApiErrorCode.STATION_NOT_FOUND,
+      HttpStatus.NOT_FOUND,
+      'Active inspection station not found',
+    );
+  }
   private inspectionAlreadyExists(): DomainException {
     return new DomainException(
       ApiErrorCode.INSPECTION_ALREADY_EXISTS,
@@ -395,6 +532,7 @@ export class InspectionCommandsService {
 interface Timestamp {
   recordedAt: Date;
   today: string;
+  submittedAtDate: string | null;
 }
 
 function isUniqueViolation(error: unknown): boolean {

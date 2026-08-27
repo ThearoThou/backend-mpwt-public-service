@@ -9,14 +9,17 @@ import { ApplicationStatus } from '../applications/enums/application-status.enum
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
-import type { BasePaginationQueryDto } from '../common/pagination/base-pagination-query.dto';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
-import type { AdminInspectionQueueView } from './dto/inspection-query.dtos';
+import type {
+  AdminInspectionQueueView,
+  CitizenInspectionHistoryQueryDto,
+} from './dto/inspection-query.dtos';
 import { AdminInspectionQueueQueryDto } from './dto/inspection-query.dtos';
 import type {
   AdminInspectionDetailResponse,
+  AdminApplicationInspectionDetailResponse,
   AdminInspectionQueueResponse,
   CitizenInspectionHistoryResponse,
   CitizenInspectionStatusResponse,
@@ -174,6 +177,65 @@ export class InspectionReadsService {
     };
   }
 
+  async getAdminApplicationInspectionDetail(
+    applicationId: string,
+  ): Promise<AdminApplicationInspectionDetailResponse> {
+    const [row] = await this.dataSource.query<ApplicationAttemptDetailRow[]>(
+      `
+      SELECT application."id" AS "applicationId", application."reference_number" AS "referenceNumber", application."status" AS "applicationStatus",
+        inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason",
+        station."id" AS "stationId", station."code" AS "stationCode", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn"
+      FROM "renewal_applications" application
+      LEFT JOIN LATERAL (
+        SELECT i.* FROM "inspections" i
+        WHERE i."application_id" = application."id"
+          AND i."status" = 'COMPLETED'::"public"."inspection_status"
+        ORDER BY i."completed_at" DESC, i."id" DESC
+        LIMIT 1
+      ) inspection ON true
+      LEFT JOIN "inspection_stations" station ON station."id" = inspection."actual_station_id"
+      WHERE application."id" = $1
+      `,
+      [applicationId],
+    );
+    if (row === undefined) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Renewal application not found',
+      );
+    }
+    const inspection = this.mapInspection(row);
+    if (
+      inspection !== null &&
+      (row.stationId === null ||
+        row.stationCode === null ||
+        row.stationNameKh === null ||
+        row.stationNameEn === null)
+    ) {
+      throw this.invalidInspectionState();
+    }
+    return {
+      application: {
+        id: row.applicationId,
+        referenceNumber: row.referenceNumber,
+        status: row.applicationStatus,
+      },
+      inspection:
+        inspection === null
+          ? null
+          : {
+              ...inspection,
+              station: {
+                id: row.stationId as string,
+                code: row.stationCode as string,
+                nameKh: row.stationNameKh as string,
+                nameEn: row.stationNameEn as string,
+              },
+            },
+    };
+  }
+
   async getCitizenApplicationStatus(
     citizenId: string,
     applicationId: string,
@@ -212,25 +274,38 @@ export class InspectionReadsService {
 
   async listCitizenInspectionHistory(
     citizenId: string,
-    input: BasePaginationQueryDto,
+    input: CitizenInspectionHistoryQueryDto,
   ): Promise<{
     data: CitizenInspectionHistoryResponse[];
     meta: ReturnType<typeof createPaginationMeta>;
   }> {
+    if (input.vehicleId !== undefined) {
+      await this.assertCitizenOwnsVehicle(citizenId, input.vehicleId);
+    }
     const order = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    const parameters: unknown[] = [citizenId];
+    const vehicleCondition =
+      input.vehicleId === undefined
+        ? ''
+        : ` AND application."vehicle_id" = $${parameters.push(input.vehicleId)}`;
+    parameters.push(input.limit, (input.page - 1) * input.limit);
     const rows = await this.dataSource.query<CitizenHistoryRow[]>(
       `
-      SELECT inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", COUNT(*) OVER()::int AS "total"
+      SELECT inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'plateCategory' AS "plateCategory", application."vehicle_snapshot" ->> 'plateProvince' AS "plateProvince", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", COUNT(*) OVER()::int AS "total"
       FROM "inspections" inspection
       INNER JOIN "renewal_applications" application ON application."id" = inspection."application_id" AND application."citizen_id" = $1
-      INNER JOIN "appointments" appointment ON appointment."id" = inspection."appointment_id"
-      INNER JOIN "inspection_station_daily_capacities" capacity ON capacity."id" = appointment."daily_capacity_id"
-      INNER JOIN "inspection_stations" station ON station."id" = capacity."station_id"
-      WHERE inspection."status" = 'COMPLETED'::"public"."inspection_status"
+      LEFT JOIN "inspection_stations" actual_station ON actual_station."id" = inspection."actual_station_id"
+      LEFT JOIN "appointments" appointment ON appointment."id" = inspection."appointment_id"
+      LEFT JOIN "inspection_station_daily_capacities" capacity ON capacity."id" = appointment."daily_capacity_id"
+      LEFT JOIN "appointment_slots" slot ON slot."id" = appointment."slot_id"
+      LEFT JOIN "inspection_stations" capacity_station ON capacity_station."id" = capacity."station_id"
+      LEFT JOIN "inspection_stations" slot_station ON slot_station."id" = slot."station_id"
+      LEFT JOIN "inspection_stations" station ON station."id" = COALESCE(actual_station."id", capacity_station."id", slot_station."id")
+      WHERE inspection."status" = 'COMPLETED'::"public"."inspection_status"${vehicleCondition}
       ORDER BY inspection."completed_at" ${order}, inspection."id" ${order}
-      LIMIT $2 OFFSET $3
+      LIMIT $${parameters.length - 1} OFFSET $${parameters.length}
       `,
-      [citizenId, input.limit, (input.page - 1) * input.limit],
+      parameters,
     );
     return {
       data: rows.map((row) => ({
@@ -241,20 +316,43 @@ export class InspectionReadsService {
         inspectedAt: row.inspectedAt,
         failureReason:
           row.result === InspectionResult.FAIL ? row.failureReason : null,
-        station: {
-          id: row.stationId,
-          nameKh: row.stationNameKh,
-          nameEn: row.stationNameEn,
-        },
+        station:
+          row.stationId === null ||
+          row.stationNameKh === null ||
+          row.stationNameEn === null
+            ? null
+            : {
+                id: row.stationId,
+                nameKh: row.stationNameKh,
+                nameEn: row.stationNameEn,
+              },
         vehicle: {
           registrationNumber: row.registrationNumber,
           plateNumber: row.plateNumber,
+          plateCategory: row.plateCategory,
+          plateProvince: row.plateProvince,
           make: row.make,
           model: row.model,
         },
       })),
       meta: createPaginationMeta(input.page, input.limit, rows[0]?.total ?? 0),
     };
+  }
+
+  private async assertCitizenOwnsVehicle(
+    citizenId: string,
+    vehicleId: string,
+  ): Promise<void> {
+    const [vehicle] = await this.dataSource.query<{ id: string }[]>(
+      `SELECT "id" FROM "vehicles" WHERE "id" = $1 AND "linked_citizen_id" = $2 LIMIT 1`,
+      [vehicleId, citizenId],
+    );
+    if (vehicle !== undefined) return;
+    throw new DomainException(
+      ApiErrorCode.VEHICLE_NOT_FOUND,
+      HttpStatus.NOT_FOUND,
+      'Vehicle not found',
+    );
   }
 
   private mapQueue(
@@ -347,9 +445,7 @@ export class InspectionReadsService {
       stickerEligible: !terminal && latestPass,
     };
   }
-  private mapInspection(
-    row: QueueRow | DetailRow,
-  ): InspectionSummaryResponse | null {
+  private mapInspection(row: InspectionRow): InspectionSummaryResponse | null {
     if (row.inspectionId === null) return null;
     if (
       row.inspectionStatus !== InspectionStatus.COMPLETED ||
@@ -401,7 +497,15 @@ export class InspectionReadsService {
   }
 }
 
-interface QueueRow {
+interface InspectionRow {
+  inspectionId: string | null;
+  inspectionStatus: InspectionStatus | null;
+  inspectionAttemptNumber: number | null;
+  inspectionResult: InspectionResult | null;
+  inspectedAt: Date | null;
+  failureReason: string | null;
+}
+interface QueueRow extends InspectionRow {
   applicationId: string;
   referenceNumber: string | null;
   appointmentId: string;
@@ -414,17 +518,11 @@ interface QueueRow {
   plateNumber: string | null;
   make: string | null;
   model: string | null;
-  inspectionId: string | null;
-  inspectionStatus: InspectionStatus | null;
-  inspectionAttemptNumber: number | null;
-  inspectionResult: InspectionResult | null;
-  inspectedAt: Date | null;
-  failureReason: string | null;
   completedFailCount: number;
   completedPassCount: number;
   total: number;
 }
-interface DetailRow {
+interface DetailRow extends InspectionRow {
   appointmentId: string;
   appointmentStatus: AppointmentStatus;
   dailyCapacityId: string | null;
@@ -442,16 +540,19 @@ interface DetailRow {
   stationAddress: string;
   stationPhone: string | null;
   paymentStatus: string | null;
-  inspectionId: string | null;
-  inspectionStatus: InspectionStatus | null;
-  inspectionAttemptNumber: number | null;
-  inspectionResult: InspectionResult | null;
-  inspectedAt: Date | null;
-  failureReason: string | null;
   completedFailCount: number;
   completedPassCount: number;
   isToday: boolean;
   isPast: boolean;
+}
+interface ApplicationAttemptDetailRow extends InspectionRow {
+  applicationId: string;
+  referenceNumber: string | null;
+  applicationStatus: ApplicationStatus;
+  stationId: string | null;
+  stationCode: string | null;
+  stationNameKh: string | null;
+  stationNameEn: string | null;
 }
 type DocumentRow = AdminApplicationDocumentSource;
 interface CitizenStatusRow {
@@ -479,11 +580,13 @@ interface CitizenHistoryRow {
   result: InspectionResult;
   inspectedAt: Date;
   failureReason: string | null;
-  stationId: string;
-  stationNameKh: string;
-  stationNameEn: string;
+  stationId: string | null;
+  stationNameKh: string | null;
+  stationNameEn: string | null;
   registrationNumber: string | null;
   plateNumber: string | null;
+  plateCategory: string | null;
+  plateProvince: string | null;
   make: string | null;
   model: string | null;
   total: number;
