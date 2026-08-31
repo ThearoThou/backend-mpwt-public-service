@@ -272,6 +272,21 @@ export class InspectionCommandsService {
       notes: null,
     });
     await inspections.save(inspection);
+
+    if (input.result === InspectionResult.FAIL) {
+      application.status = ApplicationStatus.INSPECTION_FAILED;
+      await applications.save(application);
+      const history = manager.getRepository(RenewalApplicationStatusHistory);
+      await history.save(
+        history.create({
+          applicationId: application.id,
+          previousStatus: ApplicationStatus.APPROVED,
+          newStatus: ApplicationStatus.INSPECTION_FAILED,
+          changedByUserId: adminId,
+          reason: 'INITIAL_INSPECTION_FAILED',
+        }),
+      );
+    }
   }
 
   private async markNoShowWithManager(

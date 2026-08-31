@@ -29,7 +29,7 @@ const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
 const VEHICLE_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('application workflow integration', () => {
-  it('submits a renewed draft through the normal payment and snapshot flow', async () => {
+  it('submits repeated Apply Again drafts through the normal payment and snapshot flow', async () => {
     const fixture = createFixture();
     const workflow = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
@@ -44,6 +44,7 @@ describe('application workflow integration', () => {
       workflow,
     );
     const source = expiredApplication();
+    source.status = ApplicationStatus.INSPECTION_FAILED;
     const sourceBefore = structuredClone(source);
     fixture.applications.push(source);
     fixture.documents.push(
@@ -58,8 +59,36 @@ describe('application workflow integration', () => {
       method: PaymentMethod.PAY_AT_STATION,
       status: PaymentStatus.CONFIRMED,
     } as Payment);
+    Object.assign(source, {
+      inspections: [
+        {
+          attemptNumber: 1,
+          result: 'FAIL',
+          failureReason: 'Brake issue',
+        },
+      ],
+      payment: fixture.payments[0],
+      statusHistory: [
+        {
+          previousStatus: ApplicationStatus.APPROVED,
+          newStatus: ApplicationStatus.INSPECTION_FAILED,
+          reason: 'INITIAL_INSPECTION_FAILED',
+        },
+      ],
+    });
+    const sourceEvidenceBefore = structuredClone(source);
+    const sourceDocumentsBefore = structuredClone(fixture.documents);
+    const sourcePaymentsBefore = structuredClone(fixture.payments);
 
-    const renewed = await renewAgain.renewAgain(CITIZEN_ID, source.id);
+    const renewed = await renewAgain.createReplacementDraft(
+      CITIZEN_ID,
+      source.id,
+      {
+        status: ApplicationStatus.INSPECTION_FAILED,
+        invalidSourceMessage:
+          'Only an inspection-failed application can be applied for again',
+      },
+    );
     const draft = fixture.applications.find(
       (application) => application.id === renewed.id,
     );
@@ -84,9 +113,14 @@ describe('application workflow integration', () => {
         .filter((document) => document.applicationId === source.id)
         .map((document) => document.storageKey),
     );
-    expect(source).toEqual(sourceBefore);
+    expect(source).toEqual({ ...sourceBefore, ...sourceEvidenceBefore });
+    expect(
+      fixture.documents.filter(
+        (document) => document.applicationId === source.id,
+      ),
+    ).toEqual(sourceDocumentsBefore);
     expect(fixture.payments).toHaveLength(1);
-    expect(fixture.payments[0]?.applicationId).toBe(source.id);
+    expect(fixture.payments).toEqual(sourcePaymentsBefore);
 
     draft.preferredInspectionDate = '2026-08-12';
     draft.preferredInspectionStationId = 'station-id';
@@ -116,6 +150,37 @@ describe('application workflow integration', () => {
     expect(fixture.payments).toHaveLength(2);
     expect(fixture.payments[0]?.applicationId).toBe(source.id);
     expect(fixture.payments[1]?.applicationId).toBe(draft.id);
+
+    draft.status = ApplicationStatus.INSPECTION_FAILED;
+    const failedDraftBefore = structuredClone(draft);
+    const appliedAgain = await renewAgain.createReplacementDraft(
+      CITIZEN_ID,
+      draft.id,
+      {
+        status: ApplicationStatus.INSPECTION_FAILED,
+        invalidSourceMessage:
+          'Only an inspection-failed application can be applied for again',
+      },
+    );
+    const secondDraft = fixture.applications.find(
+      (application) => application.id === appliedAgain.id,
+    );
+    expect(secondDraft).toMatchObject({
+      status: ApplicationStatus.DRAFT,
+      vehicleId: VEHICLE_ID,
+      referenceNumber: null,
+      submittedAt: null,
+    });
+    expect(draft).toEqual(failedDraftBefore);
+    expect(
+      fixture.documents
+        .filter((document) => document.applicationId === secondDraft?.id)
+        .map((document) => document.storageKey),
+    ).not.toEqual(
+      fixture.documents
+        .filter((document) => document.applicationId === draft.id)
+        .map((document) => document.storageKey),
+    );
   });
 
   it('runs the citizen correction and admin rejection/reopen loop through real services', async () => {

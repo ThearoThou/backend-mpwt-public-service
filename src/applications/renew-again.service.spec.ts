@@ -65,6 +65,58 @@ describe('RenewAgainService', () => {
     expect(fixture.files.deleteIfExists).not.toHaveBeenCalled();
   });
 
+  it('reuses the same safe copy mechanics for an owned INSPECTION_FAILED source', async () => {
+    const fixture = createFixture({
+      status: ApplicationStatus.INSPECTION_FAILED,
+    });
+
+    const result = await fixture.service.createReplacementDraft(
+      CITIZEN_ID,
+      SOURCE_ID,
+      {
+        status: ApplicationStatus.INSPECTION_FAILED,
+        invalidSourceMessage:
+          'Only an inspection-failed application can be applied for again',
+      },
+    );
+
+    expect(result).toMatchObject({ id: fixture.draft.id, status: 'DRAFT' });
+    expect(fixture.workflow.createDraftWithManager).toHaveBeenCalledWith(
+      fixture.manager,
+      CITIZEN_ID,
+      VEHICLE_ID,
+      expect.any(String),
+    );
+    expect(fixture.createdDocuments).toHaveLength(3);
+    expect(
+      fixture.createdDocuments.map((document) => document.storageKey),
+    ).not.toEqual(
+      fixture.sourceDocuments.map((document) => document.storageKey),
+    );
+    expect(fixture.source.status).toBe(ApplicationStatus.INSPECTION_FAILED);
+  });
+
+  it.each([
+    ApplicationStatus.DRAFT,
+    ApplicationStatus.SUBMITTED,
+    ApplicationStatus.EXPIRED,
+    ApplicationStatus.COMPLETED,
+  ])('rejects %s as an Apply Again source', async (status) => {
+    const fixture = createFixture({ status });
+
+    await expect(
+      fixture.service.createReplacementDraft(CITIZEN_ID, SOURCE_ID, {
+        status: ApplicationStatus.INSPECTION_FAILED,
+        invalidSourceMessage:
+          'Only an inspection-failed application can be applied for again',
+      }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.files.read).not.toHaveBeenCalled();
+  });
+
   it('rejects a source owned by another citizen before reading files', async () => {
     const fixture = createFixture({ citizenId: OTHER_CITIZEN_ID });
 

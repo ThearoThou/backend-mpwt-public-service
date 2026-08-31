@@ -26,6 +26,16 @@ interface CopiedDocument {
   storageKey: string;
 }
 
+export interface ReplacementApplicationSourcePolicy {
+  status: ApplicationStatus;
+  invalidSourceMessage: string;
+}
+
+const EXPIRED_SOURCE_POLICY: ReplacementApplicationSourcePolicy = {
+  status: ApplicationStatus.EXPIRED,
+  invalidSourceMessage: 'Only an expired application can be renewed again',
+};
+
 @Injectable()
 export class RenewAgainService {
   constructor(
@@ -38,9 +48,22 @@ export class RenewAgainService {
     citizenId: string,
     expiredApplicationId: string,
   ): Promise<RenewalApplicationResponse> {
-    const sourceDocuments = await this.loadSourceDocuments(
+    return this.createReplacementDraft(
       citizenId,
       expiredApplicationId,
+      EXPIRED_SOURCE_POLICY,
+    );
+  }
+
+  async createReplacementDraft(
+    citizenId: string,
+    sourceApplicationId: string,
+    sourcePolicy: ReplacementApplicationSourcePolicy,
+  ): Promise<RenewalApplicationResponse> {
+    const sourceDocuments = await this.loadSourceDocuments(
+      citizenId,
+      sourceApplicationId,
+      sourcePolicy,
     );
     const applicationId = randomUUID();
     const copiedDocuments: CopiedDocument[] = [];
@@ -67,9 +90,10 @@ export class RenewAgainService {
         this.createRenewedDraftWithManager(
           manager,
           citizenId,
-          expiredApplicationId,
+          sourceApplicationId,
           applicationId,
           copiedDocuments,
+          sourcePolicy,
         ),
       );
     } catch (error) {
@@ -84,11 +108,12 @@ export class RenewAgainService {
   private async loadSourceDocuments(
     citizenId: string,
     applicationId: string,
+    sourcePolicy: ReplacementApplicationSourcePolicy,
   ): Promise<ApplicationDocument[]> {
     const source = await this.dataSource
       .getRepository(RenewalApplication)
       .findOne({ where: { id: applicationId } });
-    this.assertRenewableSource(source, citizenId);
+    this.assertReplacementSource(source, citizenId, sourcePolicy);
 
     const documents = await this.dataSource
       .getRepository(ApplicationDocument)
@@ -105,12 +130,13 @@ export class RenewAgainService {
     expiredApplicationId: string,
     applicationId: string,
     copiedDocuments: CopiedDocument[],
+    sourcePolicy: ReplacementApplicationSourcePolicy,
   ): Promise<RenewalApplicationResponse> {
     const source = await manager.getRepository(RenewalApplication).findOne({
       where: { id: expiredApplicationId },
       lock: { mode: 'pessimistic_write' },
     });
-    this.assertRenewableSource(source, citizenId);
+    this.assertReplacementSource(source, citizenId, sourcePolicy);
 
     const draft = await this.workflow.createDraftWithManager(
       manager,
@@ -142,9 +168,10 @@ export class RenewAgainService {
     return draft;
   }
 
-  private assertRenewableSource(
+  private assertReplacementSource(
     source: RenewalApplication | null,
     citizenId: string,
+    sourcePolicy: ReplacementApplicationSourcePolicy,
   ): asserts source is RenewalApplication {
     if (source === null) {
       throw new DomainException(
@@ -160,11 +187,11 @@ export class RenewAgainService {
         'Renewal application is outside the citizen ownership scope',
       );
     }
-    if (source.status !== ApplicationStatus.EXPIRED) {
+    if (source.status !== sourcePolicy.status) {
       throw new DomainException(
         ApiErrorCode.APPLICATION_INVALID_TRANSITION,
         HttpStatus.CONFLICT,
-        'Only an expired application can be renewed again',
+        sourcePolicy.invalidSourceMessage,
       );
     }
   }

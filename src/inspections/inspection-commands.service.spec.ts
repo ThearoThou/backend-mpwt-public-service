@@ -240,6 +240,9 @@ describe('InspectionCommandsService', () => {
       expect(fixture.appointments.save).not.toHaveBeenCalled();
       expect(fixture.capacities.save).not.toHaveBeenCalled();
       expect(fixture.payments.save).not.toHaveBeenCalled();
+      expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+      expect(fixture.applications.save).not.toHaveBeenCalled();
+      expect(fixture.histories.save).not.toHaveBeenCalled();
     },
   );
 
@@ -267,6 +270,20 @@ describe('InspectionCommandsService', () => {
     );
     expect(fixture.application.preferredInspectionStationId).toBeNull();
     expect(fixture.application.preferredInspectionDate).toBe('2026-08-01');
+    expect(fixture.application.status).toBe(
+      ApplicationStatus.INSPECTION_FAILED,
+    );
+    expect(fixture.applications.save).toHaveBeenCalledWith(fixture.application);
+    expect(fixture.histories.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: 'application-id',
+        previousStatus: ApplicationStatus.APPROVED,
+        newStatus: ApplicationStatus.INSPECTION_FAILED,
+        changedByUserId: 'admin-id',
+        reason: 'INITIAL_INSPECTION_FAILED',
+      }),
+    );
+    expect(fixture.histories.save).toHaveBeenCalledTimes(1);
   });
 
   it.each([

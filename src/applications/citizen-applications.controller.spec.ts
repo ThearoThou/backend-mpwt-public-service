@@ -48,6 +48,29 @@ describe('CitizenApplicationsController', () => {
     );
   });
 
+  it('forwards the authenticated citizen and failed source ID for Apply Again', async () => {
+    const appliedDraft = { id: 'new-draft', status: 'DRAFT' };
+    const applyAgain = {
+      applyAgain: jest.fn().mockResolvedValue(appliedDraft),
+    };
+    const controller = new CitizenApplicationsController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      applyAgain as never,
+    );
+
+    await expect(
+      controller.applyAgain(actor(), APPLICATION_ID),
+    ).resolves.toEqual({ data: appliedDraft });
+    expect(applyAgain.applyAgain).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+  });
+
   it('forwards citizen-scoped list, detail, and history requests', async () => {
     const applications = {
       listCitizenApplications: jest

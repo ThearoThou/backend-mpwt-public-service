@@ -392,6 +392,34 @@ describe('InspectionExpiryService', () => {
     },
   );
 
+  it('expires a successor application even when its failed predecessor has completed attempt #1', async () => {
+    const failedPredecessorInspection = {
+      applicationId: 'application-a',
+      attemptNumber: 1,
+      status: InspectionStatus.COMPLETED,
+      result: InspectionResult.FAIL,
+      completedAt: new Date('2026-09-01T03:00:00Z'),
+    };
+    const fixture = fixtureFor({
+      today: '2026-10-01',
+      submittedAtDate: '2026-09-01',
+      application: { id: 'application-b' },
+    });
+    fixture.firstAttemptRepository.findOne.mockImplementation(
+      ({ where }: { where: { applicationId: string } }) =>
+        Promise.resolve(
+          where.applicationId === failedPredecessorInspection.applicationId
+            ? failedPredecessorInspection
+            : null,
+        ),
+    );
+
+    await invoke(fixture.service, 'expireInitialInspection', 'application-b');
+
+    expect(fixture.firstAttemptRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+  });
+
   it('does not let payment or planning preferences pause the clock', async () => {
     const fixture = fixtureFor({
       today: '2026-10-01',
