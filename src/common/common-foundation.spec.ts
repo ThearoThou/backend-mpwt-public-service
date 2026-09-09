@@ -15,9 +15,21 @@ import { createPaginationMeta } from './pagination/pagination-meta';
 import { getRequestContext } from './request-context/request-context';
 
 describe('common foundation', () => {
-  it('contains exactly 66 unique approved API error codes', () => {
-    expect(API_ERROR_CODES).toHaveLength(67);
-    expect(new Set(API_ERROR_CODES).size).toBe(67);
+  it('contains the unique approved API error codes', () => {
+    expect(API_ERROR_CODES).toHaveLength(79);
+    expect(new Set(API_ERROR_CODES).size).toBe(79);
+    expect(API_ERROR_CODES).toEqual(
+      expect.arrayContaining([
+        ApiErrorCode.RESET_TOKEN_INVALID,
+        ApiErrorCode.RESET_TOKEN_EXPIRED,
+        ApiErrorCode.RESET_TOKEN_USED,
+        ApiErrorCode.INSPECTION_VALIDITY_RULE_UNSUPPORTED,
+        ApiErrorCode.CERTIFICATE_ALREADY_EXISTS,
+        ApiErrorCode.CERTIFICATE_NOT_READY,
+        ApiErrorCode.CERTIFICATE_NOT_AVAILABLE,
+        ApiErrorCode.CERTIFICATE_DATA_INCOHERENT,
+      ]),
+    );
   });
 
   it('keeps DomainException fields explicit and safe', () => {

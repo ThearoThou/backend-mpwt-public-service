@@ -24,6 +24,8 @@ import { ApplicationDocument } from './application-document.entity';
 import { Appointment } from '../../scheduling/entities/appointment.entity';
 import { InspectionStation } from '../../scheduling/entities/inspection-station.entity';
 import { RenewalApplicationStatusHistory } from './renewal-application-status-history.entity';
+import type { ApplicationVehicleSnapshot } from '../application-vehicle-snapshot';
+import { TechnicalInspectionCertificate } from '../../certificates/entities/technical-inspection-certificate.entity';
 
 @Entity({ name: 'renewal_applications' })
 @Index('idx_renewal_applications_citizen_submitted_at', [
@@ -71,7 +73,7 @@ export class RenewalApplication {
   applicantSnapshot!: Record<string, unknown> | null;
 
   @Column({ name: 'vehicle_snapshot', type: 'jsonb', nullable: true })
-  vehicleSnapshot!: Record<string, unknown> | null;
+  vehicleSnapshot!: ApplicationVehicleSnapshot | null;
 
   @Column({ name: 'current_correction_reason', type: 'text', nullable: true })
   currentCorrectionReason!: string | null;
@@ -202,6 +204,13 @@ export class RenewalApplication {
     nullable: true,
   })
   sticker!: Sticker | null;
+
+  @OneToOne(
+    () => TechnicalInspectionCertificate,
+    (certificate) => certificate.application,
+    { cascade: false, eager: false, nullable: true },
+  )
+  technicalInspectionCertificate!: TechnicalInspectionCertificate | null;
 
   @OneToMany(() => Notification, (notification) => notification.application, {
     cascade: false,

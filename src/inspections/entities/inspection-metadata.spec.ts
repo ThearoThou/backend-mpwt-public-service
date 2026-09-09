@@ -44,6 +44,29 @@ describe('Phase 6 inspection entity metadata', () => {
     expect(actualStation?.relationType).toBe('many-to-one');
   });
 
+  it('maps nullable immutable inspection validity facts', () => {
+    const validUntil = metadata.columns.find(
+      (column) =>
+        column.target === Inspection && column.propertyName === 'validUntil',
+    );
+    const validityRule = metadata.columns.find(
+      (column) =>
+        column.target === Inspection && column.propertyName === 'validityRule',
+    );
+
+    expect(validUntil?.options).toMatchObject({
+      name: 'valid_until',
+      type: 'date',
+      nullable: true,
+    });
+    expect(validityRule?.options).toMatchObject({
+      name: 'validity_rule',
+      type: 'varchar',
+      length: 60,
+      nullable: true,
+    });
+  });
+
   it('maps the nullable status-history reason code', () => {
     const reason = metadata.columns.find(
       (column) =>

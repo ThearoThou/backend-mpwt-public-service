@@ -26,6 +26,7 @@ import { Vehicle } from '../../vehicles/entities/vehicle.entity';
 import { CitizenProfile } from './citizen-profile.entity';
 import { UserRole } from '../enums/user-role.enum';
 import { UserStatus } from '../enums/user-status.enum';
+import { TechnicalInspectionCertificate } from '../../certificates/entities/technical-inspection-certificate.entity';
 
 @Entity({ name: 'users' })
 export class User {
@@ -197,6 +198,13 @@ export class User {
     eager: false,
   })
   issuedStickers!: Sticker[];
+
+  @OneToMany(
+    () => TechnicalInspectionCertificate,
+    (certificate) => certificate.issuedByUser,
+    { cascade: false, eager: false },
+  )
+  issuedTechnicalInspectionCertificates!: TechnicalInspectionCertificate[];
 
   @OneToMany(() => Notification, (notification) => notification.recipientUser, {
     cascade: false,

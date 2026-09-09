@@ -17,6 +17,8 @@ import { User } from '../../users/entities/user.entity';
 import { Sticker } from '../../stickers/entities/sticker.entity';
 import { InspectionResult } from '../enums/inspection-result.enum';
 import { InspectionStatus } from '../enums/inspection-status.enum';
+import { InspectionValidityRule } from '../enums/inspection-validity-rule.enum';
+import { TechnicalInspectionCertificate } from '../../certificates/entities/technical-inspection-certificate.entity';
 
 @Entity({ name: 'inspections' })
 @Index('idx_inspections_application_created', ['applicationId', 'createdAt'])
@@ -64,6 +66,17 @@ export class Inspection {
 
   @Column({ name: 'completed_at', type: 'timestamptz', nullable: true })
   completedAt!: Date | null;
+
+  @Column({ name: 'valid_until', type: 'date', nullable: true })
+  validUntil!: string | null;
+
+  @Column({
+    name: 'validity_rule',
+    type: 'varchar',
+    length: 60,
+    nullable: true,
+  })
+  validityRule!: InspectionValidityRule | null;
 
   @Column({ name: 'failure_reason', type: 'text', nullable: true })
   failureReason!: string | null;
@@ -123,4 +136,11 @@ export class Inspection {
     nullable: true,
   })
   sticker!: Sticker | null;
+
+  @OneToOne(
+    () => TechnicalInspectionCertificate,
+    (certificate) => certificate.inspection,
+    { cascade: false, eager: false, nullable: true },
+  )
+  technicalInspectionCertificate!: TechnicalInspectionCertificate | null;
 }

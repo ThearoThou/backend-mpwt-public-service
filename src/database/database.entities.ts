@@ -21,6 +21,7 @@ import { CitizenProfile } from '../users/entities/citizen-profile.entity';
 import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
 import { VehicleClassificationHistory } from '../vehicles/entities/vehicle-classification-history.entity';
+import { TechnicalInspectionCertificate } from '../certificates/entities/technical-inspection-certificate.entity';
 
 export const databaseEntities = [
   User,
@@ -43,6 +44,7 @@ export const databaseEntities = [
   PaymentStatusHistory,
   Inspection,
   Sticker,
+  TechnicalInspectionCertificate,
   Notification,
   ApplicationTimelineEvent,
   AuditLog,
