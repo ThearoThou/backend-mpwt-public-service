@@ -4,13 +4,21 @@ import { join } from 'node:path';
 
 import { FilesService, PaymentArtifactKind } from './files.service';
 
+class TestFilesService extends FilesService {
+  fixedOpaqueId: string | null = null;
+
+  protected override createOpaqueId(): string {
+    return this.fixedOpaqueId ?? super.createOpaqueId();
+  }
+}
+
 describe('FilesService', () => {
   let root: string;
-  let service: FilesService;
+  let service: TestFilesService;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'mpwt-files-'));
-    service = new FilesService({ getOrThrow: () => root } as never);
+    service = new TestFilesService({ getOrThrow: () => root } as never);
   });
 
   afterEach(async () => rm(root, { recursive: true, force: true }));
@@ -33,6 +41,9 @@ describe('FilesService', () => {
   it('rejects traversal keys and safely cleans up stored files', async () => {
     await expect(service.read('../outside')).rejects.toThrow('outside');
     await expect(service.read('../../outside')).rejects.toThrow('outside');
+    await expect(service.deleteIfExists('../outside')).rejects.toThrow(
+      'outside',
+    );
     const stored = await service.saveApplicationDocument(
       'application-id',
       Buffer.from('content'),
@@ -89,5 +100,39 @@ describe('FilesService', () => {
         Buffer.from('%PDF-1.7'),
       ),
     ).rejects.toThrow('artifact kind');
+  });
+
+  it('stores immutable certificate PDFs in their private namespace', async () => {
+    service.fixedOpaqueId = '11111111-1111-4111-8111-111111111111';
+    const content = Buffer.from('%PDF-certificate');
+
+    const stored = await service.saveCertificateArtifact(
+      'application-id',
+      content,
+    );
+
+    expect(stored.storageKey).toBe(
+      'certificate-artifacts/application-id/11111111-1111-4111-8111-111111111111.pdf',
+    );
+    await expect(service.read(stored.storageKey)).resolves.toEqual(content);
+    await expect(
+      service.saveCertificateArtifact('application-id', content),
+    ).rejects.toMatchObject({ code: 'EEXIST' });
+    await service.deleteIfExists(stored.storageKey);
+    await expect(
+      service.deleteIfExists(stored.storageKey),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects unsafe certificate paths and non-PDF content', async () => {
+    await expect(
+      service.saveCertificateArtifact(
+        '../application-id',
+        Buffer.from('%PDF-1.7'),
+      ),
+    ).rejects.toThrow('application ID');
+    await expect(
+      service.saveCertificateArtifact('application-id', Buffer.from('not PDF')),
+    ).rejects.toThrow('PDF');
   });
 });

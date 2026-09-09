@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'node:crypto';
+import * as crypto from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { basename, relative, resolve, sep } from 'node:path';
 
@@ -32,7 +32,7 @@ export class FilesService {
     content: Buffer,
     extension: string,
   ): Promise<StoredPrivateFile> {
-    const storageKey = `application-documents/${applicationId}/${randomUUID()}.${extension}`;
+    const storageKey = `application-documents/${applicationId}/${this.createOpaqueId()}.${extension}`;
     const path = this.resolveStorageKey(storageKey);
     await fs.mkdir(resolve(path, '..'), { recursive: true });
     await fs.writeFile(path, content, { flag: 'wx' });
@@ -53,7 +53,24 @@ export class FilesService {
     if (!content.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
       throw new Error('Payment artifacts must be PDF files');
     }
-    const storageKey = `payment-artifacts/${applicationId}/${kind}/${randomUUID()}.pdf`;
+    const storageKey = `payment-artifacts/${applicationId}/${kind}/${this.createOpaqueId()}.pdf`;
+    const path = this.resolveStorageKey(storageKey);
+    await fs.mkdir(resolve(path, '..'), { recursive: true });
+    await fs.writeFile(path, content, { flag: 'wx' });
+    return { storageKey };
+  }
+
+  async saveCertificateArtifact(
+    applicationId: string,
+    content: Buffer,
+  ): Promise<StoredPrivateFile> {
+    if (!isSafeStorageSegment(applicationId)) {
+      throw new Error('Invalid certificate artifact application ID');
+    }
+    if (!content.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+      throw new Error('Certificate artifacts must be PDF files');
+    }
+    const storageKey = `certificate-artifacts/${applicationId}/${this.createOpaqueId()}.pdf`;
     const path = this.resolveStorageKey(storageKey);
     await fs.mkdir(resolve(path, '..'), { recursive: true });
     await fs.writeFile(path, content, { flag: 'wx' });
@@ -70,6 +87,10 @@ export class FilesService {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+  }
+
+  protected createOpaqueId(): string {
+    return crypto.randomUUID();
   }
 
   private resolveStorageKey(storageKey: string): string {

@@ -16,6 +16,7 @@ import { SchedulingModule } from './scheduling/scheduling.module';
 import { StickersModule } from './stickers/stickers.module';
 import { UsersModule } from './users/users.module';
 import { VehiclesModule } from './vehicles/vehicles.module';
+import { CertificatesModule } from './certificates/certificates.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
     PaymentsModule,
     InspectionsModule,
     StickersModule,
+    CertificatesModule,
     NotificationsModule,
     ActivityModule,
     FilesModule,
