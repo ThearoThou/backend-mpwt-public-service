@@ -41,17 +41,17 @@ or generic reconciliation job.
 ### Normal-renewal preferred inspection date
 
 For normal renewal Step 2, a preferred date is not an appointment or a
-reservation. `PREFERRED_SCHEDULING_WINDOW_DAYS` defaults to 60 and defines the
-inclusive Cambodia-local range from tomorrow through today plus that many
-calendar days. A preferred date requires an active station, a Monday-Friday
-date in that range, and no explicit closed daily-capacity row for that
-station/date. It does not require a capacity row and a full-but-open date is
-still a valid preference.
+reservation. The Date Picker uses the fixed Cambodia-local 30-calendar-day
+window from today (Day 1) through today plus 29 days (Day 30). A preferred date
+must be Monday-Friday, must not be an active official Cambodian public holiday,
+and may use today only before 17:00 Cambodia time. Preferred station is optional
+and planning-only: no station capacity, station closure, reservation, or
+appointment data affects this rule.
 
-The 60-day normal-renewal preference window is an MVP/project assumption, not
-a confirmed official MPWT scheduling limit. It must be confirmed and configured
-for a production MPWT deployment. An explicit `is_closed=true` capacity row is
-an operational closure override; it is not an official holiday calendar.
+Official Cambodian holidays are explicit date-only rows in the independent
+`inspection_service_closures` calendar. An explicit `is_closed=true` daily
+capacity row remains a station operational closure and is not an official
+holiday calendar.
 
 ### Confirmed appointment date
 
@@ -77,7 +77,7 @@ that counter directly.
 | `CitizenSchedulingPreferenceService`    | Saves a DRAFT preference and owns citizen recovery reservation from `APPOINTMENT_SELECTION_REQUIRED`.                  |
 | `ApplicationWorkflowService`            | Requires and revalidates a DRAFT preference during submission without reserving it.                                    |
 | `AdminApplicationReviewService`         | Owns review-pass orchestration: reservation outcome, appointment creation, application status, and status history.     |
-| `PaymentsService`                       | Is invoked after successful scheduling commits; initialization failures are isolated from scheduling.                  |
+| `PaymentsService`                       | Owns normal-renewal DRAFT Step-4 payment initialization; later scheduling branches reuse the existing payment. Legacy admin initialization supports older approved, scheduled applications without one. |
 | `StationsController`                    | Citizen station and available-date discovery.                                                                          |
 | `AdminSchedulingController`             | ADMIN daily-capacity management routes.                                                                                |
 
@@ -156,12 +156,9 @@ One transaction:
 5. appends the matching immutable status-history row.
 
 Repeating review-pass after this success is an invalid application transition,
-so it cannot reserve twice.
-
-Only after this transaction commits does review-pass attempt idempotent payment
-initialization. The attempt is deliberately outside scheduling: a payment
-failure leaves the approved application, appointment, and incremented capacity
-committed. Payment rules are documented in [Payments](06-payments.md).
+so it cannot reserve twice. The normal flow already has its single Step-4
+payment/invoice before submission. Review-pass reuses that payment, does not
+create another invoice, and does not recalculate its frozen fee snapshot.
 
 ### Unavailable preference
 
@@ -177,8 +174,8 @@ selection. In one transaction the service locks the application, conditionally
 reserves the selected row, creates the daily-capacity `SCHEDULED` appointment,
 updates both preference fields, changes the application to `APPROVED`, and
 appends history. A capacity that ceased to be selectable produces no partial
-writes. After this scheduling transaction commits, it makes the same isolated
-payment-initialization attempt.
+writes. The normal Step-4 payment/invoice is reused; no second payment or
+invoice is created and its frozen fees are not recalculated.
 
 ## Appointment compatibility
 
@@ -247,6 +244,6 @@ explicit closure override; the capacity endpoint remains reservable-only.
 There is no scheduling implementation for appointment retrieval, cancellation,
 rescheduling, daily-capacity decrement/release, hourly citizen slot selection,
 or notification delivery. Physical inspection and replacement/reinspection use
-the Phase 6 daily-capacity behavior described above. Payment initialization is
-implemented only as the post-commit integration described above; its
-calculation, status, document, and HTTP rules are in [Payments](06-payments.md).
+the Phase 6 daily-capacity behavior described above. Normal-renewal payment
+initialization is Step 4 while DRAFT; its calculation, status, document, and
+HTTP rules are in [Payments](06-payments.md).

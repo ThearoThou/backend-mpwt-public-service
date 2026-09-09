@@ -8,26 +8,33 @@ service, including the Phase 5 payment workflow and PDF payment documents.
 The backend currently includes authentication/session security, users and
 citizen profiles, citizen/admin vehicle workflows, inspection-vehicle
 categories, persisted renewal-application DRAFTs and documents, application
-review operations, and Phase 4 daily station/date capacity scheduling.
+review operations, daily station/date capacity scheduling, PAY_AT_STATION
+payments, physical inspections, and sticker issuance.
 
 The Phase 4 scheduling path is:
 
 1. a citizen creates a DRAFT, uploads required documents, and saves a preferred
    active station and preferred weekday/date within the configured window;
 2. submission validates the preference but does not reserve it;
-3. admin review-pass atomically reserves the preferred capacity and approves,
+3. Step 4 initializes one `PAY_AT_STATION` invoice/payment while the
+   application remains a DRAFT; no capacity is reserved and no money is
+   collected;
+4. final submission requires that pending invoice, then creates the VIR
+   reference and moves the application to `SUBMITTED`;
+5. admin review-pass atomically reserves the preferred capacity and approves,
    or moves the application to `APPOINTMENT_SELECTION_REQUIRED` without a
    reservation;
-4. the citizen may select another available date to reserve and reach
+6. the citizen may select another available date to reserve and reach
    `APPROVED`; and
-5. after the scheduling transaction commits, payment initialization is attempted
-   without rolling back scheduling when it fails.
+7. staff confirms the existing pending station payment only after the citizen
+   pays in person.
 
 Legacy `appointment_slots` remains compatible with existing appointments, but
 the Phase 4 citizen flow is daily capacity rather than new hourly slot
-selection. Payment is implemented for the `PAY_AT_STATION` MVP; inspections,
-stickers, appointment management, and rescheduling remain outside the current
-HTTP workflow.
+selection. Payment is implemented for the `PAY_AT_STATION` MVP. Physical
+inspection and sticker-issuance HTTP workflows are implemented; general
+appointment management and rescheduling remain outside the current HTTP
+workflow.
 
 See:
 
@@ -43,10 +50,11 @@ See:
 3. Install dependencies with `npm install`.
 4. Apply the TypeORM migrations before starting the service.
 
-TypeORM synchronization is disabled. The repository currently contains ten
+TypeORM synchronization is disabled. The repository currently contains twelve
 migrations, including Migration 9 for inspection-station daily capacities and
-appointment compatibility and Migration 10 for payment workflow snapshots and
-payment status history. Migration 10 refuses to run if `payments` already has
+appointment compatibility, Migration 10 for payment workflow snapshots and
+payment status history, Migration 11 for physical inspections, and Migration
+12 for issued stickers. Migration 10 refuses to run if `payments` already has
 rows, because those rows cannot safely receive its required snapshots.
 
 ```bash

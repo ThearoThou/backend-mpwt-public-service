@@ -87,7 +87,8 @@ current document outcomes as part of the review operation.
 `DRAFT`. It requires one current row for every required document type and no
 required document still rejected. It then verifies the citizen profile and
 vehicle, requires paired station/date preference fields, and asks scheduling to
-revalidate that selection.
+revalidate that selection. It also requires the Step 4 `PAY_AT_STATION`
+payment to already exist in `PENDING` status.
 
 Only after those checks does submission generate the reference number,
 snapshot applicant and vehicle data, set `submittedAt`, move to `SUBMITTED`,
@@ -108,6 +109,12 @@ of `inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`, `lateDays`, `lateFee`,
 does not create a Payment or invoice, reserve capacity, create an appointment,
 change status, or persist an estimate. It is an estimate only: category fees or
 late days can differ when payment is initialized later.
+
+`POST /applications/:applicationId/payment/initialize` is the citizen-owned
+Step 4 operation. It keeps the application DRAFT, validates the same documents,
+profile, vehicle, and preferred station/date readiness, and creates or returns
+the one pending station-payment invoice without reserving capacity or creating
+an appointment. The persisted payment snapshot freezes the MVP fee amount.
 
 `CORRECTION_REQUIRED → SUBMITTED` resubmission reuses the required-current
 document validation and confirms existing submission snapshot/reference data.
@@ -151,12 +158,12 @@ change. Citizen recovery selection follows the matching reservation branch.
 The locking, atomic update, compatibility, and rollback details belong to the
 [Scheduling](05-scheduling.md) document.
 
-After either successful scheduling branch commits, the caller attempts
-idempotent payment initialization outside the Phase 4 transaction. A failure is
-logged and leaves the approved application, appointment, and capacity
-reservation committed; an administrator can retry payment initialization. This
-does not add an application status transition or change the application's
-`APPROVED` state while payment progresses.
+Step 4 already initializes the `PENDING` `PAY_AT_STATION` payment and invoice
+while the application is DRAFT, before submission. The later review-pass and
+appointment-selection branches reuse that existing payment: they do not create
+another payment or invoice and do not recalculate the frozen fee snapshot. The
+legacy admin initializer remains only for an older approved, scheduled
+application that has no Payment.
 
 ## Tests and implementation checks
 
@@ -167,5 +174,5 @@ admin queue/detail/history mapping, and every implemented review transition.
 Application integration tests cover transactional workflow behavior. Phase 4
 real PostgreSQL rollback/e2e tests additionally prove that a later failure does
 not leave a capacity reservation, appointment, status change, or status-history
-row behind. Phase 5 tests separately cover the post-commit payment attempt and
-its non-rollback behavior.
+row behind. Phase 5 tests separately cover DRAFT Step-4 payment initialization,
+its idempotency, frozen snapshots, and submission's pending-payment prerequisite.

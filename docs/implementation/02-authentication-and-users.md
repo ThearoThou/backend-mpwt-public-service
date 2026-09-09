@@ -21,9 +21,12 @@ least one phone or email and makes each identifier unique.
 Public registration creates a `CITIZEN` user in `PENDING_VERIFICATION` and a
 one-to-one citizen profile in the same transaction. The registration DTO
 accepts a normalized Cambodian phone number and/or normalized email, a
-password, Khmer and English names, and optional national ID/address. When both
-identifiers are supplied, `verificationIdentifier` chooses which submitted
-destination receives the registration code.
+password, a required Khmer name, an optional English name, and optional
+national ID/address. This MVP supports Cambodian citizen applicants;
+foreign-applicant account and registered-owner naming requirements are deferred
+pending official business requirements. When both identifiers are supplied,
+`verificationIdentifier` chooses which submitted destination receives the
+registration code.
 
 The password hash, verification-code hash, and refresh-token hash are never
 selected for normal responses. Current-user and admin-user mappers return only

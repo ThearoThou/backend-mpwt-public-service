@@ -100,7 +100,7 @@ the final `APPROVED → COMPLETED` transition.
 | From                                                                             | To                               | Actor / operation                | Implemented rule                                                                                                                                                                                                                                                                                                                                            |
 | -------------------------------------------------------------------------------- | -------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | New                                                                              | `DRAFT`                          | Citizen creates application      | The vehicle must exist, belong to the citizen, and have no unfinished application. Reference number and snapshots are initially `null`; a `null → DRAFT` status-history row is written.                                                                                                                                                                     |
-| `DRAFT`                                                                          | `SUBMITTED`                      | Citizen submits                  | All three current required documents must exist and none may be rejected; a citizen profile and vehicle must exist; a preferred active, future, open, non-full station/date must be selected. Submission creates snapshots and reference number, revalidates the preference, and writes history. It does **not** reserve capacity or create an appointment. |
+| `DRAFT`                                                                          | `SUBMITTED`                      | Citizen submits                  | All three current required documents must exist and none may be rejected; a citizen profile and vehicle must exist; a valid normal-renewal preferred station/date must be saved; and one existing `PENDING` `PAY_AT_STATION` Step-4 payment/invoice must exist. Submission creates snapshots and reference number, revalidates the preference, and writes history. It does **not** reserve capacity or create an appointment. Missing or non-pending Step-4 payment returns `PAYMENT_STEP_FOUR_REQUIRED`. |
 | `CORRECTION_REQUIRED`                                                            | `SUBMITTED`                      | Citizen resubmits                | Required current documents must exist and no required document may remain rejected. The service validates the existing submission data and writes history.                                                                                                                                                                                                  |
 | `SUBMITTED`                                                                      | `UNDER_REVIEW`                   | Admin starts review              | Sets `reviewStartedAt` if it has not been set, clears current correction/rejection reason fields, and writes history.                                                                                                                                                                                                                                       |
 | `UNDER_REVIEW`                                                                   | `CORRECTION_REQUIRED`            | Admin requests correction        | The request names one or more document types and a reason. Current named documents become `REJECTED`; other current documents become `APPROVED`; correction reason and history are recorded.                                                                                                                                                                |
@@ -152,21 +152,29 @@ admin request-correction operation.
 
 ## Phase 4 scheduling workflow
 
-Phase 4 scheduling selects a station and a calendar date; it is not a new
-citizen hourly time-slot booking flow.
+Phase 4 scheduling distinguishes a **preferred date** from an **actual
+reservable appointment date**. It is not a new citizen hourly time-slot booking
+flow.
 
-1. A citizen lists active stations and their selectable dates. A date is
-   selectable only when its station is active, the Cambodia-local date is in
-   the future, the capacity is open, and `reserved_count < daily_capacity`.
-2. While an application is `DRAFT`, the citizen saves exactly one paired
-   station/date preference. This validates availability but does not reserve
-   capacity or create an appointment.
-3. Submission repeats the availability validation but still does not reserve.
-4. Review-pass attempts the reservation. Success produces `APPROVED` and one
-   appointment. An unavailable preference produces
+1. A citizen lists active stations, normal-renewal preferred dates, and
+   capacity-reservable dates. Preferred dates are date-first: Cambodia today
+   (Day 1) through today + 29 calendar days (Day 30), Monday-Friday, not an
+   active official Cambodian holiday, and today only before 17:00 Cambodia
+   time. Station capacity and station closures do not affect this global rule.
+2. While an application is `DRAFT`, the citizen saves one required date and an
+   optional, non-binding station preference. This validates the preferred-date
+   rule but does not reserve capacity or create an appointment.
+3. Step 4 initializes the owned DRAFT's `PAY_AT_STATION` invoice/payment.
+   It remains `DRAFT`; the payment is `PENDING` and its fee snapshot is frozen.
+4. Submission repeats the preferred-date validation, requires that pending
+   Step-4 payment, and still does not reserve.
+5. Review-pass attempts an **actual reservation**, which additionally requires
+   a daily-capacity row that is active, future, open, and not full. Success
+   produces `APPROVED` and one appointment. An unavailable preference produces
    `APPOINTMENT_SELECTION_REQUIRED` with no appointment.
-5. A citizen in `APPOINTMENT_SELECTION_REQUIRED` selects a new available
-   station/date. The successful operation reserves it and reaches `APPROVED`.
+6. A citizen in `APPOINTMENT_SELECTION_REQUIRED` selects a new actual
+   reservable station/date. The successful operation reserves it and reaches
+   `APPROVED`.
 
 Citizen application responses include the nullable
 `preferredInspectionStationId` and date-only `preferredInspectionDate` fields.
@@ -200,11 +208,20 @@ appointment is an internal result of successful scheduling orchestration.
 
 ## Phase 5 payment workflow
 
-After review-pass or citizen replacement selection commits an `APPROVED`
-application with one `SCHEDULED` appointment, payment initialization is
-attempted. It is idempotent and creates at most one Payment/invoice per
-application. If initialization fails, scheduling remains committed and an
-admin may retry it.
+Step 4 occurs while the owned application is `DRAFT`, before submission.
+`POST /applications/:applicationId/payment/initialize` validates the required
+documents, citizen profile, classified vehicle, and valid normal-renewal
+preferred station/date. It idempotently creates or returns the single
+`PENDING` `PAY_AT_STATION` Payment/invoice, including its authoritative frozen
+fee snapshot. It does not reserve capacity, create an appointment, submit the
+application, or generate its VIR reference.
+
+`POST /applications/:applicationId/submit` requires that pending Step-4
+payment/invoice; otherwise it returns `PAYMENT_STEP_FOUR_REQUIRED`. Review-pass
+and appointment-selection reuse that existing payment and invoice without a
+second payment, invoice, or fee calculation. The legacy admin initializer is
+only backward compatibility for an older approved, scheduled application that
+does not yet have a Payment.
 
 The only functional MVP method is `PAY_AT_STATION`; `BANK_QR` and `BANK_CARD`
 are reserved enum values. A payment uses `PENDING`, `CONFIRMED`, `FAILED`, or
@@ -215,9 +232,9 @@ non-empty, and at most 500 characters.
 
 Payment initialization snapshots the active category's inspection and service
 fees, vehicle expiry, Cambodia-local creation date, late days/fee, and KHR
-totals. It is blocked when the classification/category/expiry sources or the
-approved/scheduled prerequisites are invalid. Payment history records only
-actual status transitions with status pair, actor, reason, and timestamp.
+totals. It is blocked when the document, profile, preferred-date,
+classification/category, or expiry sources are invalid. Payment history records
+only actual status transitions with status pair, actor, reason, and timestamp.
 
 Invoices are available for `PENDING`, `REJECTED`, and `CONFIRMED` payments.
 Receipts and inspection sheets are available only after confirmation. Citizens

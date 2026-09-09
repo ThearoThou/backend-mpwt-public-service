@@ -56,7 +56,7 @@ explicitly implements a listed behavior.
 | `vehicles` and `inspection-categories`           | Citizen/admin vehicle access, plate normalization, categories, and admin classification/history.                                       |
 | `applications` and `files`                       | DRAFT lifecycle, document storage/versioning, submission, citizen reads, and admin review operations.                                  |
 | `scheduling`                                     | Station/date availability, daily capacities, preference validation, and reservation primitives.                                        |
-| `payments`                                       | Idempotent post-scheduling payment initialization, payment transitions/history, private PDF artifacts, and citizen/admin payment APIs. |
+| `payments`                                       | Citizen DRAFT Step-4 `PAY_AT_STATION` initialization, one persisted payment/invoice with frozen fees, payment transitions/history, private PDF artifacts, citizen/admin payment APIs, and legacy admin initialization compatibility. |
 | `inspections`                                    | Physical inspection reads/commands, replacement booking, expiry processing, and the scheduler adapter.                                 |
 | `stickers`                                      | Admin sticker issuance after a qualifying PASS inspection and citizen/admin sticker-status reads; pickup, certificate, stock, QR, and reissue lifecycle are not implemented. |
 | `notifications`, `activity`, `admin`             | Schema/module foundations only, apart from the explicit admin operations and rejection/reopen audit writes implemented by their services. |
@@ -94,9 +94,10 @@ The central relationships currently implemented are:
   station/date;
 - application documents are versioned and their files are kept under the
   private file-storage root;
-- an approved application with one scheduled appointment may have one Payment
-  with immutable fee, expiry, and calculation snapshots plus payment-status
-  history and private PDF artifact keys;
+- a DRAFT application may already have one `PENDING` `PAY_AT_STATION` Payment
+  before submission; that one-to-one Payment keeps immutable fee, expiry, and
+  calculation snapshots plus payment-status history and private PDF artifact
+  keys through later approval and appointment resolution;
 - a vehicle may be classified against one inspection vehicle category and has
   immutable classification history;
 - a station owns legacy appointment slots and daily-capacity rows;
@@ -114,10 +115,11 @@ manager to nested operations when their writes must commit or roll back as one
 unit. Examples include account verification/session creation, password-reset
 session revocation, vehicle classification/history, application submission,
 document replacement, review actions, and Phase 4 reservation orchestration.
-Payment initialization begins only after the scheduling transaction commits, so
-an initialization failure cannot roll back an approved application, appointment,
-or capacity reservation. Payment status changes and their history writes share
-their own transaction.
+Step-4 payment initialization has its own transaction while the application is
+DRAFT; it locks the application, creates or returns the single invoice/payment,
+and freezes the fee snapshot before submission. Scheduling independently owns
+the later atomic reservation transaction. Payment status changes and their
+history writes share their own transaction.
 
 The service that owns a cross-domain transition owns the transaction. In
 particular, admin review-pass coordinates the scheduling reservation,

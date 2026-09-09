@@ -111,7 +111,7 @@ and reject a JSON request body.
 
 | Method and path                     | Request body                                                                                                   | Success                                                                                  |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `POST /auth/register`               | `phone?`, `email?`, `verificationIdentifier?`, `password`, `nameKh`, `nameEn`, `nationalIdNumber?`, `address?` | 201, registration response; development code only when configured for local development. |
+| `POST /auth/register`               | `phone?`, `email?`, `verificationIdentifier?`, `password`, `nameKh`, `nameEn?`, `nationalIdNumber?`, `address?` | 201, registration response; development code only when configured for local development. |
 | `POST /auth/verify`                 | `identifier`, six-digit `code`                                                                                 | 200, access-token response and refresh cookie.                                           |
 | `POST /auth/resend-verification`    | `identifier`                                                                                                   | 202, registration response.                                                              |
 | `POST /auth/login`                  | `identifier`, `password`                                                                                       | 200, access-token response and refresh cookie.                                           |
@@ -123,6 +123,14 @@ and reject a JSON request body.
 `identifier` is a normalized supported phone number or email. Password fields
 are 8–128 characters. Authentication responses do not expose refresh tokens,
 token hashes, or session IDs as separate response properties.
+
+Current MVP supports Cambodian citizen applicants. `nameKh` is required and
+must use Khmer characters; `nameEn` is optional and a blank value is stored as
+`null`. The service never translates or transliterates personal names. Khmer UI
+uses `nameKh`; English UI uses `nameEn` when present and otherwise uses
+`nameKh`. Official invoices show both names when available, otherwise the Khmer
+name only. Foreign-applicant account and registered-owner naming requirements
+are deferred pending official business requirements.
 
 ## Users, vehicles, and inspection categories
 
@@ -178,16 +186,18 @@ The exact `ApplicationStatus` values are:
 
 | Method and path                                                    | Body                                                    | Implemented behavior                                                                                                                                                |
 | ------------------------------------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /applications`                                               | `{ "vehicleId": "uuid" }`                               | Creates a persisted `DRAFT` for a vehicle owned by the caller. 201.                                                                                                 |
+| `POST /applications`                                               | `{ "vehicleId": "uuid" }`                               | Creates a persisted `DRAFT` for an owned vehicle only when its Cambodia-local inspection expiry is within 30 calendar days or has passed. Otherwise returns 409 `VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL`. 201. |
 | `POST /applications/:applicationId/documents`                      | `multipart/form-data`: `documentType`, `file`           | Uploads one document while DRAFT or correction-required. 201.                                                                                                       |
 | `GET /applications/:applicationId/documents`                       | —                                                       | Lists current owned documents.                                                                                                                                      |
 | `GET /applications/:applicationId/documents/:documentType/history` | page query                                              | Lists owned document-version history.                                                                                                                               |
 | `GET /applications/:applicationId/documents/:documentId/download`  | —                                                       | Streams an owned document; this is a file response, not the JSON envelope.                                                                                          |
-| `POST /applications/:applicationId/scheduling-preference`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | DRAFT only. Validates a preferred weekday/date within the configured window, saves preference, and makes no reservation. 201.                                       |
-| `POST /applications/:applicationId/submit`                         | —                                                       | DRAFT only. Validates documents/profile/vehicle/preference, creates snapshots/reference number, and moves to `SUBMITTED` without reserving. 201.                    |
+| `POST /applications/:applicationId/scheduling-preference`          | `{ "preferredInspectionDate": "YYYY-MM-DD", "preferredInspectionStationId"?: "uuid" }` | DRAFT only. Saves a date-first preference within Cambodia today (Day 1) through today + 29 days (Day 30): weekday, not an active official Cambodian holiday, and today only before 17:00 Cambodia time. The station is optional and non-binding; capacity/appointments are not read and no reservation is created. 201. |
+| `GET /inspection-calendar/closures?from=YYYY-MM-DD&to=YYYY-MM-DD` | â€” | Citizen read. Returns active global Cambodian official closures in ascending date order as `closureDate`, `reasonKh`, and `reasonEn`; no station, capacity, appointment, or reservation data. 200. |
+| `POST /applications/:applicationId/submit`                         | —                                                       | DRAFT only. Requires the Step 4 `PENDING` `PAY_AT_STATION` invoice or returns `PAYMENT_STEP_FOUR_REQUIRED`; validates documents/profile/vehicle/preferred date, creates snapshots/reference number, and moves to `SUBMITTED` without reserving. 201.                    |
 | `POST /applications/:applicationId/resubmit`                       | —                                                       | `CORRECTION_REQUIRED` only; validates current required documents and returns to `SUBMITTED`. 201.                                                                   |
-| `POST /applications/:applicationId/appointment-selection`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | `APPOINTMENT_SELECTION_REQUIRED` only. Atomically reserves, saves the new preference, creates an internal daily-capacity appointment, and moves to `APPROVED`. 201. |
+| `POST /applications/:applicationId/appointment-selection`          | `{ "stationId": "uuid", "capacityDate": "YYYY-MM-DD" }` | `APPOINTMENT_SELECTION_REQUIRED` only. Atomically reserves an actual available daily-capacity date, overwrites both stored preference fields with that selection, creates an internal daily-capacity appointment, and moves to `APPROVED`. 201. |
 | `GET /applications/:applicationId/fee-estimate`                     | —                                                       | Owned DRAFT only. Read-only current estimate; does not create payment/invoice/appointment or reserve capacity. |
+| `POST /applications/:applicationId/payment/initialize`             | —                                                       | Owned DRAFT only. Idempotently creates or returns the one `PENDING` `PAY_AT_STATION` invoice with frozen fee snapshots. It does not submit, reserve capacity, or create an appointment. |
 | `POST /applications/:applicationId/cancel`                         | `{ "reason"?: "string" }`                               | Allowed only from DRAFT, SUBMITTED, CORRECTION_REQUIRED, or APPOINTMENT_SELECTION_REQUIRED. 201.                                                                    |
 | `GET /applications`                                                | pagination query                                        | Lists the caller's applications.                                                                                                                                    |
 | `GET /applications/:applicationId/status-history`                  | pagination query                                        | Lists the caller's immutable status history.                                                                                                                        |
@@ -206,8 +216,24 @@ The DRAFT fee-estimate response is:
 
 `inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`, `lateDays`, `lateFee`,
 `totalAmount`, and `currency`. It uses current active-category and vehicle
-expiry data with Phnom Penh date rules. It is not a persisted payment snapshot
-and may change before payment initialization.
+expiry data with Phnom Penh calendar-date rules. The late fee is zero through
+30 late days; after that it charges every late day at 500 KHR for `LIGHT` or
+2,000 KHR for `HEAVY`, using the stored vehicle class. It is not a persisted
+payment snapshot and may change before payment initialization.
+
+The Step-4 `POST /applications/:applicationId/payment/initialize` response
+returns the standard payment fields plus invoice-rendering context. The payment
+fields are `id`, `applicationId`, `invoiceNumber`, `receiptNumber`, `method`,
+`status`, `inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`,
+`previousInspectionExpiryDate`, `lateDays`, `lateFee`, `totalAmount`,
+`currency`, `paymentReference`, `invoiceIssuedAt`, `confirmedAt`, `rejectedAt`,
+`rejectionReason`, `invoiceAvailable`, `receiptAvailable`,
+`inspectionSheetAvailable`, `createdAt`, and `updatedAt`. The extra context is
+`applicationReferenceNumber`, `preferredInspectionStationId`,
+`preferredInspectionDate`, `vehicle`, and `applicant`. `vehicle` contains
+`registrationNumber`, `plateNumber`, `plateCategory`, `plateProvince`,
+`plateType`, `make`, `model`, `manufactureYear`, and `chassisNumber`;
+`applicant` contains Khmer `nameKh`, nullable `nameEn`, and `phone`.
 
 ### Admin application and document routes
 
@@ -235,14 +261,15 @@ not a status-only operation.
 | Method and path                            | Role    | Response data                                                                                                                |
 | ------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `GET /stations`                            | CITIZEN | Active stations only, sorted by code then ID. Each item is `id`, `code`, `nameKh`, `nameEn`, `province`, `address`, `phone`. |
-| `GET /stations/:stationId/preferred-dates` | CITIZEN | Generated normal-renewal `{ stationId, capacityDate }[]`: weekdays from tomorrow through the inclusive configured window, excluding explicit station closures.      |
+| `GET /stations/:stationId/preferred-dates` | CITIZEN | Deprecated legacy read. Generated `{ stationId, capacityDate }[]` uses the same global 30-day date policy; it is not capacity-coupled.      |
 | `GET /stations/:stationId/available-dates` | CITIZEN | `{ stationId, capacityDate }[]`, sorted ascending. The station must be active.                                               |
 
 A date appears in availability only if it is later than Cambodia local today,
 the capacity row is open, its station is active, and it has remaining capacity.
 Preferred dates are not appointments: they do not require capacity and may be
-full-but-open. The default 60-day preferred-date window is an MVP/project
-assumption, not a confirmed official MPWT scheduling limit.
+full-but-open. The fixed Date Picker window is Cambodia today (Day 1) through
+today + 29 calendar days (Day 30); weekends and official holidays do not extend
+that window.
 
 ### Admin daily-capacity routes
 
@@ -281,24 +308,31 @@ an invalid transition and cannot double-reserve.
 
 ## Phase 5 payment contract
 
-Payment initialization follows a committed successful scheduling result; it
-does not participate in the Phase 4 reservation transaction. It creates at
-most one `PAY_AT_STATION` Payment and invoice per application, and an
-initialization failure does not undo approval, appointment creation, or
-capacity reservation. `BANK_QR` and `BANK_CARD` are future enum values only.
+The normal renewal payment sequence is `DRAFT` → citizen payment initialization
+→ `PENDING` `PAY_AT_STATION` Payment/invoice → submission → `SUBMITTED`.
+`POST /applications/:applicationId/payment/initialize` runs in its own Step-4
+transaction before submission. It is idempotent: it creates or returns at most
+one Payment and one invoice per application. It does not reserve capacity,
+create an appointment, or change the application status. Review-pass and
+appointment-selection reuse that payment/invoice and do not recalculate fees or
+generate another invoice. `BANK_QR` and `BANK_CARD` are future enum values only.
 
-Payment amount values are KHR snapshots created from the active inspection
-category and vehicle expiry: inspection fee plus service fee is the base
-amount; late days use the Cambodia-local creation date; late fee is 500 KHR per
-late day; total is base plus late fee. Invalid/missing classification,
-category, expiry, or approved/scheduled source data blocks initialization.
+Payment amount values are authoritative KHR snapshots created at Step 4 from
+the active inspection category and vehicle expiry: inspection fee plus service
+fee is the base amount; late days use the Cambodia-local creation date. The
+late fee is zero through 30 late days, then charges every late day at 500 KHR
+for a `LIGHT` vehicle or 2,000 KHR for a `HEAVY` vehicle, using the stored
+vehicle class. Total is base plus late fee. Missing or invalid required
+documents, citizen profile, preferred date, classification, category, or expiry
+source blocks citizen initialization. Submission requires the pending station
+payment and otherwise returns `PAYMENT_STEP_FOUR_REQUIRED`.
 
 ### Citizen payment routes
 
 All routes require CITIZEN and enforce ownership of `:applicationId`.
 There is no citizen route for payment-method selection, online checkout, QR or
-card payment, payment proof upload, or confirmation; the current method is
-created as `PAY_AT_STATION` after approved scheduling.
+card payment, payment proof upload, or confirmation; the only functional MVP
+method is initialized as `PAY_AT_STATION` while the application is DRAFT.
 
 | Method and path                                              | Response / rule                                                               |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
@@ -308,11 +342,10 @@ created as `PAY_AT_STATION` after approved scheduling.
 | `GET /payments/applications/:applicationId/inspection-sheet` | Streams the stored inspection sheet as `application/pdf` only when confirmed. |
 
 The citizen payment JSON response includes payment status/reference, invoice and
-receipt numbers, `baseAmount`, expiry/late-day/late-fee/total/currency values,
-payment timestamps and rejection reason, plus invoice/receipt/inspection-sheet
-availability flags. It does not expose the stored separate inspection/service
-fee components. Before payment initialization, the owned application returns
-`PAYMENT_NOT_FOUND`.
+receipt numbers, `inspectionFeeKhr`, `serviceFeeKhr`, `baseAmount`,
+expiry/late-day/late-fee/total/currency values, payment timestamps and
+rejection reason, plus invoice/receipt/inspection-sheet availability flags.
+Before payment initialization, the owned application returns `PAYMENT_NOT_FOUND`.
 
 ### Admin payment routes
 
@@ -323,7 +356,7 @@ All routes require ADMIN. List supports the implemented pagination plus
 | Method and path                                               | Body                                | Response / rule                                                                 |
 | ------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------- |
 | `GET /admin/payments`                                         | pagination/filter query             | Paginated payments.                                                             |
-| `POST /admin/payments/applications/:applicationId/initialize` | —                                   | Idempotently creates or returns the application payment.                        |
+| `POST /admin/payments/applications/:applicationId/initialize` | —                                   | Backward compatibility: idempotently creates or returns a payment for an approved application with one scheduled appointment when it has no payment. |
 | `GET /admin/payments/:paymentId`                              | —                                   | Payment detail.                                                                 |
 | `GET /admin/payments/:paymentId/history`                      | —                                   | Status-transition history, ordered ascending.                                   |
 | `POST /admin/payments/:paymentId/confirm`                     | `{ "paymentReference"?: "string" }` | `PENDING` or `REJECTED` to `CONFIRMED`; generates receipt and inspection sheet. |
@@ -338,6 +371,28 @@ Reject and reopen reasons are trimmed, non-empty, and at most 500 characters.
 The invoice is available for `PENDING`, `REJECTED`, and `CONFIRMED`; receipt
 and inspection sheet are available only for `CONFIRMED`. Download responses are
 raw PDF bytes, not JSON envelopes, and private storage keys are never exposed.
+
+### Technical inspection certificate routes
+
+Certificate status responses use the same safe shape for citizens and admins:
+`issued`, `certificateNumber`, `issuedAt`, `inspectionDate`, `expiryDate`, and
+`downloadAvailable`. They never include the certificate ID, inspection ID,
+issuing-user ID, artifact storage key, private path, or a public URL.
+
+| Method and path                                                   | Access  | Response / rule |
+| ----------------------------------------------------------------- | ------- | --------------- |
+| `GET /applications/:applicationId/certificate`                    | CITIZEN | Returns certificate status for an owned application; absence returns HTTP 200 with `issued: false`. |
+| `GET /applications/:applicationId/certificate/download`           | CITIZEN | Streams the immutable issued PDF for an owned application. |
+| `GET /admin/applications/:applicationId/certificate`              | ADMIN   | Returns the same safe certificate status contract. |
+| `GET /admin/applications/:applicationId/certificate/download`     | ADMIN   | Streams the immutable issued PDF without citizen-ownership filtering. |
+| `POST /admin/applications/:applicationId/certificate/issue`       | ADMIN   | Issues one certificate from the supplied `{ "certificateNumber": "..." }` and completes the application. |
+
+Downloads return `Content-Type: application/pdf` and an attachment filename
+derived from a sanitized certificate number. The PDF is read only through the
+private artifact service and is never regenerated by a GET request. Missing
+certificate artifacts return `CERTIFICATE_NOT_AVAILABLE`; incoherent
+certificate/application/inspection relationships return
+`CERTIFICATE_DATA_INCOHERENT` without repairing data.
 
 ## Persistence representation relevant to the API
 
@@ -379,14 +434,17 @@ Errors use the common shape:
 ```
 
 Relevant current outcomes include `STATION_NOT_FOUND`, `APPLICATION_NOT_FOUND`,
-`PAYMENT_NOT_FOUND`, `PAYMENT_DOCUMENT_NOT_AVAILABLE`,
+`VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL` when a normal-renewal draft is requested
+more than 30 Cambodia calendar days before expiry,
+`PAYMENT_STEP_FOUR_REQUIRED` when DRAFT submission lacks the required pending
+station payment, `PAYMENT_NOT_FOUND`, `PAYMENT_DOCUMENT_NOT_AVAILABLE`,
 `PAYMENT_INVALID_TRANSITION`, `RESOURCE_NOT_OWNED`, and `CONFLICT`. Sticker
 issuance additionally uses `STICKER_PASS_INSPECTION_REQUIRED`,
 `STICKER_NUMBER_CONFLICT`, and `STICKER_INVALID_TRANSITION`. Validation failures
 use `VALIDATION_ERROR`.
 
 No routes currently exist for general appointment CRUD, slot management, online
-payment providers, certificate management, notification, audit, dashboard,
+payment providers, certificate listing/search/revocation, notification, audit, dashboard,
 reports, or announcements. Do not use older planned
 `/inspection-stations`, `/appointment-slots`, or `/appointments` paths as
 current contracts.

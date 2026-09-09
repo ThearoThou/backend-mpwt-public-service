@@ -37,6 +37,17 @@ PASS permits a null or omitted `failureReason`. FAIL requires a trimmed,
 nonempty failure reason of at most 500 characters. PASS is workflow-final:
 no state containing a completed PASS advertises a new Phase 6 action.
 
+For PASS, Phase 6B resolves validity from the application's frozen inspection
+category, calculates `validUntil` from the Cambodia-local completion date, and
+stores both `validUntil` and the applied `validityRule` on the immutable
+inspection record. FAIL stores neither field. The resolver supports the 19
+approved MPWT inspection categories whose validity values are maintained in
+the project MPWT inspection-category reference. The original high-level rules
+were cross-checked with the MPWT infographic; additional detailed mappings
+were reviewed and approved from the project Excel/reference data. The
+infographic is not treated as an explicit source for every detailed category
+code and validity value.
+
 ## Attempt outcomes
 
 Attempt 1 PASS and Attempt 2 PASS leave the application APPROVED and make it

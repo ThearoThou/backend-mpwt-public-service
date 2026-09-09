@@ -72,6 +72,16 @@ months, non-negative inspection/service fees, and active flag. ADMIN routes
 create, list, read, and update the supported mutable fields. Category lookup
 for vehicle classification requires an active category.
 
+The system supports 19 approved MPWT inspection categories. Their detailed
+validity values are maintained in the project MPWT inspection-category
+reference, sourced from the project Excel/reference data. The original
+high-level validity rules were cross-checked with the MPWT infographic, but the
+infographic does not explicitly define every one of the 19 category mappings.
+The additional detailed mappings were reviewed and approved for this project.
+In particular, `MPWT0011532` at 48 months and `MPWT0011533` at 24 months are
+approved project-reference mappings, not explicit category-code rows printed
+in the infographic.
+
 Migration 6 created the table and its code/class composite identity, blank-text
 checks, positive validity check, non-negative fees, and class/activity index.
 The database representation is authoritative in
