@@ -2,6 +2,7 @@ import { ApplicationStatus } from '../applications/enums/application-status.enum
 import type { AdminApplicationDocumentResponse } from '../applications/admin-application-document-response.mapper';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { InspectionResult } from './enums/inspection-result.enum';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
 import type { AdminInspectionQueueView } from './dto/inspection-query.dtos';
 
 export interface InspectionSummaryResponse {
@@ -10,6 +11,8 @@ export interface InspectionSummaryResponse {
   result: InspectionResult;
   inspectedAt: Date;
   failureReason: string | null;
+  validUntil: string | null;
+  validityRule: InspectionValidityRule | null;
 }
 
 export interface AdminInspectionQueueResponse {
@@ -88,6 +91,8 @@ export interface CitizenInspectionHistoryResponse {
   result: InspectionResult;
   inspectedAt: Date;
   failureReason: string | null;
+  validUntil: string | null;
+  validityRule: InspectionValidityRule | null;
   station: { id: string; nameKh: string; nameEn: string } | null;
   vehicle: AdminInspectionQueueResponse['vehicle'] & {
     plateCategory: string | null;

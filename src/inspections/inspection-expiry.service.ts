@@ -4,8 +4,12 @@ import { RenewalApplicationStatusHistory } from '../applications/entities/renewa
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { DomainException } from '../common/errors/domain.exception';
-import { calendarDayDifference } from '../common/dates/calendar-date';
 import { inspectionPolicy } from '../config/inspection-policy';
+import {
+  expireInitialApplicationIfDue,
+  INITIAL_APPLICATION_EXPIRY_STATUSES,
+  isInitialApplicationPeriodExpired,
+} from '../applications/initial-application-expiry';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
@@ -16,12 +20,6 @@ import { InspectionStatus } from './enums/inspection-status.enum';
 
 const BATCH_SIZE = 100;
 type ProcessResult = { scanned: number; processed: number; skipped: number };
-const INITIAL_INSPECTION_EXPIRY_STATUSES: readonly ApplicationStatus[] = [
-  ApplicationStatus.SUBMITTED,
-  ApplicationStatus.UNDER_REVIEW,
-  ApplicationStatus.CORRECTION_REQUIRED,
-  ApplicationStatus.APPROVED,
-];
 
 @Injectable()
 export class InspectionExpiryService {
@@ -55,9 +53,11 @@ export class InspectionExpiryService {
       .select('application."id"', 'id')
       .where('application."submitted_at" IS NOT NULL')
       .andWhere('application."status" IN (:...statuses)', {
-        statuses: INITIAL_INSPECTION_EXPIRY_STATUSES,
+        statuses: INITIAL_APPLICATION_EXPIRY_STATUSES,
       })
       .andWhere(
+        // 30 Cambodia calendar days; the submission date is Day 1, so this
+        // becomes due at the start of submission date + 30 (Day 31).
         `((application."submitted_at" AT TIME ZONE 'Asia/Phnom_Penh')::date + (:periodDays - 1)) < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date`,
         {
           periodDays: inspectionPolicy.application.initialInspectionPeriodDays,
@@ -147,10 +147,10 @@ export class InspectionExpiryService {
         approved: ApplicationStatus.APPROVED,
       })
       .andWhere('inspection.status = :completed', {
-        status: InspectionStatus.COMPLETED,
+        completed: InspectionStatus.COMPLETED,
       })
       .andWhere('inspection.attemptNumber = 1')
-      .andWhere('inspection.result = :fail', { result: InspectionResult.FAIL })
+      .andWhere('inspection.result = :fail', { fail: InspectionResult.FAIL })
       .orderBy('inspection.completedAt', 'ASC')
       .addOrderBy('inspection.applicationId', 'ASC')
       .take(BATCH_SIZE)
@@ -193,7 +193,10 @@ export class InspectionExpiryService {
         { completed: InspectionStatus.COMPLETED },
       )
       .andWhere(
-        "capacity.capacity_date + INTERVAL '30 days' < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date",
+        "capacity.capacity_date + (:periodDays * INTERVAL '1 day') < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date",
+        {
+          periodDays: inspectionPolicy.application.noShowRebookingDeadlineDays,
+        },
       )
       .groupBy('appointment.applicationId')
       .orderBy('MIN(capacity.capacityDate)', 'ASC')
@@ -238,7 +241,10 @@ export class InspectionExpiryService {
         return false;
       const missedDate = state.capacityDates.get(missed.dailyCapacityId);
       if (missedDate === undefined) return false;
-      const deadline = plus30(missedDate);
+      const deadline = addCalendarDays(
+        missedDate,
+        inspectionPolicy.application.noShowRebookingDeadlineDays,
+      );
       if (deadline >= state.today) return false;
       const replacement = state.appointments.some(
         (appointment) =>
@@ -273,20 +279,22 @@ export class InspectionExpiryService {
         });
       if (
         application === null ||
-        !INITIAL_INSPECTION_EXPIRY_STATUSES.includes(application.status) ||
+        !INITIAL_APPLICATION_EXPIRY_STATUSES.includes(application.status) ||
         application.submittedAt === null
       ) {
         return false;
       }
-      const [clock] = await manager.query<
-        { today: string; recordedAt: Date; submittedAtDate: string | null }[]
-      >(
-        `SELECT now() AS "recordedAt", (now() AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "today", ($1::timestamptz AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "submittedAtDate"`,
-        [application.submittedAt],
+      const [clock] = await manager.query<{ recordedAt: Date }[]>(
+        `SELECT now() AS "recordedAt"`,
       );
-      if (clock === undefined || clock.submittedAtDate === null)
+      if (clock === undefined)
         throw new Error('Initial inspection expiry clock unavailable');
-      if (!isInitialInspectionPeriodOverdue(clock.submittedAtDate, clock.today))
+      if (
+        !isInitialApplicationPeriodExpired(
+          application.submittedAt,
+          clock.recordedAt,
+        )
+      )
         return false;
 
       const firstAttempt = await manager.getRepository(Inspection).findOne({
@@ -304,14 +312,11 @@ export class InspectionExpiryService {
       ) {
         return false;
       }
-      await this.transition(
+      return expireInitialApplicationIfDue(
         manager,
         application,
-        ApplicationStatus.EXPIRED,
-        'INITIAL_INSPECTION_PERIOD_EXPIRED',
         clock.recordedAt,
       );
-      return true;
     });
   }
 
@@ -351,7 +356,13 @@ export class InspectionExpiryService {
         )
       )
         return false;
-      if (plus30(cambodiaDate(first.completedAt)) >= state.today) return false;
+      if (
+        addCalendarDays(
+          cambodiaDate(first.completedAt),
+          inspectionPolicy.application.reinspectionDeadlineDays,
+        ) >= state.today
+      )
+        return false;
       await this.transition(
         manager,
         state.application,
@@ -442,19 +453,10 @@ interface State {
   today: string;
   recordedAt: Date;
 }
-function plus30(date: string): string {
+function addCalendarDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + 30);
+  value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
-}
-function isInitialInspectionPeriodOverdue(
-  submittedAtDate: string,
-  today: string,
-): boolean {
-  return (
-    calendarDayDifference(submittedAtDate, today) >=
-    inspectionPolicy.application.initialInspectionPeriodDays
-  );
 }
 function cambodiaDate(value: Date): string {
   return new Intl.DateTimeFormat('en-CA', {

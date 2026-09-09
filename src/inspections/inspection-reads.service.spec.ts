@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 
 import { AdminInspectionQueueQueryDto } from './dto/inspection-query.dtos';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
 import { InspectionReadsService } from './inspection-reads.service';
 
 describe('InspectionReadsService', () => {
@@ -56,6 +57,9 @@ describe('InspectionReadsService', () => {
           inspectionAttemptNumber: 1,
           inspectionResult: 'PASS',
           inspectedAt: new Date(),
+          validUntil: '2028-08-14',
+          validityRule:
+            InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL,
           completedPassCount: 1,
         }),
       ])
@@ -72,10 +76,19 @@ describe('InspectionReadsService', () => {
       ]);
     const service = new InspectionReadsService({ query } as never);
 
-    await expect(
-      service.listAdminQueue(queueInput('PASSED')),
-    ).resolves.toMatchObject({
-      data: [{ queueView: 'PASSED', inspection: { result: 'PASS' } }],
+    const passed = await service.listAdminQueue(queueInput('PASSED'));
+    expect(passed).toMatchObject({
+      data: [
+        {
+          queueView: 'PASSED',
+          inspection: {
+            result: 'PASS',
+            validUntil: '2028-08-14',
+            validityRule:
+              InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL,
+          },
+        },
+      ],
     });
     const failed = await service.listAdminQueue(queueInput('FAILED'));
     expect(failed.data[0]).toMatchObject({
@@ -287,6 +300,8 @@ function queueRow(overrides: Record<string, unknown> = {}) {
     inspectionResult: null,
     inspectedAt: null,
     failureReason: null,
+    validUntil: null,
+    validityRule: null,
     completedFailCount: 0,
     completedPassCount: 0,
     total: 1,

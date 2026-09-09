@@ -191,7 +191,8 @@ describe('InspectionExpiryService', () => {
       expect.objectContaining({ completed: 'COMPLETED' }),
     );
     expect(fixture.builder.andWhere).toHaveBeenCalledWith(
-      "capacity.capacity_date + INTERVAL '30 days' < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date",
+      "capacity.capacity_date + (:periodDays * INTERVAL '1 day') < (now() AT TIME ZONE 'Asia/Phnom_Penh')::date",
+      { periodDays: 30 },
     );
     expect(fixture.builder.orderBy).toHaveBeenCalledWith(
       'MIN(capacity.capacityDate)',
@@ -246,6 +247,28 @@ describe('InspectionExpiryService', () => {
     ]);
   });
 
+  it('binds every legacy reinspection candidate parameter before querying', async () => {
+    const fixture = fixtureFor();
+
+    await expect(
+      fixture.service.processReinspectionDeadlineExpiries(),
+    ).resolves.toEqual({ scanned: 0, processed: 0, skipped: 0 });
+
+    expect(fixture.reinspectionBuilder.where).toHaveBeenCalledWith(
+      'application.status = :approved',
+      { approved: ApplicationStatus.APPROVED },
+    );
+    expect(fixture.reinspectionBuilder.andWhere).toHaveBeenCalledWith(
+      'inspection.status = :completed',
+      { completed: InspectionStatus.COMPLETED },
+    );
+    expect(fixture.reinspectionBuilder.andWhere).toHaveBeenCalledWith(
+      'inspection.result = :fail',
+      { fail: InspectionResult.FAIL },
+    );
+    expect(fixture.reinspectionBuilder.getRawMany).toHaveBeenCalledTimes(1);
+  });
+
   it('selects only overdue active submitted-at candidates without a completed Attempt #1', async () => {
     const fixture = fixtureFor({
       today: '2026-10-01',
@@ -271,6 +294,7 @@ describe('InspectionExpiryService', () => {
           ApplicationStatus.UNDER_REVIEW,
           ApplicationStatus.CORRECTION_REQUIRED,
           ApplicationStatus.APPROVED,
+          ApplicationStatus.REJECTED,
         ],
       },
     );
@@ -291,6 +315,7 @@ describe('InspectionExpiryService', () => {
     [ApplicationStatus.UNDER_REVIEW],
     [ApplicationStatus.CORRECTION_REQUIRED],
     [ApplicationStatus.APPROVED],
+    [ApplicationStatus.REJECTED],
   ])('expires overdue %s applications with system history', async (status) => {
     const fixture = fixtureFor({
       today: '2026-10-01',
@@ -337,7 +362,6 @@ describe('InspectionExpiryService', () => {
 
   it.each([
     ApplicationStatus.DRAFT,
-    ApplicationStatus.REJECTED,
     ApplicationStatus.CANCELLED,
     ApplicationStatus.EXPIRED,
     ApplicationStatus.INSPECTION_FAILED,
@@ -437,6 +461,22 @@ describe('InspectionExpiryService', () => {
     expect(fixture.paymentRepository).toBeUndefined();
   });
 
+  it('does not expire an application merely because its preferred date passed', async () => {
+    const fixture = fixtureFor({
+      today: '2026-09-26',
+      submittedAtDate: '2026-09-07',
+      application: {
+        submittedAt: new Date('2026-09-07T08:30:00.000Z'),
+        preferredInspectionDate: '2026-09-25',
+      },
+    });
+
+    await invoke(fixture.service, 'expireInitialInspection', 'application-id');
+
+    expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
   it('is idempotent and rechecks Attempt #1 before the final transition', async () => {
     const fixture = fixtureFor({
       today: '2026-10-01',
@@ -511,6 +551,20 @@ describe('InspectionExpiryService', () => {
     expect(deferred.application.status).toBe(ApplicationStatus.APPROVED);
   });
 
+  it('does not apply the legacy reinspection deadline to current INSPECTION_FAILED applications', async () => {
+    const fixture = fixtureFor({
+      application: { status: ApplicationStatus.INSPECTION_FAILED },
+      inspections: [fail()],
+    });
+
+    await invoke(fixture.service, 'expireReinspection', 'application-id');
+
+    expect(fixture.application.status).toBe(
+      ApplicationStatus.INSPECTION_FAILED,
+    );
+    expect(fixture.history.save).not.toHaveBeenCalled();
+  });
+
   it.each(['2026-08-30', '2026-08-31'])(
     'does not expire Attempt-1 FAIL before or on its completion deadline (%s)',
     async (today) => {
@@ -567,6 +621,8 @@ describe('InspectionExpiryService', () => {
 });
 
 function fixtureFor(overrides: Record<string, unknown> = {}) {
+  const today =
+    typeof overrides.today === 'string' ? overrides.today : '2026-08-20';
   const application = {
     id: 'application-id',
     status: ApplicationStatus.APPROVED,
@@ -591,6 +647,7 @@ function fixtureFor(overrides: Record<string, unknown> = {}) {
   const inspectionRepository = {
     find: jest.fn().mockResolvedValue(inspections),
     findOne: jest.fn().mockResolvedValue(overrides.firstAttempt ?? null),
+    createQueryBuilder: jest.fn(),
   };
   const capacityRepository = { find: jest.fn().mockResolvedValue(capacities) };
   const history = {
@@ -608,6 +665,8 @@ function fixtureFor(overrides: Record<string, unknown> = {}) {
   applicationRepository.createQueryBuilder.mockReturnValue(initialBuilder);
   const builder = queryBuilder([]);
   appointmentRepository.createQueryBuilder.mockReturnValue(builder);
+  const reinspectionBuilder = queryBuilder([]);
+  inspectionRepository.createQueryBuilder.mockReturnValue(reinspectionBuilder);
   const rawRows: { id: string }[] = [];
   const initialRawRows: { id: string }[] = [];
   builder.getRawMany.mockImplementation(() => Promise.resolve(rawRows));
@@ -620,8 +679,8 @@ function fixtureFor(overrides: Record<string, unknown> = {}) {
     ),
     query: jest.fn().mockResolvedValue([
       {
-        today: overrides.today ?? '2026-08-20',
-        recordedAt: new Date('2026-09-01T00:00:00Z'),
+        today,
+        recordedAt: new Date(`${today}T05:00:00.000Z`),
         submittedAtDate: overrides.submittedAtDate ?? '2026-09-01',
       },
     ]),
@@ -647,6 +706,7 @@ function fixtureFor(overrides: Record<string, unknown> = {}) {
     history,
     commands,
     builder,
+    reinspectionBuilder,
     initialBuilder,
     rawRows,
     initialRawRows,

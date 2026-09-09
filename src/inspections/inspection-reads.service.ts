@@ -12,6 +12,7 @@ import { createPaginationMeta } from '../common/pagination/pagination-meta';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
 import type {
   AdminInspectionQueueView,
   CitizenInspectionHistoryQueryDto,
@@ -79,7 +80,7 @@ export class InspectionReadsService {
         appointment."id" AS "appointmentId", capacity."capacity_date"::text AS "capacityDate",
         station."id" AS "stationId", station."code" AS "stationCode", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn",
         application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model",
-        inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason",
+        inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule",
         completed."completedFailCount"::int AS "completedFailCount", completed."completedPassCount"::int AS "completedPassCount", COUNT(*) OVER()::int AS "total"
       FROM "appointments" appointment
       INNER JOIN "renewal_applications" application ON application."id" = appointment."application_id"
@@ -108,7 +109,7 @@ export class InspectionReadsService {
       SELECT appointment."id" AS "appointmentId", appointment."status" AS "appointmentStatus", appointment."daily_capacity_id" AS "dailyCapacityId", appointment."slot_id" AS "slotId",
         application."id" AS "applicationId", application."reference_number" AS "referenceNumber", application."status" AS "applicationStatus", application."vehicle_snapshot" AS "vehicleSnapshot",
         capacity."capacity_date"::text AS "capacityDate", station."id" AS "stationId", station."code" AS "stationCode", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", station."province" AS "stationProvince", station."address" AS "stationAddress", station."phone" AS "stationPhone",
-        payment."status" AS "paymentStatus", inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason",
+        payment."status" AS "paymentStatus", inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule",
         completed."completedFailCount"::int AS "completedFailCount", completed."completedPassCount"::int AS "completedPassCount",
         (capacity."capacity_date" = ((now() AT TIME ZONE 'Asia/Phnom_Penh')::date)) AS "isToday", (capacity."capacity_date" < ((now() AT TIME ZONE 'Asia/Phnom_Penh')::date)) AS "isPast"
       FROM "appointments" appointment
@@ -183,7 +184,7 @@ export class InspectionReadsService {
     const [row] = await this.dataSource.query<ApplicationAttemptDetailRow[]>(
       `
       SELECT application."id" AS "applicationId", application."reference_number" AS "referenceNumber", application."status" AS "applicationStatus",
-        inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason",
+        inspection."id" AS "inspectionId", inspection."status" AS "inspectionStatus", inspection."attempt_number" AS "inspectionAttemptNumber", inspection."result" AS "inspectionResult", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule",
         station."id" AS "stationId", station."code" AS "stationCode", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn"
       FROM "renewal_applications" application
       LEFT JOIN LATERAL (
@@ -243,14 +244,14 @@ export class InspectionReadsService {
     const [row] = await this.dataSource.query<CitizenStatusRow[]>(
       `
       SELECT application."id" AS "applicationId", application."status" AS "applicationStatus",
-        latest_inspection."id" AS "inspectionId", latest_inspection."attempt_number" AS "inspectionAttemptNumber", latest_inspection."result" AS "inspectionResult", latest_inspection."completed_at" AS "inspectedAt", latest_inspection."failure_reason" AS "failureReason",
+        latest_inspection."id" AS "inspectionId", latest_inspection."attempt_number" AS "inspectionAttemptNumber", latest_inspection."result" AS "inspectionResult", latest_inspection."completed_at" AS "inspectedAt", latest_inspection."failure_reason" AS "failureReason", latest_inspection."valid_until"::text AS "validUntil", latest_inspection."validity_rule" AS "validityRule",
         latest_appointment."status" AS "latestAppointmentStatus", latest_appointment."capacityDate" AS "latestAppointmentDate",
         attempts."attemptsUsed"::int AS "attemptsUsed", attempts."completedPassCount"::int AS "completedPassCount", first_fail."failedDate" AS "firstFailDate", first_no_show."missedDate" AS "firstNoShowDate",
         EXISTS (SELECT 1 FROM "appointments" scheduled WHERE scheduled."application_id" = application."id" AND scheduled."status" = 'SCHEDULED'::"public"."appointment_status" AND scheduled."daily_capacity_id" IS NOT NULL) AS "hasScheduledReplacement",
         EXISTS (SELECT 1 FROM "appointments" legacy WHERE legacy."application_id" = application."id" AND legacy."daily_capacity_id" IS NULL AND legacy."slot_id" IS NOT NULL) AS "hasLegacyAppointment",
         ((now() AT TIME ZONE 'Asia/Phnom_Penh')::date)::text AS "today"
       FROM "renewal_applications" application
-      LEFT JOIN LATERAL (SELECT inspection."id", inspection."attempt_number", inspection."result", inspection."completed_at", inspection."failure_reason" FROM "inspections" inspection WHERE inspection."application_id" = application."id" AND inspection."status" = 'COMPLETED'::"public"."inspection_status" ORDER BY inspection."completed_at" DESC, inspection."id" DESC LIMIT 1) latest_inspection ON true
+      LEFT JOIN LATERAL (SELECT inspection."id", inspection."attempt_number", inspection."result", inspection."completed_at", inspection."failure_reason", inspection."valid_until", inspection."validity_rule" FROM "inspections" inspection WHERE inspection."application_id" = application."id" AND inspection."status" = 'COMPLETED'::"public"."inspection_status" ORDER BY inspection."completed_at" DESC, inspection."id" DESC LIMIT 1) latest_inspection ON true
       LEFT JOIN LATERAL (SELECT appointment."status", capacity."capacity_date"::text AS "capacityDate" FROM "appointments" appointment INNER JOIN "inspection_station_daily_capacities" capacity ON capacity."id" = appointment."daily_capacity_id" WHERE appointment."application_id" = application."id" ORDER BY capacity."capacity_date" DESC, appointment."id" DESC LIMIT 1) latest_appointment ON true
       LEFT JOIN LATERAL (SELECT COUNT(*) AS "attemptsUsed", COUNT(*) FILTER (WHERE inspection."result" = 'PASS'::"public"."inspection_result") AS "completedPassCount" FROM "inspections" inspection WHERE inspection."application_id" = application."id" AND inspection."status" = 'COMPLETED'::"public"."inspection_status") attempts ON true
       LEFT JOIN LATERAL (SELECT ((inspection."completed_at" AT TIME ZONE 'Asia/Phnom_Penh')::date + 30)::text AS "failedDate" FROM "inspections" inspection WHERE inspection."application_id" = application."id" AND inspection."status" = 'COMPLETED'::"public"."inspection_status" AND inspection."attempt_number" = 1 AND inspection."result" = 'FAIL'::"public"."inspection_result" LIMIT 1) first_fail ON true
@@ -291,7 +292,7 @@ export class InspectionReadsService {
     parameters.push(input.limit, (input.page - 1) * input.limit);
     const rows = await this.dataSource.query<CitizenHistoryRow[]>(
       `
-      SELECT inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'plateCategory' AS "plateCategory", application."vehicle_snapshot" ->> 'plateProvince' AS "plateProvince", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", COUNT(*) OVER()::int AS "total"
+      SELECT inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'plateCategory' AS "plateCategory", application."vehicle_snapshot" ->> 'plateProvince' AS "plateProvince", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", COUNT(*) OVER()::int AS "total"
       FROM "inspections" inspection
       INNER JOIN "renewal_applications" application ON application."id" = inspection."application_id" AND application."citizen_id" = $1
       LEFT JOIN "inspection_stations" actual_station ON actual_station."id" = inspection."actual_station_id"
@@ -316,6 +317,10 @@ export class InspectionReadsService {
         inspectedAt: row.inspectedAt,
         failureReason:
           row.result === InspectionResult.FAIL ? row.failureReason : null,
+        validUntil:
+          row.result === InspectionResult.PASS ? row.validUntil : null,
+        validityRule:
+          row.result === InspectionResult.PASS ? row.validityRule : null,
         station:
           row.stationId === null ||
           row.stationNameKh === null ||
@@ -405,6 +410,14 @@ export class InspectionReadsService {
               row.inspectionResult === InspectionResult.FAIL
                 ? row.failureReason
                 : null,
+            validUntil:
+              row.inspectionResult === InspectionResult.PASS
+                ? row.validUntil
+                : null,
+            validityRule:
+              row.inspectionResult === InspectionResult.PASS
+                ? row.validityRule
+                : null,
           };
     if (
       row.completedPassCount > 0 &&
@@ -463,6 +476,12 @@ export class InspectionReadsService {
         row.inspectionResult === InspectionResult.FAIL
           ? row.failureReason
           : null,
+      validUntil:
+        row.inspectionResult === InspectionResult.PASS ? row.validUntil : null,
+      validityRule:
+        row.inspectionResult === InspectionResult.PASS
+          ? row.validityRule
+          : null,
     };
   }
   private pendingAttempt(
@@ -504,6 +523,8 @@ interface InspectionRow {
   inspectionResult: InspectionResult | null;
   inspectedAt: Date | null;
   failureReason: string | null;
+  validUntil: string | null;
+  validityRule: InspectionValidityRule | null;
 }
 interface QueueRow extends InspectionRow {
   applicationId: string;
@@ -563,6 +584,8 @@ interface CitizenStatusRow {
   inspectionResult: InspectionResult | null;
   inspectedAt: Date | null;
   failureReason: string | null;
+  validUntil: string | null;
+  validityRule: InspectionValidityRule | null;
   latestAppointmentStatus: AppointmentStatus | null;
   latestAppointmentDate: string | null;
   attemptsUsed: number;
@@ -580,6 +603,8 @@ interface CitizenHistoryRow {
   result: InspectionResult;
   inspectedAt: Date;
   failureReason: string | null;
+  validUntil: string | null;
+  validityRule: InspectionValidityRule | null;
   stationId: string | null;
   stationNameKh: string | null;
   stationNameEn: string | null;

@@ -2,6 +2,7 @@ import { ApplicationStatus } from '../applications/enums/application-status.enum
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { AppointmentStatus } from '../scheduling/enums/appointment-status.enum';
 import { InspectionResult } from './enums/inspection-result.enum';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
 import { InspectionReadsService } from './inspection-reads.service';
 
 describe('InspectionReadsService citizen reads', () => {
@@ -24,6 +25,9 @@ describe('InspectionReadsService citizen reads', () => {
           inspectionAttemptNumber: 1,
           inspectionResult: InspectionResult.PASS,
           inspectedAt: new Date(),
+          validUntil: '2028-08-14',
+          validityRule:
+            InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL,
           attemptsUsed: 1,
           completedPassCount: 1,
         }),
@@ -48,6 +52,11 @@ describe('InspectionReadsService citizen reads', () => {
       attemptsUsed: 1,
       attemptsRemaining: 1,
       reinspectionRequired: false,
+      inspection: {
+        validUntil: '2028-08-14',
+        validityRule:
+          InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL,
+      },
     });
     await expect(
       service.getCitizenApplicationStatus('citizen-id', 'application-id'),
@@ -417,6 +426,8 @@ function statusRow(overrides: Record<string, unknown> = {}) {
     inspectionResult: null,
     inspectedAt: null,
     failureReason: null,
+    validUntil: null,
+    validityRule: null,
     latestAppointmentStatus: AppointmentStatus.SCHEDULED,
     latestAppointmentDate: '2026-08-14',
     attemptsUsed: 0,

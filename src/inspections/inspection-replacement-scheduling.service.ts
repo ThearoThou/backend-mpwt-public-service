@@ -16,6 +16,7 @@ import { BookReplacementInspectionDto } from './dto/replacement-inspection.dto';
 import { Inspection } from './entities/inspection.entity';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
+import { inspectionPolicy } from '../config/inspection-policy';
 
 type Branch = {
   reason: 'REINSPECTION' | 'NO_SHOW_REPLACEMENT';
@@ -224,14 +225,20 @@ export class InspectionReplacementSchedulingService {
       ) {
         throw this.conflict();
       }
-      const deadline = cambodiaDatePlus30(firstFail.completedAt);
+      const deadline = cambodiaDatePlusDays(
+        firstFail.completedAt,
+        inspectionPolicy.application.reinspectionDeadlineDays,
+      );
       if (deadline <= today) throw this.conflict();
       return { reason: 'REINSPECTION', deadline };
     }
     if (state.inspections.length === 0 && noShows.length === 1) {
       const missed = state.dates.get(noShows[0].id);
       if (missed === undefined) throw this.conflict();
-      const deadline = plus30(missed);
+      const deadline = addCalendarDays(
+        missed,
+        inspectionPolicy.application.noShowRebookingDeadlineDays,
+      );
       if (deadline < today) throw this.conflict();
       return { reason: 'NO_SHOW_REPLACEMENT', deadline };
     }
@@ -259,12 +266,12 @@ interface State {
   dates: Map<string, string>;
   today: string;
 }
-function plus30(date: string): string {
+function addCalendarDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + 30);
+  value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
 }
-function cambodiaDatePlus30(date: Date | null): string {
+function cambodiaDatePlusDays(date: Date | null, days: number): string {
   if (date === null) throw new Error('Completed inspection date is required');
   const text = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Phnom_Penh',
@@ -272,7 +279,7 @@ function cambodiaDatePlus30(date: Date | null): string {
     month: '2-digit',
     day: '2-digit',
   }).format(date);
-  return plus30(text);
+  return addCalendarDays(text, days);
 }
 function isScheduledAppointmentUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;

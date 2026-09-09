@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { InspectionExpiryService } from './inspection-expiry.service';
 import { InspectionWorkflowScheduler } from './inspection-workflow.scheduler';
 
@@ -31,6 +32,26 @@ describe('InspectionWorkflowScheduler', () => {
     expect(processDueActions).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+
+  it('receives InspectionExpiryService through Nest DI and delegates work', async () => {
+    const module = await Test.createTestingModule({
+      providers: [
+        InspectionWorkflowScheduler,
+        {
+          provide: InspectionExpiryService,
+          useValue: { processDueActions },
+        },
+      ],
+    }).compile();
+
+    const nestScheduler = module.get(InspectionWorkflowScheduler);
+    await expect(
+      nestScheduler.processInspectionWorkflows(),
+    ).resolves.toBeUndefined();
+
+    expect(processDueActions).toHaveBeenCalledTimes(1);
+    await module.close();
   });
 
   it('skips an overlapping tick and accepts a later invocation after completion', async () => {

@@ -3,6 +3,7 @@ import { RenewalApplication } from '../applications/entities/renewal-application
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStation } from '../scheduling/entities/inspection-station.entity';
@@ -11,6 +12,8 @@ import { Inspection } from './entities/inspection.entity';
 import { InspectionCommandsService } from './inspection-commands.service';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
+import { ApiErrorCode } from '../common/errors/api-error-code';
 
 describe('InspectionCommandsService', () => {
   it.each([
@@ -47,6 +50,11 @@ describe('InspectionCommandsService', () => {
           failureReason:
             result === InspectionResult.FAIL ? 'Brake issue' : null,
           startedAt: null,
+          validUntil: result === InspectionResult.PASS ? '2028-08-14' : null,
+          validityRule:
+            result === InspectionResult.PASS
+              ? InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL
+              : null,
         }),
       );
       expect(fixture.appointment.status).toBe(AppointmentStatus.COMPLETED);
@@ -74,8 +82,32 @@ describe('InspectionCommandsService', () => {
       expect(fixture.payments.findOne).toHaveBeenCalledWith(
         expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
       );
+      expect(fixture.categories.findOne).toHaveBeenCalledTimes(
+        result === InspectionResult.PASS ? 1 : 0,
+      );
     },
   );
+
+  it('allows the first physical inspection at 18:30 Cambodia time on Day 30', async () => {
+    const fixture = commandFixture({
+      submittedAtDate: '2026-09-07',
+      today: '2026-10-06',
+      recordedAt: new Date('2026-10-06T11:30:00.000Z'),
+    });
+    const service = new InspectionCommandsService(fixture.dataSource as never);
+
+    await expect(
+      service.recordApplicationFirstResult('application-id', 'admin-id', {
+        actualStationId: 'station-id',
+        result: InspectionResult.FAIL,
+        failureReason: 'Brake issue',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fixture.application.status).toBe(
+      ApplicationStatus.INSPECTION_FAILED,
+    );
+  });
 
   it.each([
     [
@@ -214,7 +246,7 @@ describe('InspectionCommandsService', () => {
     ['Day 1', '2026-08-14', '2026-08-14'],
     ['Day 30', '2026-07-16', '2026-08-14'],
   ])(
-    'records the first physical inspection attempt for the renewal application on %s without an appointment',
+    'records the first physical inspection attempt from payment-confirmed readiness on %s without an appointment',
     async (_name, submittedAtDate, today) => {
       const fixture = commandFixture({ submittedAtDate, today });
       const service = new InspectionCommandsService(
@@ -234,6 +266,9 @@ describe('InspectionCommandsService', () => {
           attemptNumber: 1,
           result: InspectionResult.PASS,
           completedAt: fixture.recordedAt,
+          validUntil: '2028-08-14',
+          validityRule:
+            InspectionValidityRule.FAMILY_VEHICLE_UP_TO_4_PERSONS_RENEWAL,
           failureReason: null,
         }),
       );
@@ -241,10 +276,29 @@ describe('InspectionCommandsService', () => {
       expect(fixture.capacities.save).not.toHaveBeenCalled();
       expect(fixture.payments.save).not.toHaveBeenCalled();
       expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+      expect(fixture.application.readyForInspectionAt).toBeInstanceOf(Date);
       expect(fixture.applications.save).not.toHaveBeenCalled();
       expect(fixture.histories.save).not.toHaveBeenCalled();
     },
   );
+
+  it('rejects a PASS safely when the snapshotted category has no confirmed validity rule', async () => {
+    const fixture = commandFixture({
+      categoryCode: 'MPWT-UNKNOWN-FUTURE-CATEGORY',
+    });
+    const service = new InspectionCommandsService(fixture.dataSource as never);
+
+    await expect(
+      service.recordApplicationFirstResult('application-id', 'admin-id', {
+        actualStationId: 'station-id',
+        result: InspectionResult.PASS,
+      }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.INSPECTION_VALIDITY_RULE_UNSUPPORTED,
+      status: 409,
+    });
+    expect(fixture.inspections.save).not.toHaveBeenCalled();
+  });
 
   it('records a trimmed FAIL as attempt #1 at an active actual station regardless of planning preferences', async () => {
     const fixture = commandFixture({
@@ -287,12 +341,72 @@ describe('InspectionCommandsService', () => {
   });
 
   it.each([
+    ApplicationStatus.DRAFT,
+    ApplicationStatus.SUBMITTED,
+    ApplicationStatus.CORRECTION_REQUIRED,
+    ApplicationStatus.INSPECTION_FAILED,
+    ApplicationStatus.EXPIRED,
+    ApplicationStatus.CANCELLED,
+    ApplicationStatus.COMPLETED,
+  ])(
+    'rejects primary inspection from terminal/ineligible %s',
+    async (status) => {
+      const fixture = commandFixture({ applicationStatus: status });
+      const service = new InspectionCommandsService(
+        fixture.dataSource as never,
+      );
+
+      await expect(
+        service.recordApplicationFirstResult('application-id', 'admin-id', {
+          actualStationId: 'station-id',
+          result: InspectionResult.PASS,
+        }),
+      ).rejects.toMatchObject({ status: 409 });
+
+      expect(fixture.inspections.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('serializes duplicate PASS and contradictory PASS/FAIL primary commands', async () => {
+    for (const secondResult of [InspectionResult.PASS, InspectionResult.FAIL]) {
+      const fixture = commandFixture({ serializeTransactions: true });
+      const service = new InspectionCommandsService(
+        fixture.dataSource as never,
+      );
+      const results = await Promise.allSettled([
+        service.recordApplicationFirstResult('application-id', 'admin-1', {
+          actualStationId: 'station-id',
+          result: InspectionResult.PASS,
+        }),
+        service.recordApplicationFirstResult('application-id', 'admin-2', {
+          actualStationId: 'station-id',
+          result: secondResult,
+          ...(secondResult === InspectionResult.FAIL
+            ? { failureReason: 'Brake issue' }
+            : {}),
+        }),
+      ]);
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled'),
+      ).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === 'rejected'),
+      ).toHaveLength(1);
+      expect(fixture.inspections.save).toHaveBeenCalledTimes(1);
+      expect(fixture.histories.save).not.toHaveBeenCalled();
+      expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+    }
+  });
+
+  it.each([
     [
       'application is not approved',
       { applicationStatus: ApplicationStatus.REJECTED },
       409,
     ],
     ['submittedAt is missing', { submittedAt: null }, 409],
+    ['inspection readiness is missing', { readyForInspectionAt: null }, 409],
     ['payment is missing', { payment: null }, 404],
     ['payment is pending', { paymentStatus: PaymentStatus.PENDING }, 409],
     ['station is unknown or inactive', { station: null }, 404],
@@ -317,18 +431,28 @@ describe('InspectionCommandsService', () => {
         }),
       ).rejects.toMatchObject({ status });
       expect(fixture.inspections.save).not.toHaveBeenCalled();
+      if (_name === 'Day 31 is outside the initial period') {
+        expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+        expect(fixture.histories.save).toHaveBeenCalledTimes(1);
+      }
     },
   );
 });
 
 function commandFixture(overrides: Record<string, unknown> = {}) {
-  const recordedAt = new Date('2026-08-14T03:00:00.000Z');
+  const recordedAt =
+    (overrides.recordedAt as Date | undefined) ??
+    new Date('2026-08-14T03:00:00.000Z');
+  const submittedAtDate =
+    (overrides.submittedAtDate as string | undefined) ?? '2026-08-14';
   const application = {
     id: 'application-id',
     status: ApplicationStatus.APPROVED,
-    submittedAt: new Date('2026-08-14T03:00:00.000Z'),
+    submittedAt: new Date(`${submittedAtDate}T03:00:00.000Z`),
+    readyForInspectionAt: new Date('2026-08-12T03:00:00.000Z') as Date | null,
     preferredInspectionStationId: 'preferred-station-id',
     preferredInspectionDate: '2026-08-14',
+    vehicleSnapshot: { inspectionCategoryId: 'category-id' },
   };
   const appointment = {
     id: 'appointment-id',
@@ -345,6 +469,10 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     status: PaymentStatus.CONFIRMED,
   };
   const station = { id: 'station-id', isActive: true };
+  const category = {
+    id: 'category-id',
+    code: (overrides.categoryCode as string | undefined) ?? 'MPWT0011525',
+  };
   const applications = repository(application);
   const appointments = repository(appointment);
   const capacities = repository(capacity);
@@ -354,14 +482,27 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
       ? overrides.station
       : station,
   );
+  const categories = repository(
+    Object.prototype.hasOwnProperty.call(overrides, 'category')
+      ? overrides.category
+      : category,
+  );
   const inspections = repository(overrides.existingInspection ?? null);
+  const savedInspections: unknown[] = [];
+  inspections.save.mockImplementation((value: unknown) => {
+    savedInspections.push(value);
+    return Promise.resolve(value);
+  });
   inspections.findOne.mockImplementation(({ where }: { where: object }) =>
     'appointmentId' in where
       ? Promise.resolve(overrides.existingInspection ?? null)
       : Promise.resolve(overrides.priorPass ?? null),
   );
   inspections.createQueryBuilder = jest.fn(() =>
-    queryBuilder(overrides.prior ?? []),
+    queryBuilder(() => [
+      ...((overrides.prior as unknown[] | undefined) ?? []),
+      ...savedInspections,
+    ]),
   );
   const histories = repository(null);
   const repositories = new Map<unknown, ReturnType<typeof repository>>([
@@ -370,6 +511,7 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     [InspectionStationDailyCapacity, capacities],
     [Payment, payments],
     [InspectionStation, stations],
+    [InspectionVehicleCategory, categories],
     [Inspection, inspections],
     [RenewalApplicationStatusHistory, histories],
   ]);
@@ -384,13 +526,21 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
       },
     ]),
   };
+  let transactionTail = Promise.resolve();
+  const runTransaction = (callback: (value: unknown) => unknown) => {
+    if (overrides.serializeTransactions !== true) return callback(manager);
+    const result = transactionTail.then(() => callback(manager));
+    transactionTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   const dataSource = {
     getRepository: jest.fn(() => ({
       findOne: jest.fn().mockResolvedValue(appointment),
     })),
-    transaction: jest.fn((callback: (value: unknown) => unknown) =>
-      callback(manager),
-    ),
+    transaction: jest.fn(runTransaction),
   };
 
   if (overrides.applicationStatus !== undefined)
@@ -406,6 +556,9 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     payment.status = overrides.paymentStatus as PaymentStatus;
   if (overrides.submittedAt !== undefined)
     application.submittedAt = overrides.submittedAt as Date | null;
+  if (Object.prototype.hasOwnProperty.call(overrides, 'readyForInspectionAt'))
+    application.readyForInspectionAt =
+      overrides.readyForInspectionAt as Date | null;
   if (overrides.preferredInspectionStationId !== undefined)
     application.preferredInspectionStationId =
       overrides.preferredInspectionStationId as string | null;
@@ -424,6 +577,7 @@ function commandFixture(overrides: Record<string, unknown> = {}) {
     payments,
     capacities,
     inspections,
+    categories,
     histories,
   };
 }
@@ -438,12 +592,16 @@ function repository(value: unknown) {
   };
 }
 
-function queryBuilder(rows: unknown[]) {
+function queryBuilder(rows: unknown[] | (() => unknown[])) {
   return {
     setLock: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
-    getMany: jest.fn().mockResolvedValue(rows),
+    getMany: jest
+      .fn()
+      .mockImplementation(() =>
+        Promise.resolve(typeof rows === 'function' ? rows() : rows),
+      ),
   };
 }
 

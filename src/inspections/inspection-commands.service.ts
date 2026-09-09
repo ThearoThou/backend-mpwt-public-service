@@ -6,10 +6,13 @@ import { RenewalApplication } from '../applications/entities/renewal-application
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
-import { calendarDayDifference } from '../common/dates/calendar-date';
-import { inspectionPolicy } from '../config/inspection-policy';
+import {
+  cambodiaCalendarDate,
+  expireInitialApplicationIfDue,
+} from '../applications/initial-application-expiry';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { InspectionStationDailyCapacity } from '../scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStation } from '../scheduling/entities/inspection-station.entity';
@@ -19,6 +22,8 @@ import { RecordApplicationInspectionResultDto } from './dto/record-application-i
 import { Inspection } from './entities/inspection.entity';
 import { InspectionResult } from './enums/inspection-result.enum';
 import { InspectionStatus } from './enums/inspection-status.enum';
+import { InspectionValidityRule } from './enums/inspection-validity-rule.enum';
+import { applyInspectionValidity } from './inspection-validity';
 
 @Injectable()
 export class InspectionCommandsService {
@@ -60,7 +65,7 @@ export class InspectionCommandsService {
   ): Promise<void> {
     const normalizedInput = this.normalizeInput(input);
     try {
-      await this.dataSource.transaction((manager) =>
+      const expired = await this.dataSource.transaction((manager) =>
         this.recordApplicationFirstResultWithManager(
           manager,
           applicationId,
@@ -69,6 +74,7 @@ export class InspectionCommandsService {
           normalizedInput,
         ),
       );
+      if (expired) throw this.applicationConflict();
     } catch (error) {
       if (isUniqueViolation(error)) throw this.inspectionConflict();
       throw error;
@@ -166,6 +172,12 @@ export class InspectionCommandsService {
       .getMany();
     const attemptNumber = this.deriveAttempt(completed);
     const recordedAt = timestamp.recordedAt;
+    const validity = await this.validityForResult(
+      manager,
+      application,
+      input.result,
+      recordedAt,
+    );
     const inspection = manager.getRepository(Inspection).create({
       applicationId: application.id,
       appointmentId: appointment.id,
@@ -175,6 +187,8 @@ export class InspectionCommandsService {
       recordedByUserId: adminId,
       startedAt: null,
       completedAt: recordedAt,
+      validUntil: validity?.validUntil ?? null,
+      validityRule: validity?.rule ?? null,
       failureReason:
         input.result === InspectionResult.FAIL
           ? (input.failureReason ?? null)
@@ -209,14 +223,17 @@ export class InspectionCommandsService {
     adminId: string,
     actualStationId: string,
     input: RecordInspectionResultDto,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const applications = manager.getRepository(RenewalApplication);
     const application = await applications.findOne({
       where: { id: applicationId },
       lock: { mode: 'pessimistic_write' },
     });
     if (application === null) throw this.applicationNotFound();
-    if (application.status !== ApplicationStatus.APPROVED) {
+    if (
+      application.status !== ApplicationStatus.APPROVED ||
+      application.readyForInspectionAt === null
+    ) {
       throw this.applicationConflict();
     }
     if (application.submittedAt === null) throw this.applicationConflict();
@@ -225,7 +242,21 @@ export class InspectionCommandsService {
       manager,
       application.submittedAt,
     );
-    this.assertInitialApplicationPeriod(timestamp);
+    if (
+      await expireInitialApplicationIfDue(
+        manager,
+        application,
+        timestamp.recordedAt,
+      )
+    ) {
+      return true;
+    }
+    if (
+      cambodiaCalendarDate(timestamp.recordedAt) <
+      cambodiaCalendarDate(application.submittedAt)
+    ) {
+      throw this.applicationConflict();
+    }
 
     const payment = await manager.getRepository(Payment).findOne({
       where: { applicationId: application.id },
@@ -265,6 +296,12 @@ export class InspectionCommandsService {
       recordedByUserId: adminId,
       startedAt: null,
       completedAt: timestamp.recordedAt,
+      ...(await this.validityColumns(
+        manager,
+        application,
+        input.result,
+        timestamp.recordedAt,
+      )),
       failureReason:
         input.result === InspectionResult.FAIL
           ? (input.failureReason ?? null)
@@ -287,6 +324,7 @@ export class InspectionCommandsService {
         }),
       );
     }
+    return false;
   }
 
   private async markNoShowWithManager(
@@ -424,20 +462,6 @@ export class InspectionCommandsService {
     return timestamp;
   }
 
-  private assertInitialApplicationPeriod(timestamp: Timestamp): void {
-    if (timestamp.submittedAtDate === null) throw this.applicationConflict();
-    const elapsedDays = calendarDayDifference(
-      timestamp.submittedAtDate,
-      timestamp.today,
-    );
-    if (
-      elapsedDays < 0 ||
-      elapsedDays >= inspectionPolicy.application.initialInspectionPeriodDays
-    ) {
-      throw this.applicationConflict();
-    }
-  }
-
   private assertPaymentConfirmed(payment: Payment): void {
     if (payment.status !== PaymentStatus.CONFIRMED) {
       throw new DomainException(
@@ -477,6 +501,45 @@ export class InspectionCommandsService {
     if (completed.length >= 2) throw this.inspectionConflict();
     if (completed[0]?.result === InspectionResult.FAIL) return 2;
     throw this.inspectionConflict();
+  }
+
+  private async validityColumns(
+    manager: EntityManager,
+    application: RenewalApplication,
+    result: InspectionResult,
+    completedAt: Date,
+  ): Promise<{
+    validUntil: string | null;
+    validityRule: InspectionValidityRule | null;
+  }> {
+    const validity = await this.validityForResult(
+      manager,
+      application,
+      result,
+      completedAt,
+    );
+    return {
+      validUntil: validity?.validUntil ?? null,
+      validityRule: validity?.rule ?? null,
+    };
+  }
+
+  private async validityForResult(
+    manager: EntityManager,
+    application: RenewalApplication,
+    result: InspectionResult,
+    completedAt: Date,
+  ) {
+    if (result !== InspectionResult.PASS) return null;
+    const categoryId = application.vehicleSnapshot?.inspectionCategoryId;
+    if (typeof categoryId !== 'string') {
+      throw this.unsupportedValidityRule();
+    }
+    const category = await manager
+      .getRepository(InspectionVehicleCategory)
+      .findOne({ where: { id: categoryId } });
+    if (category === null) throw this.unsupportedValidityRule();
+    return applyInspectionValidity(category.code, completedAt);
   }
 
   private applicationNotFound(): DomainException {
@@ -533,6 +596,13 @@ export class InspectionCommandsService {
       ApiErrorCode.INSPECTION_FAILURE_REASON_REQUIRED,
       HttpStatus.BAD_REQUEST,
       'A FAIL result requires a non-empty failure reason of at most 500 characters',
+    );
+  }
+  private unsupportedValidityRule(): DomainException {
+    return new DomainException(
+      ApiErrorCode.INSPECTION_VALIDITY_RULE_UNSUPPORTED,
+      HttpStatus.CONFLICT,
+      'The application vehicle snapshot has no supported inspection validity category',
     );
   }
   private inspectionConflict(): DomainException {
