@@ -10,8 +10,13 @@ import {
   isCalendarDate,
 } from './inspection-calendar.service';
 import { inspectionPolicy } from '../config/inspection-policy';
+import {
+  addCalendarDays,
+  cambodiaCalendarDate,
+  CAMBODIA_TIME_ZONE,
+  getInitialApplicationLastValidDate,
+} from '../applications/initial-application-expiry';
 
-const PHNOM_PENH_TIME_ZONE = 'Asia/Phnom_Penh';
 export const PREFERRED_INSPECTION_WINDOW_DAYS =
   inspectionPolicy.application.initialInspectionPeriodDays;
 const PREFERRED_INSPECTION_LAST_DAY_OFFSET =
@@ -85,11 +90,8 @@ export class CitizenPreferredSchedulingService {
   ): Promise<void> {
     // Day 1 is the Cambodia-local submission date, so the inclusive window is
     // submitted date through submitted date + 29 calendar days.
-    const submittedDate = cambodiaToday(submittedAt);
-    const lastAllowedDate = addCalendarDays(
-      submittedDate,
-      PREFERRED_INSPECTION_LAST_DAY_OFFSET,
-    );
+    const submittedDate = cambodiaCalendarDate(submittedAt);
+    const lastAllowedDate = getInitialApplicationLastValidDate(submittedAt);
     if (
       !isCalendarDate(preferredInspectionDate) ||
       !isWeekday(preferredInspectionDate) ||
@@ -104,7 +106,7 @@ export class CitizenPreferredSchedulingService {
   }
 
   private bounds(): { earliest: string; latest: string } {
-    const today = cambodiaToday();
+    const today = cambodiaCalendarDate(new Date());
     return {
       earliest: today,
       latest: addCalendarDays(today, PREFERRED_INSPECTION_LAST_DAY_OFFSET),
@@ -136,29 +138,6 @@ export class CitizenPreferredSchedulingService {
   }
 }
 
-function cambodiaToday(now = new Date()): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: PHNOM_PENH_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
-  const part = (type: Intl.DateTimeFormatPartTypes): string => {
-    const value = parts.find((candidate) => candidate.type === type)?.value;
-    if (value === undefined) throw new Error(`Missing Cambodia ${type}.`);
-    return value;
-  };
-
-  return `${part('year')}-${part('month')}-${part('day')}`;
-}
-
-function addCalendarDays(date: string, days: number): string {
-  const [year, month, day] = date.split('-').map(Number);
-  const result = new Date(Date.UTC(year, month - 1, day));
-  result.setUTCDate(result.getUTCDate() + days);
-  return result.toISOString().slice(0, 10);
-}
-
 function calendarDates(firstDate: string, count: number): string[] {
   return Array.from({ length: count }, (_, index) =>
     addCalendarDays(firstDate, index),
@@ -172,7 +151,7 @@ function isWeekday(date: string): boolean {
 
 function isAfterDailyCutoff(now = new Date()): boolean {
   const hour = new Intl.DateTimeFormat('en-US', {
-    timeZone: PHNOM_PENH_TIME_ZONE,
+    timeZone: CAMBODIA_TIME_ZONE,
     hour: '2-digit',
     hourCycle: 'h23',
   })

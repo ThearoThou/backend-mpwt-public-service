@@ -67,7 +67,7 @@ describe('CitizenPreferredSchedulingService', () => {
     ).rejects.toThrow('not currently selectable');
   });
 
-  it('allows today at 16:59 Cambodia time and rejects it at 17:00', async () => {
+  it('allows today at 16:59 Cambodia time and rejects it at 17:00 and 17:01', async () => {
     const fixture = createFixture();
     jest.setSystemTime(new Date('2026-08-24T09:59:59.000Z'));
     await expect(
@@ -75,6 +75,11 @@ describe('CitizenPreferredSchedulingService', () => {
     ).resolves.toBeUndefined();
 
     jest.setSystemTime(new Date('2026-08-24T10:00:00.000Z'));
+    await expect(
+      fixture.service.validatePreferredDate('2026-08-24'),
+    ).rejects.toThrow('not currently selectable');
+
+    jest.setSystemTime(new Date('2026-08-24T10:01:00.000Z'));
     await expect(
       fixture.service.validatePreferredDate('2026-08-24'),
     ).rejects.toThrow('not currently selectable');
