@@ -13,6 +13,7 @@ export interface ApplicationDocumentResponse {
   mimeType: string;
   fileSizeBytes: string;
   status: DocumentStatus;
+  rejectionReason: string | null;
   uploadedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -32,6 +33,7 @@ export function mapApplicationDocument(
     mimeType: document.mimeType,
     fileSizeBytes: document.fileSizeBytes,
     status: document.status,
+    rejectionReason: document.rejectionReason,
     uploadedAt: document.uploadedAt,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,

@@ -49,8 +49,18 @@ describe('AdminApplicationReviewController', () => {
       requestCorrection: jest.fn().mockResolvedValue({ id: 'application-id' }),
       reject: jest.fn().mockResolvedValue({ id: 'application-id' }),
       reopen: jest.fn().mockResolvedValue({ id: 'application-id' }),
+      passReview: jest.fn().mockResolvedValue({ id: 'application-id' }),
     };
-    const controller = new AdminApplicationReviewController(service as never);
+    const workflow = {
+      resubmitAsAdmin: jest.fn().mockResolvedValue({
+        id: 'application-id',
+        status: 'SUBMITTED',
+      }),
+    };
+    const controller = new AdminApplicationReviewController(
+      service as never,
+      workflow as never,
+    );
     const actor = {
       userId: 'admin-id',
       role: UserRole.ADMIN,
@@ -73,6 +83,9 @@ describe('AdminApplicationReviewController', () => {
     await expect(
       controller.requestCorrection(actor, 'application-id', input),
     ).resolves.toEqual({ data: { id: 'application-id' } });
+    await expect(controller.resubmit(actor, 'application-id')).resolves.toEqual(
+      { data: { id: 'application-id', status: 'SUBMITTED' } },
+    );
     expect(service.startReview).toHaveBeenCalledWith(
       'admin-id',
       'application-id',
@@ -88,6 +101,10 @@ describe('AdminApplicationReviewController', () => {
     expect(service.reopen).toHaveBeenCalledWith('admin-id', 'application-id', {
       reason: 'reopen',
     });
+    expect(workflow.resubmitAsAdmin).toHaveBeenCalledWith(
+      'admin-id',
+      'application-id',
+    );
     expect(
       Reflect.getMetadata(ROLES_KEY, AdminApplicationReviewController),
     ).toEqual([UserRole.ADMIN]);

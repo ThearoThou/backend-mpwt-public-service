@@ -11,6 +11,7 @@ describe('admin application document response mapper', () => {
       versionNumber: 2,
       isCurrent: true,
       replacesDocumentId: 'previous-document-id',
+      uploadedByUserId: 'uploader-admin-id',
       originalFileName: 'citizen-id.pdf',
       mimeType: 'application/pdf',
       fileSizeBytes: '1024',
@@ -27,6 +28,7 @@ describe('admin application document response mapper', () => {
     expect(mapped).toEqual(
       expect.objectContaining({
         reviewedByUserId: 'admin-id',
+        uploadedByUserId: 'uploader-admin-id',
         rejectionReason: 'Image is not readable.',
       }),
     );

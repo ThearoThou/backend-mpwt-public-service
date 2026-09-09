@@ -10,7 +10,11 @@ export interface InspectionPolicy {
     heavyRateKhrPerDay: number;
     maxPenaltyYears: number;
   };
-  application: { initialInspectionPeriodDays: number };
+  application: {
+    initialInspectionPeriodDays: number;
+    noShowRebookingDeadlineDays: number;
+    reinspectionDeadlineDays: number;
+  };
   scheduling: { sameDayCutoffHour: number };
 }
 
@@ -26,6 +30,11 @@ export const inspectionPolicy: Readonly<InspectionPolicy> = {
   },
   application: {
     initialInspectionPeriodDays: 30,
+    // These independent workflow deadlines currently have the same value as
+    // the initial inspection period. Keep them named separately so future
+    // policy changes cannot accidentally alter all three rules.
+    noShowRebookingDeadlineDays: 30,
+    reinspectionDeadlineDays: 30,
   },
   scheduling: {
     sameDayCutoffHour: 17,

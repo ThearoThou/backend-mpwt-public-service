@@ -57,6 +57,7 @@ describe('AdminApplicationDocumentsController', () => {
 
   it('forwards list and history requests with standard response envelopes', async () => {
     const service = {
+      upload: jest.fn(),
       listCurrent: jest.fn().mockResolvedValue([{ id: DOCUMENT_ID }]),
       listHistory: jest.fn().mockResolvedValue({ data: [], meta: {} }),
       download: jest.fn(),
@@ -84,9 +85,49 @@ describe('AdminApplicationDocumentsController', () => {
     );
   });
 
+  it('forwards an admin upload with the authenticated actor identity', async () => {
+    const uploaded = { id: DOCUMENT_ID, uploadedByUserId: 'admin-id' };
+    const service = {
+      upload: jest.fn().mockResolvedValue(uploaded),
+      listCurrent: jest.fn(),
+      listHistory: jest.fn(),
+      download: jest.fn(),
+    };
+    const controller = new AdminApplicationDocumentsController(
+      service as never,
+    );
+    const actor = {
+      userId: 'admin-id',
+      role: UserRole.ADMIN,
+      sessionId: 'session-id',
+    };
+    const file = {
+      buffer: Buffer.from('x'),
+      originalname: 'corrected.pdf',
+      mimetype: 'application/pdf',
+      size: 1,
+    };
+
+    await expect(
+      controller.upload(
+        actor,
+        APPLICATION_ID,
+        DocumentType.CITIZEN_ID_CARD,
+        file,
+      ),
+    ).resolves.toEqual({ data: uploaded });
+    expect(service.upload).toHaveBeenCalledWith(
+      'admin-id',
+      APPLICATION_ID,
+      DocumentType.CITIZEN_ID_CARD,
+      file,
+    );
+  });
+
   it('streams downloads with safe attachment headers', async () => {
     const content = Buffer.from('content');
     const service = {
+      upload: jest.fn(),
       listCurrent: jest.fn(),
       listHistory: jest.fn(),
       download: jest.fn().mockResolvedValue({

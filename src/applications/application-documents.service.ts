@@ -15,6 +15,7 @@ import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { DocumentType } from './enums/document-type.enum';
+import { expireInitialApplicationIfDue } from './initial-application-expiry';
 
 export interface UploadedApplicationFile {
   buffer: Buffer;
@@ -47,24 +48,49 @@ export class ApplicationDocumentsService {
     documentType: DocumentType,
     file: UploadedApplicationFile | undefined,
   ): Promise<ApplicationDocumentResponse> {
+    return mapApplicationDocument(
+      await this.uploadForActor({
+        actorUserId: citizenId,
+        ownerCitizenId: citizenId,
+        applicationId,
+        documentType,
+        file,
+        allowDraft: true,
+      }),
+    );
+  }
+
+  async uploadAsAdmin(
+    adminId: string,
+    applicationId: string,
+    documentType: DocumentType,
+    file: UploadedApplicationFile | undefined,
+  ): Promise<ApplicationDocument> {
+    return this.uploadForActor({
+      actorUserId: adminId,
+      ownerCitizenId: null,
+      applicationId,
+      documentType,
+      file,
+      allowDraft: false,
+    });
+  }
+
+  private async uploadForActor(input: DocumentUploadActorInput) {
+    const { applicationId, file } = input;
     const extension = this.validateFile(file);
-    await this.assertUploadPreflight(citizenId, applicationId, documentType);
+    await this.assertUploadPreflight(input);
     const stored = await this.filesService.saveApplicationDocument(
       applicationId,
       file!.buffer,
       extension,
     );
     try {
-      return await this.dataSource.transaction((manager) =>
-        this.uploadWithManager(
-          manager,
-          citizenId,
-          applicationId,
-          documentType,
-          file!,
-          stored.storageKey,
-        ),
+      const document = await this.dataSource.transaction((manager) =>
+        this.uploadWithManager(manager, input, file!, stored.storageKey),
       );
+      if (document === null) throw this.applicationExpired();
+      return document;
     } catch (error) {
       await this.filesService.deleteIfExists(stored.storageKey);
       if (this.isDocumentUniqueConflict(error)) {
@@ -145,24 +171,35 @@ export class ApplicationDocumentsService {
 
   private async uploadWithManager(
     manager: EntityManager,
-    citizenId: string,
-    applicationId: string,
-    documentType: DocumentType,
+    input: DocumentUploadActorInput,
     file: UploadedApplicationFile,
     storageKey: string,
-  ): Promise<ApplicationDocumentResponse> {
+  ): Promise<ApplicationDocument | null> {
+    const {
+      actorUserId,
+      ownerCitizenId,
+      applicationId,
+      documentType,
+      allowDraft,
+    } = input;
     const applications = manager.getRepository(RenewalApplication);
     const application = await applications.findOne({
       where: { id: applicationId },
       lock: { mode: 'pessimistic_write' },
     });
     if (application === null) throw this.applicationNotFound();
-    if (application.citizenId !== citizenId) throw this.notOwned();
+    if (ownerCitizenId !== null && application.citizenId !== ownerCitizenId) {
+      throw this.notOwned();
+    }
     if (
-      ![
-        ApplicationStatus.DRAFT,
-        ApplicationStatus.CORRECTION_REQUIRED,
-      ].includes(application.status)
+      application.status === ApplicationStatus.CORRECTION_REQUIRED &&
+      (await expireInitialApplicationIfDue(manager, application, new Date()))
+    ) {
+      return null;
+    }
+    if (
+      application.status !== ApplicationStatus.CORRECTION_REQUIRED &&
+      (!allowDraft || application.status !== ApplicationStatus.DRAFT)
     ) {
       throw new DomainException(
         ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
@@ -181,9 +218,8 @@ export class ApplicationDocumentsService {
       lock: { mode: 'pessimistic_write' },
     });
     if (
-      current !== null &&
       application.status === ApplicationStatus.CORRECTION_REQUIRED &&
-      current.status !== DocumentStatus.REJECTED
+      current?.status !== DocumentStatus.REJECTED
     ) {
       throw new DomainException(
         ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
@@ -202,15 +238,18 @@ export class ApplicationDocumentsService {
         versionNumber: latest === null ? 1 : latest.versionNumber + 1,
         isCurrent: true,
         replacesDocumentId: current?.id ?? null,
-        uploadedByUserId: citizenId,
+        uploadedByUserId: actorUserId,
         storageKey,
         originalFileName: file.originalname,
         mimeType: file.mimetype,
         fileSizeBytes: String(file.size),
         status: DocumentStatus.PENDING,
+        reviewedByUserId: null,
+        reviewedAt: null,
+        rejectionReason: null,
       }),
     );
-    return mapApplicationDocument(document);
+    return document;
   }
 
   private async deleteWithManager(
@@ -266,20 +305,19 @@ export class ApplicationDocumentsService {
     if (application.citizenId !== citizenId) throw this.notOwned();
   }
   private async assertUploadPreflight(
-    citizenId: string,
-    applicationId: string,
-    documentType: DocumentType,
+    input: DocumentUploadActorInput,
   ): Promise<void> {
+    const { ownerCitizenId, applicationId, documentType, allowDraft } = input;
     const application = await this.dataSource
       .getRepository(RenewalApplication)
       .findOne({ where: { id: applicationId } });
     if (application === null) throw this.applicationNotFound();
-    if (application.citizenId !== citizenId) throw this.notOwned();
+    if (ownerCitizenId !== null && application.citizenId !== ownerCitizenId) {
+      throw this.notOwned();
+    }
     if (
-      ![
-        ApplicationStatus.DRAFT,
-        ApplicationStatus.CORRECTION_REQUIRED,
-      ].includes(application.status)
+      application.status !== ApplicationStatus.CORRECTION_REQUIRED &&
+      (!allowDraft || application.status !== ApplicationStatus.DRAFT)
     ) {
       throw new DomainException(
         ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
@@ -288,10 +326,36 @@ export class ApplicationDocumentsService {
       );
     }
     if (application.status === ApplicationStatus.CORRECTION_REQUIRED) {
-      const current = await this.dataSource
-        .getRepository(ApplicationDocument)
-        .findOne({ where: { applicationId, documentType, isCurrent: true } });
-      if (current !== null && current.status !== DocumentStatus.REJECTED) {
+      const result = await this.dataSource.transaction(async (manager) => {
+        const locked = await manager.getRepository(RenewalApplication).findOne({
+          where: { id: applicationId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (locked === null) throw this.applicationNotFound();
+        if (ownerCitizenId !== null && locked.citizenId !== ownerCitizenId) {
+          throw this.notOwned();
+        }
+        if (locked.status !== ApplicationStatus.CORRECTION_REQUIRED) {
+          throw new DomainException(
+            ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
+            HttpStatus.CONFLICT,
+            'Document upload is not allowed for the current application status',
+          );
+        }
+        if (await expireInitialApplicationIfDue(manager, locked, new Date())) {
+          return 'EXPIRED' as const;
+        }
+        const current = await manager
+          .getRepository(ApplicationDocument)
+          .findOne({
+            where: { applicationId, documentType, isCurrent: true },
+          });
+        return current?.status === DocumentStatus.REJECTED
+          ? ('ALLOWED' as const)
+          : ('NOT_REJECTED' as const);
+      });
+      if (result === 'EXPIRED') throw this.applicationExpired();
+      if (result === 'NOT_REJECTED') {
         throw new DomainException(
           ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
           HttpStatus.CONFLICT,
@@ -342,4 +406,20 @@ export class ApplicationDocumentsService {
       'Document file is invalid',
     );
   }
+  private applicationExpired() {
+    return new DomainException(
+      ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      HttpStatus.CONFLICT,
+      'The application has expired',
+    );
+  }
+}
+
+interface DocumentUploadActorInput {
+  actorUserId: string;
+  ownerCitizenId: string | null;
+  applicationId: string;
+  documentType: DocumentType;
+  file: UploadedApplicationFile | undefined;
+  allowDraft: boolean;
 }

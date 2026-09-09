@@ -89,7 +89,12 @@ describe('CitizenApplicationsController', () => {
         createDraft: jest.fn(),
       } as never,
     );
-    const query = { page: 1, limit: 20, sortOrder: 'desc' } as const;
+    const query = {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      statuses: ['SUBMITTED', 'UNDER_REVIEW', 'APPROVED'],
+    } as const;
 
     await controller.listApplications(actor(), query);
     await controller.getApplication(actor(), APPLICATION_ID);

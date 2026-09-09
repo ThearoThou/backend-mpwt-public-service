@@ -9,6 +9,7 @@ export interface AdminApplicationDocumentResponse {
   versionNumber: number;
   isCurrent: boolean;
   replacesDocumentId: string | null;
+  uploadedByUserId: string;
   originalFileName: string;
   mimeType: string;
   fileSizeBytes: string;
@@ -29,6 +30,7 @@ export type AdminApplicationDocumentSource = Pick<
   | 'versionNumber'
   | 'isCurrent'
   | 'replacesDocumentId'
+  | 'uploadedByUserId'
   | 'originalFileName'
   | 'mimeType'
   | 'fileSizeBytes'
@@ -51,6 +53,7 @@ export function mapAdminApplicationDocument(
     versionNumber: document.versionNumber,
     isCurrent: document.isCurrent,
     replacesDocumentId: document.replacesDocumentId,
+    uploadedByUserId: document.uploadedByUserId,
     originalFileName: document.originalFileName,
     mimeType: document.mimeType,
     fileSizeBytes: document.fileSizeBytes,

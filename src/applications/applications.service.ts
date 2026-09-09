@@ -6,8 +6,10 @@ import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
 import {
-  mapRenewalApplication,
-  type RenewalApplicationResponse,
+  mapCitizenApplicationDetail,
+  mapCitizenApplicationList,
+  type CitizenApplicationDetailResponse,
+  type CitizenApplicationListResponse,
 } from './application-response.mapper';
 import {
   mapRenewalApplicationStatusHistory,
@@ -19,6 +21,8 @@ import {
 } from './dto/application-request.dtos';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
+import { Inspection } from '../inspections/entities/inspection.entity';
+import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
 
 @Injectable()
 export class ApplicationsService {
@@ -33,16 +37,55 @@ export class ApplicationsService {
     citizenId: string,
     input: ListCitizenApplicationsQueryDto,
   ): Promise<RenewalApplicationListResult> {
-    const [applications, total] = await this.applicationQuery()
+    const query = this.applicationListQuery()
       .where('application.citizenId = :citizenId', { citizenId })
-      .orderBy('application.createdAt', 'DESC')
-      .addOrderBy('application.id', 'DESC')
+      .orderBy(
+        'application.createdAt',
+        input.sortOrder.toUpperCase() as 'ASC' | 'DESC',
+      )
+      .addOrderBy(
+        'application.id',
+        input.sortOrder.toUpperCase() as 'ASC' | 'DESC',
+      );
+
+    const statuses = [
+      ...new Set([
+        ...(input.statuses ?? []),
+        ...(input.status === undefined ? [] : [input.status]),
+      ]),
+    ];
+    if (statuses.length > 0) {
+      query.andWhere('application.status IN (:...statuses)', { statuses });
+    }
+
+    if (input.search !== undefined) {
+      query.andWhere(
+        `(application.referenceNumber ILIKE :search
+          OR (application.vehicleSnapshot IS NOT NULL AND (
+            application.vehicleSnapshot ->> 'plateNumber' ILIKE :search
+            OR application.vehicleSnapshot ->> 'registrationNumber' ILIKE :search
+            OR application.vehicleSnapshot ->> 'make' ILIKE :search
+            OR application.vehicleSnapshot ->> 'model' ILIKE :search
+            OR application.vehicleSnapshot ->> 'manufactureYear' ILIKE :search
+          ))
+          OR (application.vehicleSnapshot IS NULL AND (
+            vehicle.plateNumber ILIKE :search
+            OR vehicle.registrationNumber ILIKE :search
+            OR vehicle.make ILIKE :search
+            OR vehicle.model ILIKE :search
+            OR CAST(vehicle.manufactureYear AS TEXT) ILIKE :search
+          )))`,
+        { search: `%${input.search}%` },
+      );
+    }
+
+    const [applications, total] = await query
       .skip((input.page - 1) * input.limit)
       .take(input.limit)
       .getManyAndCount();
 
     return {
-      data: applications.map(mapRenewalApplication),
+      data: applications.map(mapCitizenApplicationList),
       meta: createPaginationMeta(input.page, input.limit, total),
     };
   }
@@ -50,9 +93,9 @@ export class ApplicationsService {
   async getCitizenApplication(
     citizenId: string,
     applicationId: string,
-  ): Promise<RenewalApplicationResponse> {
-    return mapRenewalApplication(
-      await this.findCitizenApplication(citizenId, applicationId),
+  ): Promise<CitizenApplicationDetailResponse> {
+    return mapCitizenApplicationDetail(
+      await this.findCitizenApplication(citizenId, applicationId, true),
     );
   }
 
@@ -110,11 +153,41 @@ export class ApplicationsService {
       ]);
   }
 
+  private applicationListQuery() {
+    return this.applicationQuery()
+      .addSelect('application.vehicleSnapshot')
+      .leftJoinAndSelect('application.vehicle', 'vehicle')
+      .leftJoinAndSelect('application.payment', 'payment')
+      .leftJoinAndMapOne(
+        'application.latestInspection',
+        Inspection,
+        'latestInspection',
+        `"latestInspection"."application_id" = application."id" AND "latestInspection"."id" = (
+          SELECT latest_completed_inspection."id"
+          FROM "inspections" latest_completed_inspection
+          WHERE latest_completed_inspection."application_id" = application."id"
+            AND latest_completed_inspection."status" = :completedInspectionStatus
+          ORDER BY latest_completed_inspection."completed_at" DESC, latest_completed_inspection."id" DESC
+          LIMIT 1
+        )`,
+        { completedInspectionStatus: InspectionStatus.COMPLETED },
+      );
+  }
+
+  private applicationDetailQuery() {
+    return this.applicationQuery().addSelect('application.vehicleSnapshot');
+  }
+
   private async findCitizenApplication(
     citizenId: string,
     applicationId: string,
+    includeVehicleSnapshot = false,
   ): Promise<RenewalApplication> {
-    const application = await this.applicationQuery()
+    const application = await (
+      includeVehicleSnapshot
+        ? this.applicationDetailQuery()
+        : this.applicationQuery()
+    )
       .where('application.id = :applicationId', { applicationId })
       .getOne();
 
@@ -139,7 +212,7 @@ export class ApplicationsService {
 }
 
 interface RenewalApplicationListResult {
-  data: RenewalApplicationResponse[];
+  data: CitizenApplicationListResponse[];
   meta: ReturnType<typeof createPaginationMeta>;
 }
 

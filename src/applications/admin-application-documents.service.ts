@@ -14,6 +14,10 @@ import {
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { DocumentType } from './enums/document-type.enum';
+import {
+  ApplicationDocumentsService,
+  type UploadedApplicationFile,
+} from './application-documents.service';
 
 @Injectable()
 export class AdminApplicationDocumentsService {
@@ -23,7 +27,24 @@ export class AdminApplicationDocumentsService {
     @InjectRepository(ApplicationDocument)
     private readonly documents: Repository<ApplicationDocument>,
     private readonly filesService: FilesService,
+    private readonly applicationDocumentsService: ApplicationDocumentsService,
   ) {}
+
+  async upload(
+    adminId: string,
+    applicationId: string,
+    documentType: DocumentType,
+    file: UploadedApplicationFile | undefined,
+  ): Promise<AdminApplicationDocumentResponse> {
+    return mapAdminApplicationDocument(
+      await this.applicationDocumentsService.uploadAsAdmin(
+        adminId,
+        applicationId,
+        documentType,
+        file,
+      ),
+    );
+  }
 
   async listCurrent(
     applicationId: string,

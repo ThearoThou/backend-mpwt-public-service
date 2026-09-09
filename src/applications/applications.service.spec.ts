@@ -12,14 +12,16 @@ const OTHER_CITIZEN_ID = '22222222-2222-4222-8222-222222222222';
 const APPLICATION_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('ApplicationsService', () => {
-  it('scopes citizen application lists and orders by creation then ID descending', async () => {
+  it('applies citizen ownership, multi-status, and grouped search before pagination', async () => {
     const fixture = createFixture();
     const service = createService(fixture);
 
     const result = await service.listCitizenApplications(CITIZEN_ID, {
       page: 2,
       limit: 10,
-      sortOrder: 'desc',
+      sortOrder: 'asc',
+      search: 'ABC123',
+      statuses: [ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW],
     });
 
     expect(fixture.applicationQuery.where).toHaveBeenCalledWith(
@@ -35,11 +37,91 @@ describe('ApplicationsService', () => {
     );
     expect(fixture.applicationQuery.orderBy).toHaveBeenCalledWith(
       'application.createdAt',
-      'DESC',
+      'ASC',
     );
     expect(fixture.applicationQuery.addOrderBy).toHaveBeenCalledWith(
       'application.id',
-      'DESC',
+      'ASC',
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      'application.status IN (:...statuses)',
+      {
+        statuses: [ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW],
+      },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "application.vehicleSnapshot ->> 'plateNumber' ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "application.vehicleSnapshot ->> 'registrationNumber' ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('application.vehicleSnapshot IS NULL'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('vehicle.registrationNumber ILIKE :search'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('vehicle.plateNumber ILIKE :search'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "application.vehicleSnapshot ->> 'make' ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "application.vehicleSnapshot ->> 'model' ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "application.vehicleSnapshot ->> 'manufactureYear' ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('vehicle.make ILIKE :search'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('vehicle.model ILIKE :search'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'CAST(vehicle.manufactureYear AS TEXT) ILIKE :search',
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.addSelect).toHaveBeenCalledWith(
+      'application.vehicleSnapshot',
+    );
+    expect(fixture.applicationQuery.leftJoinAndSelect).toHaveBeenCalledWith(
+      'application.vehicle',
+      'vehicle',
+    );
+    expect(fixture.applicationQuery.leftJoinAndSelect).toHaveBeenCalledWith(
+      'application.payment',
+      'payment',
+    );
+    expect(fixture.applicationQuery.leftJoinAndMapOne).toHaveBeenCalledWith(
+      'application.latestInspection',
+      expect.anything(),
+      'latestInspection',
+      expect.stringContaining('latest_completed_inspection'),
+      expect.objectContaining({ completedInspectionStatus: 'COMPLETED' }),
     );
     expect(fixture.applicationQuery.skip).toHaveBeenCalledWith(10);
     expect(result.meta).toEqual({
@@ -48,6 +130,99 @@ describe('ApplicationsService', () => {
       total: 1,
       totalPages: 1,
     });
+  });
+
+  it('searches the historical snapshot branch rather than live vehicle values for submitted applications', async () => {
+    const fixture = createFixture();
+
+    await createService(fixture).listCitizenApplications(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      search: 'Toyota 2024',
+      statuses: [
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.APPROVED,
+      ],
+    });
+
+    const searchCall = fixture.applicationQuery.andWhere.mock.calls.find(
+      ([clause]) =>
+        typeof clause === 'string' &&
+        clause.includes('application.referenceNumber ILIKE :search'),
+    ) as [unknown, ...unknown[]] | undefined;
+    const searchClause = searchCall?.[0];
+    expect(searchClause).toContain('application.vehicleSnapshot IS NOT NULL');
+    expect(searchClause).toContain(
+      "application.vehicleSnapshot ->> 'make' ILIKE :search",
+    );
+    expect(searchClause).toContain('application.vehicleSnapshot IS NULL AND (');
+    expect(searchClause).toContain('vehicle.make ILIKE :search');
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      'application.status IN (:...statuses)',
+      {
+        statuses: [
+          ApplicationStatus.SUBMITTED,
+          ApplicationStatus.UNDER_REVIEW,
+          ApplicationStatus.APPROVED,
+        ],
+      },
+    );
+    expect(fixture.applicationQuery.skip).toHaveBeenCalledWith(0);
+    expect(fixture.applicationQuery.take).toHaveBeenCalledWith(20);
+  });
+
+  it('keeps legacy status support and unions it with statuses without duplicates', async () => {
+    const fixture = createFixture();
+
+    await createService(fixture).listCitizenApplications(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      status: ApplicationStatus.SUBMITTED,
+      statuses: [ApplicationStatus.SUBMITTED, ApplicationStatus.APPROVED],
+    });
+
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      'application.status IN (:...statuses)',
+      { statuses: [ApplicationStatus.SUBMITTED, ApplicationStatus.APPROVED] },
+    );
+  });
+
+  it('accepts one status through statuses', async () => {
+    const fixture = createFixture();
+
+    await createService(fixture).listCitizenApplications(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      statuses: [ApplicationStatus.DRAFT],
+    });
+
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      'application.status IN (:...statuses)',
+      { statuses: [ApplicationStatus.DRAFT] },
+    );
+  });
+
+  it('returns no matches with filtered pagination metadata', async () => {
+    const fixture = createFixture();
+    fixture.applicationQuery.getManyAndCount.mockResolvedValue([[], 0]);
+
+    const result = await createService(fixture).listCitizenApplications(
+      CITIZEN_ID,
+      { page: 1, limit: 20, sortOrder: 'desc', search: 'no-match' },
+    );
+
+    expect(result).toEqual({
+      data: [],
+      meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
+    });
+    expect(fixture.applicationQuery.where).toHaveBeenCalledWith(
+      'application.citizenId = :citizenId',
+      { citizenId: CITIZEN_ID },
+    );
   });
 
   it('returns detail only to the owning citizen', async () => {
@@ -125,7 +300,11 @@ function createFixture() {
 function query() {
   return {
     select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
+    leftJoinAndMapOne: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
     addOrderBy: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),

@@ -45,6 +45,28 @@ describe('admin application response mappers', () => {
     expect(citizen).not.toHaveProperty('applicantSnapshot');
     expect(citizen).not.toHaveProperty('vehicleSnapshot');
   });
+
+  it('preserves typed technical snapshot values in admin detail', () => {
+    const source = {
+      ...application(),
+      vehicleSnapshot: {
+        ...application().vehicleSnapshot,
+        colour: 'White',
+        engineNumber: 'ENGINE-001',
+        enginePowerHp: '177.50',
+        lengthMm: 5250,
+      },
+    };
+
+    expect(mapAdminApplicationDetail(source as never).vehicleSnapshot).toEqual(
+      expect.objectContaining({
+        colour: 'White',
+        engineNumber: 'ENGINE-001',
+        enginePowerHp: '177.50',
+        lengthMm: 5250,
+      }),
+    );
+  });
 });
 
 function application() {

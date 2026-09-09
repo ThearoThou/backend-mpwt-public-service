@@ -23,7 +23,11 @@ import {
   createPaginatedResponse,
 } from '../common/http/api-response';
 import { UserRole } from '../users/enums/user-role.enum';
-import { type RenewalApplicationResponse } from './application-response.mapper';
+import {
+  type CitizenApplicationDetailResponse,
+  type CitizenApplicationListResponse,
+  type RenewalApplicationResponse,
+} from './application-response.mapper';
 import type { RenewalApplicationStatusHistoryResponse } from './application-status-history-response.mapper';
 import { ApplicationWorkflowService } from './application-workflow.service';
 import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
@@ -168,7 +172,7 @@ export class CitizenApplicationsController {
   async listApplications(
     @CurrentActor() actor: AuthenticatedActor,
     @Query() input: ListCitizenApplicationsQueryDto,
-  ): Promise<ApiPaginatedResponse<RenewalApplicationResponse>> {
+  ): Promise<ApiPaginatedResponse<CitizenApplicationListResponse>> {
     const result = await this.applicationsService.listCitizenApplications(
       actor.userId,
       input,
@@ -198,7 +202,7 @@ export class CitizenApplicationsController {
     @CurrentActor() actor: AuthenticatedActor,
     @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
     applicationId: string,
-  ): Promise<ApiDataResponse<RenewalApplicationResponse>> {
+  ): Promise<ApiDataResponse<CitizenApplicationDetailResponse>> {
     return createDataResponse(
       await this.applicationsService.getCitizenApplication(
         actor.userId,

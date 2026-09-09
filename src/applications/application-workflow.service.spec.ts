@@ -7,6 +7,8 @@ import { ApiErrorCode } from '../common/errors/api-error-code';
 import { CitizenProfile } from '../users/entities/citizen-profile.entity';
 import { User } from '../users/entities/user.entity';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { VehiclesService } from '../vehicles/vehicles.service';
+import { mapCitizenApplicationDetail } from './application-response.mapper';
 import { ApplicationDocument } from './entities/application-document.entity';
 import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 import { RenewalApplication } from './entities/renewal-application.entity';
@@ -432,6 +434,22 @@ describe('ApplicationWorkflowService.submit', () => {
       registeredOwnerNameKh: 'ម្ចាស់យានយន្ត',
       registeredOwnerNameEn: 'Vehicle Owner',
       registeredOwnerPhone: '098765432',
+      colour: 'White',
+      engineNumber: 'ENGINE-001',
+      numberOfCylinders: 4,
+      engineDisplacementCc: 2199,
+      enginePowerHp: '177.50',
+      fuelType: 'Diesel',
+      numberOfSeats: 5,
+      numberOfAxles: 2,
+      steering: 'Left',
+      vehicleWeightKg: 2200,
+      maximumLoadKg: 220,
+      maximumGrossWeightKg: 2970,
+      wheelSize: '215/60R17',
+      lengthMm: 5250,
+      widthMm: 2000,
+      heightMm: 1900,
     });
     expect(fixture.applications.save).toHaveBeenCalledWith(fixture.application);
     expect(fixture.history.create).toHaveBeenCalledWith({
@@ -447,6 +465,52 @@ describe('ApplicationWorkflowService.submit', () => {
     expect(fixture.manager.getRepository).toHaveBeenCalledWith(
       RenewalApplicationStatusHistory,
     );
+  });
+
+  it('submits safely when every technical master value is null', async () => {
+    const fixture = createSubmitFixture({}, nullTechnicalData());
+
+    await fixture.service.submit(CITIZEN_ID, 'application-id');
+
+    expect(fixture.application.status).toBe(ApplicationStatus.SUBMITTED);
+    expect(fixture.application.vehicleSnapshot).toMatchObject(
+      nullTechnicalData(),
+    );
+  });
+
+  it('keeps submitted technical history after the admin technical-data service edits the live vehicle', async () => {
+    const fixture = createSubmitFixture();
+    await fixture.service.submit(CITIZEN_ID, 'application-id');
+
+    const technicalData = createTechnicalVehicleService(fixture.vehicle);
+    await technicalData.updateTechnicalData(VEHICLE_ID, {
+      colour: 'Black',
+      engineNumber: 'ENGINE-EDITED',
+      engineDisplacementCc: 3000,
+      enginePowerHp: '220.00',
+      vehicleWeightKg: 2500,
+      lengthMm: 5400,
+    });
+
+    const detail = mapCitizenApplicationDetail(
+      fixture.application as RenewalApplication,
+    );
+    expect(fixture.vehicle).toMatchObject({
+      colour: 'Black',
+      engineNumber: 'ENGINE-EDITED',
+      engineDisplacementCc: 3000,
+      enginePowerHp: '220.00',
+      vehicleWeightKg: 2500,
+      lengthMm: 5400,
+    });
+    expect(detail.vehicleSnapshot).toMatchObject({
+      colour: 'White',
+      engineNumber: 'ENGINE-001',
+      engineDisplacementCc: 2199,
+      enginePowerHp: '177.50',
+      vehicleWeightKg: 2200,
+      lengthMm: 5250,
+    });
   });
 
   it('creates an applicant snapshot when the citizen has no English name', async () => {
@@ -553,6 +617,85 @@ describe('ApplicationWorkflowService.submit', () => {
   });
 
   describe('resubmit', () => {
+    it('allows correction resubmission through the end of Cambodia Day 30', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-06T16:59:59.000Z'));
+      try {
+        const submittedAt = new Date('2026-09-07T08:30:00.000Z');
+        const fixture = createResubmitFixture({ submittedAt });
+
+        await expect(
+          fixture.service.resubmit(CITIZEN_ID, 'application-id'),
+        ).resolves.toMatchObject({
+          status: ApplicationStatus.UNDER_REVIEW,
+          submittedAt,
+        });
+        expect(fixture.history.create).toHaveBeenCalledWith({
+          applicationId: 'application-id',
+          previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
+          newStatus: ApplicationStatus.UNDER_REVIEW,
+          changedByUserId: CITIZEN_ID,
+        });
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('canonically expires a correction on Day 31 without resetting submittedAt', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
+      try {
+        const submittedAt = new Date('2026-09-07T08:30:00.000Z');
+        const fixture = createResubmitFixture({ submittedAt });
+
+        await expect(
+          fixture.service.resubmit(CITIZEN_ID, 'application-id'),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+          status: 409,
+        });
+
+        expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+        expect(fixture.application.submittedAt).toBe(submittedAt);
+        expect(fixture.history.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
+            newStatus: ApplicationStatus.EXPIRED,
+            changedByUserId: null,
+            reason: 'INITIAL_INSPECTION_PERIOD_EXPIRED',
+          }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('canonically expires an admin resubmit on Day 31', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
+      try {
+        const submittedAt = new Date('2026-09-07T08:30:00.000Z');
+        const fixture = createResubmitFixture({ submittedAt });
+
+        await expect(
+          fixture.service.resubmitAsAdmin(
+            '33333333-3333-4333-8333-333333333333',
+            'application-id',
+          ),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+          status: HttpStatus.CONFLICT,
+        });
+        expect(fixture.application).toMatchObject({
+          status: ApplicationStatus.EXPIRED,
+          submittedAt,
+        });
+        expect(fixture.history.save).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('rejects an application that does not exist', async () => {
       const fixture = createResubmitFixture();
       fixture.applications.findOne.mockResolvedValue(null);
@@ -663,7 +806,7 @@ describe('ApplicationWorkflowService.submit', () => {
         where: { id: 'application-id' },
         lock: { mode: 'pessimistic_write' },
       });
-      expect(result.status).toBe(ApplicationStatus.SUBMITTED);
+      expect(result.status).toBe(ApplicationStatus.UNDER_REVIEW);
       expect(fixture.application.referenceNumber).toBe(originalReferenceNumber);
       expect(fixture.application.applicantSnapshot).toBe(
         originalApplicantSnapshot,
@@ -679,7 +822,7 @@ describe('ApplicationWorkflowService.submit', () => {
       expect(fixture.history.create).toHaveBeenCalledWith({
         applicationId: 'application-id',
         previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
-        newStatus: ApplicationStatus.SUBMITTED,
+        newStatus: ApplicationStatus.UNDER_REVIEW,
         changedByUserId: CITIZEN_ID,
       });
       expect(fixture.history.save).toHaveBeenCalledTimes(1);
@@ -689,6 +832,87 @@ describe('ApplicationWorkflowService.submit', () => {
       expect(fixture.manager.getRepository).toHaveBeenCalledWith(
         RenewalApplicationStatusHistory,
       );
+    });
+
+    it('allows any admin to resubmit while preserving application identity and recording that admin', async () => {
+      const adminId = '33333333-3333-4333-8333-333333333333';
+      const fixture = createResubmitFixture();
+      const original = {
+        id: fixture.application.id,
+        referenceNumber: fixture.application.referenceNumber,
+        submittedAt: fixture.application.submittedAt,
+        applicantSnapshot: fixture.application.applicantSnapshot,
+        vehicleSnapshot: fixture.application.vehicleSnapshot,
+      };
+
+      const result = await fixture.service.resubmitAsAdmin(
+        adminId,
+        'application-id',
+      );
+
+      expect(result.status).toBe(ApplicationStatus.UNDER_REVIEW);
+      expect(fixture.application).toMatchObject(original);
+      expect(fixture.history.create).toHaveBeenCalledWith({
+        applicationId: 'application-id',
+        previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
+        newStatus: ApplicationStatus.UNDER_REVIEW,
+        changedByUserId: adminId,
+      });
+    });
+
+    it.each([
+      [
+        'citizen/admin',
+        (fixture: ReturnType<typeof createResubmitFixture>) => [
+          fixture.service.resubmit(CITIZEN_ID, 'application-id'),
+          fixture.service.resubmitAsAdmin(
+            '33333333-3333-4333-8333-333333333333',
+            'application-id',
+          ),
+        ],
+      ],
+      [
+        'admin/admin',
+        (fixture: ReturnType<typeof createResubmitFixture>) => [
+          fixture.service.resubmitAsAdmin(
+            '33333333-3333-4333-8333-333333333333',
+            'application-id',
+          ),
+          fixture.service.resubmitAsAdmin(
+            '44444444-4444-4444-8444-444444444444',
+            'application-id',
+          ),
+        ],
+      ],
+      [
+        'admin duplicate request',
+        (fixture: ReturnType<typeof createResubmitFixture>) => [
+          fixture.service.resubmitAsAdmin(
+            '33333333-3333-4333-8333-333333333333',
+            'application-id',
+          ),
+          fixture.service.resubmitAsAdmin(
+            '33333333-3333-4333-8333-333333333333',
+            'application-id',
+          ),
+        ],
+      ],
+    ])('serializes %s resubmission to one transition', async (_, requests) => {
+      const fixture = createResubmitFixture();
+      serializeTransactions(fixture);
+
+      const results = await Promise.allSettled(requests(fixture));
+
+      expect(
+        results.filter((result) => result.status === 'fulfilled'),
+      ).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected');
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: { code: ApiErrorCode.APPLICATION_INVALID_TRANSITION },
+      });
+      expect(fixture.history.save).toHaveBeenCalledTimes(1);
+      expect(fixture.application.status).toBe(ApplicationStatus.UNDER_REVIEW);
     });
   });
 
@@ -823,6 +1047,7 @@ describe('ApplicationWorkflowService.submit', () => {
 
 function createSubmitFixture(
   applicationOverrides: Record<string, unknown> = {},
+  vehicleOverrides: Partial<Vehicle> = {},
 ) {
   const application = {
     id: 'application-id',
@@ -870,9 +1095,8 @@ function createSubmitFixture(
       address: 'Phnom Penh',
     }),
   };
-  const vehicles = {
-    findOne: jest.fn().mockResolvedValue(submissionVehicle()),
-  };
+  const vehicle = { ...submissionVehicle(), ...vehicleOverrides } as Vehicle;
+  const vehicles = { findOne: jest.fn().mockResolvedValue(vehicle) };
   const history = {
     create: jest.fn((input: Record<string, unknown>) => input),
     save: jest.fn().mockResolvedValue(undefined),
@@ -919,6 +1143,7 @@ function createSubmitFixture(
       dataSource as unknown as DataSource,
       preferredScheduling as never,
     ),
+    vehicle,
   };
 }
 
@@ -927,6 +1152,26 @@ function preferredSchedulingStub() {
     validatePreferredDateForSubmission: jest.fn(),
     validateOptionalStationWithManager: jest.fn().mockResolvedValue(undefined),
   };
+}
+
+function serializeTransactions(
+  fixture: ReturnType<typeof createResubmitFixture>,
+) {
+  let previous = Promise.resolve();
+  fixture.dataSource.transaction.mockImplementation(
+    (
+      callback: (
+        transactionManager: typeof fixture.manager,
+      ) => Promise<unknown>,
+    ) => {
+      const current = previous.then(() => callback(fixture.manager));
+      previous = current.then(
+        () => undefined,
+        () => undefined,
+      );
+      return current;
+    },
+  );
 }
 
 function createResubmitFixture(
@@ -943,7 +1188,7 @@ function createResubmitFixture(
     vehicleClass: null,
     inspectionCategoryId: null,
   };
-  const submittedAt = new Date('2026-08-08T00:00:00.000Z');
+  const submittedAt = new Date();
 
   return createSubmitFixture({
     status: ApplicationStatus.CORRECTION_REQUIRED,
@@ -969,7 +1214,7 @@ function createCancelFixture(
     referenceNumber: 'VIR-20260808-ABCDEF123456',
     applicantSnapshot: { userId: CITIZEN_ID, nameEn: 'Test Citizen' },
     vehicleSnapshot: { vehicleId: VEHICLE_ID, registrationNumber: 'REG-001' },
-    submittedAt: new Date('2026-08-08T00:00:00.000Z'),
+    submittedAt: new Date(),
     currentCorrectionReason: 'A retained correction reason.',
     ...applicationOverrides,
   });
@@ -1026,7 +1271,60 @@ function submissionVehicle() {
     registeredOwnerNameKh: 'ម្ចាស់យានយន្ត',
     registeredOwnerNameEn: 'Vehicle Owner',
     registeredOwnerPhone: '098765432',
+    colour: 'White',
+    engineNumber: 'ENGINE-001',
+    numberOfCylinders: 4,
+    engineDisplacementCc: 2199,
+    enginePowerHp: '177.50',
+    fuelType: 'Diesel',
+    numberOfSeats: 5,
+    numberOfAxles: 2,
+    steering: 'Left',
+    vehicleWeightKg: 2200,
+    maximumLoadKg: 220,
+    maximumGrossWeightKg: 2970,
+    wheelSize: '215/60R17',
+    lengthMm: 5250,
+    widthMm: 2000,
+    heightMm: 1900,
   };
+}
+
+function nullTechnicalData(): Partial<Vehicle> {
+  return {
+    colour: null,
+    engineNumber: null,
+    numberOfCylinders: null,
+    engineDisplacementCc: null,
+    enginePowerHp: null,
+    fuelType: null,
+    numberOfSeats: null,
+    numberOfAxles: null,
+    steering: null,
+    vehicleWeightKg: null,
+    maximumLoadKg: null,
+    maximumGrossWeightKg: null,
+    wheelSize: null,
+    lengthMm: null,
+    widthMm: null,
+    heightMm: null,
+  };
+}
+
+function createTechnicalVehicleService(vehicle: Vehicle): VehiclesService {
+  const query = {
+    leftJoinAndMapOne: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    getOne: jest.fn().mockResolvedValue(vehicle),
+  };
+  const repository = {
+    createQueryBuilder: jest.fn().mockReturnValue(query),
+    save: jest.fn((value: Vehicle) => Promise.resolve(value)),
+  };
+
+  return new VehiclesService(repository as never);
 }
 
 function createFixture() {

@@ -7,7 +7,9 @@ import { validate } from 'class-validator';
 import {
   CancelRenewalApplicationRequestDto,
   CreateRenewalApplicationDraftRequestDto,
+  ListCitizenApplicationsQueryDto,
 } from './application-request.dtos';
+import { ApplicationStatus } from '../enums/application-status.enum';
 
 describe('CreateRenewalApplicationDraftRequestDto', () => {
   it('accepts a UUID vehicle ID', async () => {
@@ -91,5 +93,49 @@ describe('CancelRenewalApplicationRequestDto', () => {
     });
     expect(await validate(input)).toHaveLength(0);
     expect(input.reason).toHaveLength(500);
+  });
+});
+
+describe('ListCitizenApplicationsQueryDto', () => {
+  it('trims search and accepts single and comma-separated application-status filters', async () => {
+    const input = plainToInstance(ListCitizenApplicationsQueryDto, {
+      search: '  ABC123  ',
+      status: ApplicationStatus.COMPLETED,
+      statuses: ' SUBMITTED, UNDER_REVIEW, SUBMITTED ',
+    });
+
+    expect(await validate(input)).toHaveLength(0);
+    expect(input.search).toBe('ABC123');
+    expect(input.status).toBe(ApplicationStatus.COMPLETED);
+    expect(input.statuses).toEqual([
+      ApplicationStatus.SUBMITTED,
+      ApplicationStatus.UNDER_REVIEW,
+    ]);
+  });
+
+  it('treats blank search as absent and rejects an invalid status', async () => {
+    const blank = plainToInstance(ListCitizenApplicationsQueryDto, {
+      search: '   ',
+    });
+    const invalidStatus = plainToInstance(ListCitizenApplicationsQueryDto, {
+      status: 'NOT_A_STATUS',
+    });
+    const invalidStatuses = plainToInstance(ListCitizenApplicationsQueryDto, {
+      statuses: 'SUBMITTED,NOT_A_STATUS',
+    });
+
+    expect(await validate(blank)).toHaveLength(0);
+    expect(blank.search).toBeUndefined();
+    expect(await validate(invalidStatus)).not.toHaveLength(0);
+    expect(await validate(invalidStatuses)).not.toHaveLength(0);
+  });
+
+  it('treats blank statuses as absent', async () => {
+    const input = plainToInstance(ListCitizenApplicationsQueryDto, {
+      statuses: ' , ',
+    });
+
+    expect(await validate(input)).toHaveLength(0);
+    expect(input.statuses).toBeUndefined();
   });
 });

@@ -22,6 +22,8 @@ import { Payment } from '../payments/entities/payment.entity';
 import { PaymentMethod } from '../payments/enums/payment-method.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { inspectionPolicy } from '../config/inspection-policy';
+import { expireInitialApplicationIfDue } from './initial-application-expiry';
+import { createApplicationVehicleSnapshot } from './application-vehicle-snapshot';
 
 export const UNFINISHED_APPLICATION_STATUSES = [
   ApplicationStatus.DRAFT,
@@ -35,6 +37,7 @@ export const UNFINISHED_APPLICATION_STATUSES = [
 
 const UNFINISHED_APPLICATION_UNIQUE_INDEX =
   'uq_unfinished_application_per_vehicle';
+const INITIAL_APPLICATION_EXPIRED = Symbol('INITIAL_APPLICATION_EXPIRED');
 
 @Injectable()
 export class ApplicationWorkflowService {
@@ -86,22 +89,36 @@ export class ApplicationWorkflowService {
     );
   }
   async resubmit(citizenId: string, applicationId: string) {
-    return this.dataSource.transaction((m) =>
+    return this.resubmitCorrection(citizenId, applicationId, citizenId);
+  }
+
+  async resubmitAsAdmin(adminId: string, applicationId: string) {
+    return this.resubmitCorrection(adminId, applicationId, null);
+  }
+
+  private async resubmitCorrection(
+    actorUserId: string,
+    applicationId: string,
+    ownerCitizenId: string | null,
+  ) {
+    const result = await this.dataSource.transaction((m) =>
       this.transition(
         m,
-        citizenId,
+        actorUserId,
         applicationId,
         ApplicationStatus.CORRECTION_REQUIRED,
-        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW,
+        ownerCitizenId,
       ),
     );
+    return this.requireUnexpiredResult(result);
   }
   async cancel(
     citizenId: string,
     applicationId: string,
     reason?: string | null,
   ) {
-    return this.dataSource.transaction(async (m) => {
+    const result = await this.dataSource.transaction(async (m) => {
       const a = await this.locked(m, citizenId, applicationId);
       if (
         ![
@@ -116,6 +133,9 @@ export class ApplicationWorkflowService {
           HttpStatus.CONFLICT,
           'Application cannot be cancelled',
         );
+      if (await expireInitialApplicationIfDue(m, a, new Date())) {
+        return INITIAL_APPLICATION_EXPIRED;
+      }
       const p = a.status,
         now = new Date();
       a.status = ApplicationStatus.CANCELLED;
@@ -126,6 +146,7 @@ export class ApplicationWorkflowService {
       await this.history(m, a.id, p, ApplicationStatus.CANCELLED, citizenId);
       return mapRenewalApplication(a);
     });
+    return this.requireUnexpiredResult(result);
   }
   private async submitWithManager(m: EntityManager, c: string, id: string) {
     const a = await this.locked(m, c, id);
@@ -181,27 +202,7 @@ export class ApplicationWorkflowService {
       email: u.email,
       address: p.address,
     };
-    a.vehicleSnapshot = {
-      vehicleId: v.id,
-      registrationNumber: v.registrationNumber,
-      plateNumber: v.plateNumber,
-      plateCategory: v.plateCategory,
-      plateProvince: v.plateProvince,
-      plateType: v.plateType,
-      vehicleType: v.vehicleType,
-      vehicleClass: v.vehicleClass,
-      inspectionCategoryId: v.inspectionCategoryId,
-      make: v.make,
-      model: v.model,
-      manufactureYear: v.manufactureYear,
-      chassisNumber: v.chassisNumber,
-      firstRegistrationDate: v.firstRegistrationDate,
-      lastInspectionDate: v.lastInspectionDate,
-      inspectionExpiryDate: v.inspectionExpiryDate,
-      registeredOwnerNameKh: v.registeredOwnerNameKh,
-      registeredOwnerNameEn: v.registeredOwnerNameEn,
-      registeredOwnerPhone: v.registeredOwnerPhone,
-    };
+    a.vehicleSnapshot = createApplicationVehicleSnapshot(v);
     a.submittedAt = now;
     a.status = ApplicationStatus.SUBMITTED;
     await m.getRepository(RenewalApplication).save(a);
@@ -216,18 +217,22 @@ export class ApplicationWorkflowService {
   }
   private async transition(
     m: EntityManager,
-    c: string,
+    actorUserId: string,
     id: string,
     from: ApplicationStatus,
     to: ApplicationStatus,
+    ownerCitizenId: string | null,
   ) {
-    const a = await this.locked(m, c, id);
+    const a = await this.lockedForCorrection(m, id, ownerCitizenId);
     if (a.status !== from)
       throw new DomainException(
         ApiErrorCode.APPLICATION_INVALID_TRANSITION,
         HttpStatus.CONFLICT,
         'Application transition is invalid',
       );
+    if (await expireInitialApplicationIfDue(m, a, new Date())) {
+      return INITIAL_APPLICATION_EXPIRED;
+    }
     await this.docs(m, id);
     if (
       a.referenceNumber === null ||
@@ -242,8 +247,21 @@ export class ApplicationWorkflowService {
       );
     a.status = to;
     await m.getRepository(RenewalApplication).save(a);
-    await this.history(m, a.id, from, to, c);
+    await this.history(m, a.id, from, to, actorUserId);
     return mapRenewalApplication(a);
+  }
+
+  private requireUnexpiredResult<T>(
+    result: T | typeof INITIAL_APPLICATION_EXPIRED,
+  ): T {
+    if (result === INITIAL_APPLICATION_EXPIRED) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+        HttpStatus.CONFLICT,
+        'The application has expired',
+      );
+    }
+    return result;
   }
   private async locked(m: EntityManager, c: string, id: string) {
     const a = await m
@@ -262,6 +280,33 @@ export class ApplicationWorkflowService {
         'Renewal application is outside the citizen ownership scope',
       );
     return a;
+  }
+  private async lockedForCorrection(
+    manager: EntityManager,
+    applicationId: string,
+    ownerCitizenId: string | null,
+  ) {
+    const application = await manager
+      .getRepository(RenewalApplication)
+      .findOne({
+        where: { id: applicationId },
+        lock: { mode: 'pessimistic_write' },
+      });
+    if (application === null) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Renewal application not found',
+      );
+    }
+    if (ownerCitizenId !== null && application.citizenId !== ownerCitizenId) {
+      throw new DomainException(
+        ApiErrorCode.RESOURCE_NOT_OWNED,
+        HttpStatus.FORBIDDEN,
+        'Renewal application is outside the citizen ownership scope',
+      );
+    }
+    return application;
   }
   private async docs(m: EntityManager, id: string) {
     const rows = await m

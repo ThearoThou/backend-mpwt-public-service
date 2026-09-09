@@ -15,6 +15,7 @@ import { RolesGuard } from '../common/auth/roles.guard';
 import { createDataResponse } from '../common/http/api-response';
 import { UserRole } from '../users/enums/user-role.enum';
 import { AdminApplicationReviewService } from './admin-application-review.service';
+import { ApplicationWorkflowService } from './application-workflow.service';
 import { RequestApplicationCorrectionDto } from './dto/request-application-correction.dto';
 import { RejectApplicationDto } from './dto/reject-application.dto';
 import { ReopenApplicationDto } from './dto/reopen-application.dto';
@@ -25,7 +26,22 @@ import { ReopenApplicationDto } from './dto/reopen-application.dto';
 export class AdminApplicationReviewController {
   constructor(
     private readonly adminApplicationReviewService: AdminApplicationReviewService,
+    private readonly applicationWorkflowService: ApplicationWorkflowService,
   ) {}
+
+  @Post(':applicationId/resubmit')
+  async resubmit(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+  ) {
+    return createDataResponse(
+      await this.applicationWorkflowService.resubmitAsAdmin(
+        actor.userId,
+        applicationId,
+      ),
+    );
+  }
 
   @Post(':applicationId/start-review')
   async startReview(

@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 
 import { AuditLog } from '../activity/entities/audit-log.entity';
+import { ApplicationTimelineEvent } from '../activity/entities/application-timeline-event.entity';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { FilesService } from '../files/files.service';
 import { CitizenProfile } from '../users/entities/citizen-profile.entity';
@@ -23,9 +24,15 @@ import { DocumentType } from './enums/document-type.enum';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentMethod } from '../payments/enums/payment-method.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { Inspection } from '../inspections/entities/inspection.entity';
+import { InspectionResult } from '../inspections/enums/inspection-result.enum';
+import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
+import { Sticker } from '../stickers/entities/sticker.entity';
 
 const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const ADMIN_ID = '22222222-2222-4222-8222-222222222222';
+const UPLOADER_ADMIN_ID = '44444444-4444-4444-8444-444444444444';
+const RESUBMITTER_ADMIN_ID = '55555555-5555-4555-8555-555555555555';
 const VEHICLE_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('application workflow integration', () => {
@@ -183,7 +190,7 @@ describe('application workflow integration', () => {
     );
   });
 
-  it('runs the citizen correction and admin rejection/reopen loop through real services', async () => {
+  it('runs mixed citizen/admin correction and admin resubmit through real services', async () => {
     const fixture = createFixture();
     const workflow = new ApplicationWorkflowService(
       fixture.dataSource as unknown as DataSource,
@@ -220,6 +227,7 @@ describe('application workflow integration', () => {
     fixture.payments.push({
       id: 'payment-id',
       applicationId: application.id,
+      invoiceNumber: 'INV-20260808-000001',
       method: PaymentMethod.PAY_AT_STATION,
       status: PaymentStatus.PENDING,
     } as Payment);
@@ -247,6 +255,27 @@ describe('application workflow integration', () => {
       inspectionCategoryId: 'category-id',
     });
 
+    fixture.payments[0].status = PaymentStatus.CONFIRMED;
+    application.status = ApplicationStatus.APPROVED;
+    application.readyForInspectionAt = new Date();
+    fixture.inspections.push({
+      id: 'inspection-id',
+      applicationId: application.id,
+      attemptNumber: 1,
+      status: InspectionStatus.COMPLETED,
+      result: InspectionResult.PASS,
+      completedAt: new Date(),
+    } as Inspection);
+    fixture.stickers.push({
+      id: 'sticker-id',
+      applicationId: application.id,
+      inspectionId: 'inspection-id',
+      issuedAt: new Date(),
+    } as Sticker);
+    const paymentBeforeCorrection = structuredClone(fixture.payments[0]);
+    const inspectionsBeforeCorrection = structuredClone(fixture.inspections);
+    const stickersBeforeCorrection = structuredClone(fixture.stickers);
+
     await review.startReview(ADMIN_ID, application.id);
     const originalReviewStartedAt = application.reviewStartedAt;
     expect(application.status).toBe(ApplicationStatus.UNDER_REVIEW);
@@ -254,7 +283,10 @@ describe('application workflow integration', () => {
 
     const correctionReason = 'Replace the registration card';
     await review.requestCorrection(ADMIN_ID, application.id, {
-      documentTypes: [DocumentType.VEHICLE_REGISTRATION_CARD],
+      documentTypes: [
+        DocumentType.VEHICLE_REGISTRATION_CARD,
+        DocumentType.CITIZEN_ID_CARD,
+      ],
       reason: correctionReason,
     });
     const currentVrc = currentDocument(
@@ -269,24 +301,31 @@ describe('application workflow integration', () => {
       reviewedByUserId: ADMIN_ID,
     });
     expect(currentVrc.reviewedAt).toBeInstanceOf(Date);
-    for (const documentType of [
-      DocumentType.PREVIOUS_INSPECTION_CERTIFICATE,
-      DocumentType.CITIZEN_ID_CARD,
-    ]) {
-      expect(currentDocument(fixture.documents, documentType)).toMatchObject({
-        status: DocumentStatus.APPROVED,
-        rejectionReason: null,
-        reviewedByUserId: ADMIN_ID,
-      });
-    }
+    expect(
+      currentDocument(
+        fixture.documents,
+        DocumentType.PREVIOUS_INSPECTION_CERTIFICATE,
+      ),
+    ).toMatchObject({
+      status: DocumentStatus.APPROVED,
+      rejectionReason: null,
+      reviewedByUserId: ADMIN_ID,
+    });
+    expect(
+      currentDocument(fixture.documents, DocumentType.CITIZEN_ID_CARD),
+    ).toMatchObject({
+      status: DocumentStatus.REJECTED,
+      rejectionReason: correctionReason,
+      reviewedByUserId: ADMIN_ID,
+    });
 
     const documentCountBeforeInvalidReplacement = fixture.documents.length;
     await expect(
       documents.upload(
         CITIZEN_ID,
         application.id,
-        DocumentType.CITIZEN_ID_CARD,
-        pdfFile(DocumentType.CITIZEN_ID_CARD),
+        DocumentType.PREVIOUS_INSPECTION_CERTIFICATE,
+        pdfFile(DocumentType.PREVIOUS_INSPECTION_CERTIFICATE),
       ),
     ).rejects.toMatchObject({
       code: ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
@@ -296,11 +335,21 @@ describe('application workflow integration', () => {
       documentCountBeforeInvalidReplacement,
     );
 
-    await documents.upload(
-      CITIZEN_ID,
+    await documents.uploadAsAdmin(
+      UPLOADER_ADMIN_ID,
       application.id,
       DocumentType.VEHICLE_REGISTRATION_CARD,
       pdfFile(DocumentType.VEHICLE_REGISTRATION_CARD),
+    );
+    const currentCitizenId = currentDocument(
+      fixture.documents,
+      DocumentType.CITIZEN_ID_CARD,
+    );
+    await documents.upload(
+      CITIZEN_ID,
+      application.id,
+      DocumentType.CITIZEN_ID_CARD,
+      pdfFile(DocumentType.CITIZEN_ID_CARD),
     );
     const replacementVrc = currentDocument(
       fixture.documents,
@@ -314,6 +363,16 @@ describe('application workflow integration', () => {
       versionNumber: 2,
       isCurrent: true,
       replacesDocumentId: currentVrc.id,
+      uploadedByUserId: UPLOADER_ADMIN_ID,
+      status: DocumentStatus.PENDING,
+      rejectionReason: null,
+    });
+    expect(
+      currentDocument(fixture.documents, DocumentType.CITIZEN_ID_CARD),
+    ).toMatchObject({
+      versionNumber: 2,
+      replacesDocumentId: currentCitizenId.id,
+      uploadedByUserId: CITIZEN_ID,
       status: DocumentStatus.PENDING,
     });
     expect(
@@ -323,9 +382,9 @@ describe('application workflow integration', () => {
       ),
     ).toMatchObject({ status: DocumentStatus.APPROVED, versionNumber: 1 });
 
-    await workflow.resubmit(CITIZEN_ID, application.id);
+    await workflow.resubmitAsAdmin(RESUBMITTER_ADMIN_ID, application.id);
     expect(application).toMatchObject({
-      status: ApplicationStatus.SUBMITTED,
+      status: ApplicationStatus.UNDER_REVIEW,
       referenceNumber,
       applicantSnapshot,
       vehicleSnapshot,
@@ -333,13 +392,15 @@ describe('application workflow integration', () => {
       reviewStartedAt: originalReviewStartedAt,
       currentCorrectionReason: correctionReason,
     });
+    expect(fixture.applications).toHaveLength(1);
+    expect(fixture.payments).toEqual([paymentBeforeCorrection]);
+    expect(fixture.inspections).toEqual(inspectionsBeforeCorrection);
+    expect(fixture.stickers).toEqual(stickersBeforeCorrection);
 
-    await review.startReview(ADMIN_ID, application.id);
     expect(application).toMatchObject({
       status: ApplicationStatus.UNDER_REVIEW,
       reviewStartedAt: originalReviewStartedAt,
-      currentCorrectionReason: null,
-      currentRejectionReason: null,
+      currentCorrectionReason: correctionReason,
     });
 
     const documentsBeforeRejection = documentSnapshot(fixture.documents);
@@ -401,18 +462,99 @@ describe('application workflow integration', () => {
       }),
     );
 
+    await review.requestCorrection(ADMIN_ID, application.id, {
+      documentTypes: [DocumentType.VEHICLE_REGISTRATION_CARD],
+      reason: 'The replacement registration card is still unclear.',
+    });
+    const secondRejectedVrc = currentDocument(
+      fixture.documents,
+      DocumentType.VEHICLE_REGISTRATION_CARD,
+    );
+    await documents.upload(
+      CITIZEN_ID,
+      application.id,
+      DocumentType.VEHICLE_REGISTRATION_CARD,
+      pdfFile(DocumentType.VEHICLE_REGISTRATION_CARD),
+    );
+    expect(secondRejectedVrc).toMatchObject({
+      isCurrent: false,
+      status: DocumentStatus.REJECTED,
+    });
+    expect(
+      currentDocument(
+        fixture.documents,
+        DocumentType.VEHICLE_REGISTRATION_CARD,
+      ),
+    ).toMatchObject({
+      versionNumber: 3,
+      isCurrent: true,
+      replacesDocumentId: secondRejectedVrc.id,
+      uploadedByUserId: CITIZEN_ID,
+      status: DocumentStatus.PENDING,
+    });
+
+    await workflow.resubmit(CITIZEN_ID, application.id);
+    expect(application.status).toBe(ApplicationStatus.UNDER_REVIEW);
+    await review.passReview(ADMIN_ID, application.id);
+    expect(application).toMatchObject({
+      status: ApplicationStatus.APPROVED,
+      referenceNumber,
+      applicantSnapshot,
+      vehicleSnapshot,
+      submittedAt,
+      reviewStartedAt: originalReviewStartedAt,
+    });
+    expect(application.completedAt ?? null).toBeNull();
+    expect(fixture.payments).toEqual([paymentBeforeCorrection]);
+    expect(fixture.inspections).toEqual(inspectionsBeforeCorrection);
+    expect(fixture.stickers).toEqual(stickersBeforeCorrection);
+    expect(fixture.timelineEvents).toEqual([
+      expect.objectContaining({
+        applicationId: application.id,
+        eventType: 'DOCUMENTS_APPROVED',
+        actorUserId: ADMIN_ID,
+        occurredAt: new Date('2026-08-14T03:00:00.000Z'),
+      }),
+    ]);
+    for (const document of fixture.documents.filter(
+      (item) => item.applicationId === application.id && item.isCurrent,
+    )) {
+      expect(document).toMatchObject({
+        status: DocumentStatus.APPROVED,
+        reviewedByUserId: ADMIN_ID,
+        reviewedAt: new Date('2026-08-14T03:00:00.000Z'),
+      });
+    }
+
     expect(fixture.history.map(historyTransition)).toEqual([
       'NULL->DRAFT',
       'DRAFT->SUBMITTED',
-      'SUBMITTED->UNDER_REVIEW',
+      'APPROVED->UNDER_REVIEW',
       'UNDER_REVIEW->CORRECTION_REQUIRED',
-      'CORRECTION_REQUIRED->SUBMITTED',
-      'SUBMITTED->UNDER_REVIEW',
+      'CORRECTION_REQUIRED->UNDER_REVIEW',
       'UNDER_REVIEW->REJECTED',
       'REJECTED->UNDER_REVIEW',
+      'UNDER_REVIEW->CORRECTION_REQUIRED',
+      'CORRECTION_REQUIRED->UNDER_REVIEW',
+      'UNDER_REVIEW->APPROVED',
     ]);
     expect(fixture.history.at(-1)).toMatchObject({
       changedByUserId: ADMIN_ID,
+    });
+    expect(fixture.history[4]).toMatchObject({
+      previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
+      newStatus: ApplicationStatus.UNDER_REVIEW,
+      changedByUserId: RESUBMITTER_ADMIN_ID,
+    });
+    expect(fixture.history[5]).toMatchObject({
+      previousStatus: ApplicationStatus.UNDER_REVIEW,
+      newStatus: ApplicationStatus.REJECTED,
+      changedByUserId: ADMIN_ID,
+    });
+    expect(fixture.history[8]).toMatchObject({
+      previousStatus: ApplicationStatus.CORRECTION_REQUIRED,
+      newStatus: ApplicationStatus.UNDER_REVIEW,
+      changedByUserId: CITIZEN_ID,
     });
 
     const historyCount = fixture.history.length;
@@ -434,6 +576,9 @@ function createFixture() {
   const history: RenewalApplicationStatusHistory[] = [];
   const auditLogs: AuditLog[] = [];
   const payments: Payment[] = [];
+  const inspections: Inspection[] = [];
+  const stickers: Sticker[] = [];
+  const timelineEvents: ApplicationTimelineEvent[] = [];
   const users = [
     {
       id: CITIZEN_ID,
@@ -487,10 +632,18 @@ function createFixture() {
     [CitizenProfile, repository(profiles, 'profile')],
     [Vehicle, repository(vehicles, 'vehicle')],
     [Payment, repository(payments, 'payment')],
+    [Inspection, repository(inspections, 'inspection')],
+    [Sticker, repository(stickers, 'sticker')],
+    [ApplicationTimelineEvent, repository(timelineEvents, 'timeline-event')],
   ]);
   const manager = {
     getRepository: (entity: unknown) => repositories.get(entity),
-    query: () => Promise.resolve([{ daysUntilExpiry: 0 }]),
+    query: (sql: string) =>
+      Promise.resolve(
+        sql.includes('now()')
+          ? [{ now: new Date('2026-08-14T03:00:00.000Z') }]
+          : [{ daysUntilExpiry: 0 }],
+      ),
   };
   const dataSource = {
     getRepository: manager.getRepository,
@@ -516,6 +669,9 @@ function createFixture() {
     history,
     auditLogs,
     payments,
+    inspections,
+    stickers,
+    timelineEvents,
   };
 }
 
@@ -525,8 +681,22 @@ function repository<T extends { id: string }>(rows: T[], prefix: string) {
     create: (input: Partial<T>) => ({ ...input }) as T,
     save: (input: T | T[]) =>
       Promise.resolve(Array.isArray(input) ? input.map(save) : save(input)),
-    findOne: ({ where }: { where: Partial<T> }) =>
-      Promise.resolve(rows.find((row) => matches(row, where)) ?? null),
+    findOne: ({
+      where,
+      order,
+    }: {
+      where: Partial<T>;
+      order?: Partial<Record<keyof T, 'ASC' | 'DESC'>>;
+    }) => {
+      const matchesWhere = rows.filter((row) => matches(row, where));
+      if (order?.versionNumber === 'DESC') {
+        matchesWhere.sort(
+          (left, right) =>
+            Number(right.versionNumber ?? 0) - Number(left.versionNumber ?? 0),
+        );
+      }
+      return Promise.resolve(matchesWhere[0] ?? null);
+    },
     find: ({ where }: { where: Partial<T> }) =>
       Promise.resolve(rows.filter((row) => matches(row, where))),
     existsBy: (where: Partial<T>) =>

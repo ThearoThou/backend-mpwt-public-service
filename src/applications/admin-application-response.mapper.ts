@@ -1,5 +1,6 @@
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
+import type { ApplicationVehicleSnapshot } from './application-vehicle-snapshot';
 
 type ApplicationSnapshot = Record<string, unknown> | null;
 
@@ -37,7 +38,7 @@ export interface AdminApplicationDetailResponse {
   createdAt: Date;
   updatedAt: Date;
   applicantSnapshot: ApplicationSnapshot;
-  vehicleSnapshot: ApplicationSnapshot;
+  vehicleSnapshot: ApplicationVehicleSnapshot | null;
 }
 
 function snapshotString(

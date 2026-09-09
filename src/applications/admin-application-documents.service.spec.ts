@@ -12,6 +12,33 @@ const APPLICATION_ID = '11111111-1111-4111-8111-111111111111';
 const DOCUMENT_ID = '22222222-2222-4222-8222-222222222222';
 
 describe('AdminApplicationDocumentsService', () => {
+  it('uploads through the shared replacement service and exposes the actual uploader', async () => {
+    const fixture = createFixture();
+    const service = createService(fixture);
+    const file = {
+      buffer: Buffer.from('x'),
+      originalname: 'corrected.pdf',
+      mimetype: 'application/pdf',
+      size: 1,
+    };
+
+    const result = await service.upload(
+      'uploader-admin-id',
+      APPLICATION_ID,
+      DocumentType.CITIZEN_ID_CARD,
+      file,
+    );
+
+    expect(fixture.applicationDocuments.uploadAsAdmin).toHaveBeenCalledWith(
+      'uploader-admin-id',
+      APPLICATION_ID,
+      DocumentType.CITIZEN_ID_CARD,
+      file,
+    );
+    expect(result.uploadedByUserId).toBe('uploader-admin-id');
+    expect(result).not.toHaveProperty('storageKey');
+  });
+
   it('lists only current documents in document-type order after submitted scope validation', async () => {
     const fixture = createFixture();
     const service = createService(fixture);
@@ -120,6 +147,7 @@ function createService(fixture: ReturnType<typeof createFixture>) {
     fixture.applications as unknown as Repository<never>,
     fixture.documents as unknown as Repository<never>,
     fixture.files as never,
+    fixture.applicationDocuments as never,
   );
 }
 
@@ -135,6 +163,14 @@ function createFixture() {
       findOne: jest.fn().mockResolvedValue(document),
     },
     files: { read: jest.fn() },
+    applicationDocuments: {
+      uploadAsAdmin: jest.fn().mockResolvedValue({
+        ...document,
+        uploadedByUserId: 'uploader-admin-id',
+        status: DocumentStatus.PENDING,
+        rejectionReason: null,
+      }),
+    },
   };
 }
 
@@ -155,6 +191,7 @@ function applicationDocument() {
     versionNumber: 1,
     isCurrent: true,
     replacesDocumentId: null,
+    uploadedByUserId: 'citizen-id',
     originalFileName: 'document.pdf',
     mimeType: 'application/pdf',
     fileSizeBytes: '1024',

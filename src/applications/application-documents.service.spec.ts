@@ -3,6 +3,7 @@ import { DocumentType } from './enums/document-type.enum';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { DocumentStatus } from './enums/document-status.enum';
 import { RenewalApplication } from './entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from './entities/renewal-application-status-history.entity';
 
 const citizenId = '11111111-1111-4111-8111-111111111111';
 const applicationId = '22222222-2222-4222-8222-222222222222';
@@ -20,6 +21,7 @@ type StoredDocument = {
   mimeType: string;
   fileSizeBytes: string;
   status: DocumentStatus;
+  rejectionReason: string | null;
   uploadedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -125,6 +127,11 @@ describe('ApplicationDocumentsService upload preflight', () => {
       DocumentType.CITIZEN_ID_CARD,
       file(),
     );
+    const rejectedVersion = fixture.documents.find(
+      (document) => document.id === 'document-1',
+    )!;
+    rejectedVersion.status = DocumentStatus.REJECTED;
+    rejectedVersion.rejectionReason = 'Document image is unclear';
     await fixture.service.upload(
       citizenId,
       applicationId,
@@ -175,6 +182,15 @@ describe('ApplicationDocumentsService upload preflight', () => {
     expect(history.data.map((document) => document.versionNumber)).toEqual([
       3, 2, 1,
     ]);
+    expect(history.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          versionNumber: 1,
+          status: DocumentStatus.REJECTED,
+          rejectionReason: 'Document image is unclear',
+        }),
+      ]),
+    );
 
     const current = await fixture.service.listCurrent(citizenId, applicationId);
     expect(current).toEqual(
@@ -183,6 +199,8 @@ describe('ApplicationDocumentsService upload preflight', () => {
           documentType: DocumentType.CITIZEN_ID_CARD,
           versionNumber: 3,
           isCurrent: true,
+          status: DocumentStatus.PENDING,
+          rejectionReason: null,
         }),
         expect.objectContaining({
           documentType: DocumentType.VEHICLE_REGISTRATION_CARD,
@@ -256,6 +274,128 @@ describe('ApplicationDocumentsService upload preflight', () => {
     },
   );
 
+  it('canonically expires a correction upload on Day 31 before storing a file', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
+    try {
+      const fixture = correctionUploadFixture(
+        DocumentStatus.REJECTED,
+        new Date('2026-09-07T08:30:00.000Z'),
+      );
+
+      await expect(
+        fixture.service.upload(
+          citizenId,
+          applicationId,
+          DocumentType.CITIZEN_ID_CARD,
+          file(),
+        ),
+      ).rejects.toMatchObject({
+        code: 'APPLICATION_INVALID_TRANSITION',
+        status: 409,
+      });
+
+      expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+      expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
+      expect(fixture.history.save).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('creates an admin-uploaded pending replacement without changing application status', async () => {
+    const adminId = '33333333-3333-4333-8333-333333333333';
+    const fixture = correctionUploadFixture(DocumentStatus.REJECTED);
+    fixture.current!.rejectionReason = 'The original image is unclear.';
+
+    const result = await fixture.service.uploadAsAdmin(
+      adminId,
+      applicationId,
+      DocumentType.CITIZEN_ID_CARD,
+      file(),
+    );
+
+    expect(fixture.current).toMatchObject({
+      isCurrent: false,
+      rejectionReason: 'The original image is unclear.',
+    });
+    expect(result).toMatchObject({
+      versionNumber: 2,
+      isCurrent: true,
+      replacesDocumentId: 'current-document-id',
+      uploadedByUserId: adminId,
+      status: DocumentStatus.PENDING,
+      rejectionReason: null,
+    });
+    expect(fixture.application.status).toBe(
+      ApplicationStatus.CORRECTION_REQUIRED,
+    );
+  });
+
+  it('does not allow an admin to upload into a draft application', async () => {
+    const fixture = uploadFixture();
+
+    await expect(
+      fixture.service.uploadAsAdmin(
+        '33333333-3333-4333-8333-333333333333',
+        applicationId,
+        DocumentType.CITIZEN_ID_CARD,
+        file(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED',
+      status: 409,
+    });
+    expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
+  });
+
+  it.each([DocumentStatus.APPROVED, DocumentStatus.PENDING])(
+    'does not allow an admin to replace a current %s document',
+    async (status) => {
+      const fixture = correctionUploadFixture(status);
+
+      await expect(
+        fixture.service.uploadAsAdmin(
+          '33333333-3333-4333-8333-333333333333',
+          applicationId,
+          DocumentType.CITIZEN_ID_CARD,
+          file(),
+        ),
+      ).rejects.toMatchObject({
+        code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED',
+        status: 409,
+      });
+      expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
+    },
+  );
+
+  it('canonically expires an admin correction upload and does not retain its file', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
+    try {
+      const fixture = correctionUploadFixture(
+        DocumentStatus.REJECTED,
+        new Date('2026-09-07T08:30:00.000Z'),
+      );
+
+      await expect(
+        fixture.service.uploadAsAdmin(
+          '33333333-3333-4333-8333-333333333333',
+          applicationId,
+          DocumentType.CITIZEN_ID_CARD,
+          file(),
+        ),
+      ).rejects.toMatchObject({
+        code: 'APPLICATION_INVALID_TRANSITION',
+        status: 409,
+      });
+      expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+      expect(fixture.files.saveApplicationDocument).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it.each([
     'uq_application_documents_application_document_type_version',
     'uq_current_document_per_type',
@@ -303,7 +443,8 @@ describe('ApplicationDocumentsService upload preflight', () => {
   it.each([
     [DocumentStatus.REJECTED, true],
     [DocumentStatus.APPROVED, false],
-    [null, true],
+    [DocumentStatus.PENDING, false],
+    [null, false],
   ])(
     'allows correction-required upload only for a rejected or missing current document',
     async (currentStatus, allowed) => {
@@ -326,6 +467,53 @@ describe('ApplicationDocumentsService upload preflight', () => {
       }
     },
   );
+
+  it('serializes concurrent citizen/admin replacement to one current next version', async () => {
+    const fixture = draftReplacementFixture();
+    fixture.application.status = ApplicationStatus.CORRECTION_REQUIRED;
+    fixture.documents[0].status = DocumentStatus.REJECTED;
+    fixture.documents[0].rejectionReason = 'Replace this document.';
+    let storedFileNumber = 0;
+    fixture.files.saveApplicationDocument.mockImplementation(() =>
+      Promise.resolve({ storageKey: `new-key-${++storedFileNumber}` }),
+    );
+    serializeDocumentTransactions(fixture);
+
+    const results = await Promise.allSettled([
+      fixture.service.upload(
+        citizenId,
+        applicationId,
+        DocumentType.VEHICLE_REGISTRATION_CARD,
+        file(),
+      ),
+      fixture.service.uploadAsAdmin(
+        '33333333-3333-4333-8333-333333333333',
+        applicationId,
+        DocumentType.VEHICLE_REGISTRATION_CARD,
+        file(),
+      ),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.find((result) => result.status === 'rejected'),
+    ).toMatchObject({
+      status: 'rejected',
+      reason: { code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED' },
+    });
+    expect(fixture.documents.filter((document) => document.isCurrent)).toEqual([
+      expect.objectContaining({
+        versionNumber: 2,
+        status: DocumentStatus.PENDING,
+      }),
+    ]);
+    expect(
+      fixture.documents.filter((document) => document.versionNumber === 2),
+    ).toHaveLength(1);
+    expect(fixture.files.deleteIfExists).toHaveBeenCalledTimes(1);
+  });
 });
 function dataSource(application: unknown) {
   return {
@@ -347,6 +535,7 @@ function uploadFixture() {
     id: applicationId,
     citizenId,
     status: ApplicationStatus.DRAFT,
+    submittedAt: new Date(),
   };
   const applications = { findOne: jest.fn().mockResolvedValue(application) };
   const documents = {
@@ -385,11 +574,15 @@ function uploadFixture() {
   };
 }
 
-function correctionUploadFixture(currentStatus: DocumentStatus | null) {
+function correctionUploadFixture(
+  currentStatus: DocumentStatus | null,
+  submittedAt = new Date(),
+) {
   const application = {
     id: applicationId,
     citizenId,
     status: ApplicationStatus.CORRECTION_REQUIRED,
+    submittedAt,
   };
   const current =
     currentStatus === null
@@ -401,8 +594,16 @@ function correctionUploadFixture(currentStatus: DocumentStatus | null) {
           isCurrent: true,
           versionNumber: 1,
           status: currentStatus,
+          rejectionReason: null as string | null,
         };
-  const applications = { findOne: jest.fn().mockResolvedValue(application) };
+  const applications = {
+    findOne: jest.fn().mockResolvedValue(application),
+    save: jest.fn((value) => Promise.resolve(value)),
+  };
+  const history = {
+    create: jest.fn((value: unknown) => value),
+    save: jest.fn((value) => Promise.resolve(value)),
+  };
   const documents = {
     findOne: jest.fn().mockResolvedValue(current),
     create: jest.fn((input: Record<string, unknown>) => ({
@@ -415,9 +616,11 @@ function correctionUploadFixture(currentStatus: DocumentStatus | null) {
     save: jest.fn((value) => Promise.resolve(value)),
   };
   const manager = {
-    getRepository: jest.fn((entity) =>
-      entity === RenewalApplication ? applications : documents,
-    ),
+    getRepository: jest.fn((entity) => {
+      if (entity === RenewalApplication) return applications;
+      if (entity === RenewalApplicationStatusHistory) return history;
+      return documents;
+    }),
   };
   const source = {
     getRepository: jest.fn((entity) =>
@@ -436,6 +639,10 @@ function correctionUploadFixture(currentStatus: DocumentStatus | null) {
   return {
     service: new ApplicationDocumentsService(source as never, files as never),
     files,
+    application,
+    history,
+    current,
+    documents,
   };
 }
 
@@ -444,6 +651,7 @@ function draftReplacementFixture() {
     id: applicationId,
     citizenId,
     status: ApplicationStatus.DRAFT,
+    submittedAt: new Date(),
   };
   const documents: StoredDocument[] = [
     document({
@@ -533,7 +741,29 @@ function draftReplacementFixture() {
     files,
     documents,
     application,
+    manager,
+    source,
   };
+}
+
+function serializeDocumentTransactions(
+  fixture: ReturnType<typeof draftReplacementFixture>,
+) {
+  let previous = Promise.resolve();
+  fixture.source.transaction.mockImplementation(
+    (
+      callback: (
+        transactionManager: typeof fixture.manager,
+      ) => Promise<unknown>,
+    ) => {
+      const current = previous.then(() => callback(fixture.manager));
+      previous = current.then(
+        () => undefined,
+        () => undefined,
+      );
+      return current;
+    },
+  );
 }
 
 function document(input: Partial<StoredDocument> & Pick<StoredDocument, 'id'>) {
@@ -548,6 +778,7 @@ function document(input: Partial<StoredDocument> & Pick<StoredDocument, 'id'>) {
     mimeType: 'application/pdf',
     fileSizeBytes: '1',
     status: DocumentStatus.PENDING,
+    rejectionReason: null,
     uploadedAt: now,
     createdAt: now,
     updatedAt: now,
