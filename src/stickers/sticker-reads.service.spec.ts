@@ -25,6 +25,11 @@ describe('StickerReadsService', () => {
       summary: { awaitingIssuance: 1, issuedToday: 2, issuedThisMonth: 3 },
     });
     expect(querySql(query, 0)).toContain('pass."passCount" = 1');
+    expect(querySql(query, 0)).toContain('i."attempt_number" = 1');
+    expect(querySql(query, 0)).toContain(
+      'application."ready_for_inspection_at" IS NOT NULL',
+    );
+    expect(querySql(query, 0)).toContain('payment."status" = \'CONFIRMED\'');
     expect(querySql(query, 0)).toContain('sticker."id" IS NULL');
     expect(querySql(query, 0)).toContain(
       'passed."completedAt" ASC, application."id" ASC',
@@ -71,9 +76,24 @@ describe('StickerReadsService', () => {
       service.getCitizenStatus('citizen-id', 'application-id'),
     ).resolves.toMatchObject({
       state: 'READY_FOR_ISSUANCE',
+      ownerName: 'Citizen Khmer',
       station: { id: 'station-id' },
       sticker: null,
     });
+  });
+
+  it('falls back to the English applicant snapshot name for citizen status', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce([{ citizenId: 'citizen-id' }])
+      .mockResolvedValueOnce([
+        row({ applicantSnapshot: { nameKh: null, nameEn: 'Citizen English' } }),
+      ]);
+    const service = new StickerReadsService({ query } as never);
+
+    await expect(
+      service.getCitizenStatus('citizen-id', 'application-id'),
+    ).resolves.toMatchObject({ ownerName: 'Citizen English' });
   });
 
   it('presents an issued sticker without leaking issuer identity', async () => {
@@ -93,6 +113,42 @@ describe('StickerReadsService', () => {
       sticker: { stickerNumber: 'ABC123' },
     });
     expect(result).not.toHaveProperty('issuedByUserId');
+  });
+
+  it('reads both new APPROVED and legacy COMPLETED sticker records as issued without rewriting completedAt', async () => {
+    const legacyCompletedAt = new Date('2026-08-17T00:00:00.000Z');
+    for (const applicationStatus of [
+      ApplicationStatus.APPROVED,
+      ApplicationStatus.COMPLETED,
+    ]) {
+      const query = jest.fn().mockResolvedValue([
+        row({
+          applicationStatus,
+          applicationCompletedAt:
+            applicationStatus === ApplicationStatus.COMPLETED
+              ? legacyCompletedAt
+              : null,
+          stickerId: 'sticker-id',
+          stickerNumber: 'ABC123',
+          issuedAt: new Date('2026-08-16T00:00:00.000Z'),
+        }),
+      ]);
+      const service = new StickerReadsService({ query } as never);
+
+      await expect(
+        service.getAdminDetail('application-id'),
+      ).resolves.toMatchObject({
+        state: 'ISSUED',
+        application: {
+          status: applicationStatus,
+          completedAt:
+            applicationStatus === ApplicationStatus.COMPLETED
+              ? legacyCompletedAt
+              : null,
+        },
+      });
+      expect(query).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('returns NOT_READY for no PASS and rejects another citizen and ambiguous PASS data', async () => {
@@ -125,6 +181,24 @@ describe('StickerReadsService', () => {
       corrupt.getAdminDetail('application-id'),
     ).rejects.toMatchObject({ status: HttpStatus.CONFLICT });
   });
+
+  it.each([
+    ['unconfirmed payment', { paymentStatus: 'PENDING' }],
+    ['missing readiness', { readyForInspectionAt: null }],
+    ['expired initial period', { withinInitialPeriod: false }],
+    ['primary inspection failure', { passCount: 0, inspectionId: null }],
+  ])('returns NOT_READY for %s', async (_name, overrides) => {
+    const service = new StickerReadsService({
+      query: jest.fn().mockResolvedValue([row(overrides)]),
+    } as never);
+
+    await expect(
+      service.getAdminDetail('application-id'),
+    ).resolves.toMatchObject({
+      state: 'NOT_READY',
+      actions: { canIssueSticker: false },
+    });
+  });
 });
 
 function row(overrides: Record<string, unknown>) {
@@ -132,13 +206,16 @@ function row(overrides: Record<string, unknown>) {
     applicationId: 'application-id',
     referenceNumber: 'REF-1',
     applicationStatus: ApplicationStatus.APPROVED,
+    paymentStatus: 'CONFIRMED',
+    readyForInspectionAt: new Date('2026-08-02T00:00:00.000Z'),
+    withinInitialPeriod: true,
     vehicleSnapshot: {
       registrationNumber: 'REG-1',
       plateNumber: '1A',
       make: 'Test',
       model: 'Car',
     },
-    applicantSnapshot: { fullNameKh: 'Citizen' },
+    applicantSnapshot: { nameKh: 'Citizen Khmer', nameEn: 'Citizen English' },
     passCount: 1,
     inspectionId: 'inspection-id',
     attemptNumber: 1,

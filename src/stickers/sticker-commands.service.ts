@@ -2,13 +2,15 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { DataSource, QueryFailedError, type EntityManager } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
-import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
+import { expireInitialApplicationIfDue } from '../applications/initial-application-expiry';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { Inspection } from '../inspections/entities/inspection.entity';
 import { InspectionResult } from '../inspections/enums/inspection-result.enum';
 import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
+import { Payment } from '../payments/entities/payment.entity';
+import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { Appointment } from '../scheduling/entities/appointment.entity';
 import { IssueStickerDto } from './dto/issue-sticker.dto';
 import { Sticker } from './entities/sticker.entity';
@@ -28,9 +30,10 @@ export class StickerCommandsService {
     input: IssueStickerDto,
   ): Promise<StickerDetailResponse> {
     try {
-      await this.dataSource.transaction((manager) =>
+      const expired = await this.dataSource.transaction((manager) =>
         this.issueWithManager(manager, applicationId, adminUserId, input),
       );
+      if (expired) throw this.ineligible();
     } catch (error) {
       this.mapConflict(error);
     }
@@ -42,7 +45,7 @@ export class StickerCommandsService {
     applicationId: string,
     adminUserId: string,
     input: IssueStickerDto,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const application = await manager
       .getRepository(RenewalApplication)
       .createQueryBuilder('application')
@@ -50,11 +53,27 @@ export class StickerCommandsService {
       .where('application.id = :applicationId', { applicationId })
       .getOne();
     if (application === null) throw this.notFound();
-    if (application.status !== ApplicationStatus.APPROVED)
+    if (
+      application.status !== ApplicationStatus.APPROVED ||
+      application.submittedAt === null ||
+      application.readyForInspectionAt === null
+    )
       throw this.ineligible();
+    const [clock] = await manager.query<Array<{ now: Date }>>(
+      'SELECT now() AS "now"',
+    );
+    if (clock === undefined) throw new Error('Sticker timestamp unavailable');
+    if (await expireInitialApplicationIfDue(manager, application, clock.now)) {
+      return true;
+    }
+    const payment = await manager.getRepository(Payment).findOne({
+      where: { applicationId },
+    });
+    if (payment?.status !== PaymentStatus.CONFIRMED) throw this.ineligible();
     const passes = await manager.getRepository(Inspection).find({
       where: {
         applicationId,
+        attemptNumber: 1,
         status: InspectionStatus.COMPLETED,
         result: InspectionResult.PASS,
       },
@@ -69,6 +88,7 @@ export class StickerCommandsService {
       throw this.ineligible();
     }
     const pass = passes[0];
+    if (pass.completedAt === null) throw this.ineligible();
     if (pass.actualStationId === null) {
       const appointment = await manager.getRepository(Appointment).findOne({
         where: { id: pass.appointmentId as string },
@@ -86,9 +106,6 @@ export class StickerCommandsService {
       (await stickers.exists({ where: { inspectionId: pass.id } }))
     )
       throw this.alreadyIssued();
-    const [clock] = await manager.query<Array<{ now: Date }>>(
-      'SELECT now() AS "now"',
-    );
     const issuedAt = clock.now;
     await stickers.save(
       stickers.create({
@@ -99,16 +116,7 @@ export class StickerCommandsService {
         issuedByUserId: adminUserId,
       }),
     );
-    application.status = ApplicationStatus.COMPLETED;
-    application.completedAt = issuedAt;
-    await manager.getRepository(RenewalApplication).save(application);
-    await manager.getRepository(RenewalApplicationStatusHistory).save({
-      applicationId,
-      previousStatus: ApplicationStatus.APPROVED,
-      newStatus: ApplicationStatus.COMPLETED,
-      changedByUserId: adminUserId,
-      reason: 'STICKER_ISSUED',
-    });
+    return false;
   }
 
   private mapConflict(error: unknown): never {
