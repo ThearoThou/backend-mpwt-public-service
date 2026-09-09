@@ -16,6 +16,14 @@ function createConfigService(): ConfigService {
         return 300;
       }
 
+      if (name === 'REGISTRATION_OTP_TTL_SECONDS') {
+        return 120;
+      }
+
+      if (name === 'PASSWORD_RESET_OTP_TTL_SECONDS') {
+        return 120;
+      }
+
       if (name === 'VERIFICATION_CODE_MAX_ATTEMPTS') {
         return 5;
       }
@@ -34,7 +42,7 @@ function createCode(
     destination: '+85512345678',
     purpose: VerificationPurpose.REGISTER_ACCOUNT,
     codeHash: 'stored-hash',
-    expiresAt: new Date(NOW.getTime() + 300_000),
+    expiresAt: new Date(NOW.getTime() + 120_000),
     usedAt: null,
     attemptCount: 0,
     createdAt: NOW,
@@ -80,7 +88,7 @@ describe('VerificationCodeService', () => {
     );
 
     expect(generated.code).toMatch(/^\d{6}$/);
-    expect(generated.expiresAt).toEqual(new Date(NOW.getTime() + 300_000));
+    expect(generated.expiresAt).toEqual(new Date(NOW.getTime() + 120_000));
     expect(hashing.hashSecret).toHaveBeenCalledWith(generated.code);
     expect(repository.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -91,6 +99,25 @@ describe('VerificationCodeService', () => {
       }),
     );
     expect(repository.create.mock.calls[0]?.[0]).not.toHaveProperty('code');
+  });
+
+  it('keeps registration and password-reset lifetimes purpose-specific', async () => {
+    const generated = await service.createCode(
+      {
+        userId: USER_ID,
+        destination: '+85512345678',
+        purpose: VerificationPurpose.RESET_PASSWORD,
+      },
+      undefined,
+      NOW,
+    );
+
+    expect(generated.expiresAt).toEqual(new Date(NOW.getTime() + 120_000));
+    expect(service.getTtlSeconds(VerificationPurpose.RESET_PASSWORD)).toBe(120);
+    expect(service.getTtlSeconds(VerificationPurpose.REGISTER_ACCOUNT)).toBe(
+      120,
+    );
+    expect(service.getTtlSeconds(VerificationPurpose.CHANGE_PHONE)).toBe(300);
   });
 
   it('locks the latest code and commits a failed attempt before returning invalid', async () => {
@@ -169,6 +196,26 @@ describe('VerificationCodeService', () => {
         NOW,
       ),
     ).resolves.toEqual({ kind: 'attempts-exceeded' });
+    expect(hashing.verifySecret).not.toHaveBeenCalled();
+  });
+
+  it('rejects a consumed code without checking its hash again', async () => {
+    const lockedRepository = {
+      findOne: jest.fn().mockResolvedValue(createCode({ usedAt: NOW })),
+      save: jest.fn(),
+    };
+    const manager = { getRepository: jest.fn(() => lockedRepository) };
+
+    await expect(
+      service.validateLockedCode(
+        USER_ID,
+        '+85512345678',
+        VerificationPurpose.RESET_PASSWORD,
+        '012345',
+        manager as never,
+        new Date(NOW.getTime() - 1_000),
+      ),
+    ).resolves.toEqual({ kind: 'invalid' });
     expect(hashing.verifySecret).not.toHaveBeenCalled();
   });
 });

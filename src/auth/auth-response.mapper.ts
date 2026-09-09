@@ -23,6 +23,19 @@ export interface RegistrationResponse {
   };
 }
 
+export interface RegistrationVerificationResponse extends RegistrationResponse {
+  expiresInSeconds: number;
+}
+
+export interface PasswordResetRequestResponse extends RegistrationResponse {
+  expiresInSeconds: number;
+}
+
+export interface PasswordResetVerifyResponse {
+  resetToken: string;
+  expiresInSeconds: number;
+}
+
 export interface RegistrationResponseOptions {
   destination?: string | null;
   developmentCode?: string;

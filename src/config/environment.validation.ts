@@ -18,6 +18,9 @@ export interface EnvironmentVariables {
   REFRESH_COOKIE_SECURE: boolean;
   REFRESH_COOKIE_SAME_SITE: 'lax' | 'strict';
   VERIFICATION_CODE_TTL_SECONDS: number;
+  REGISTRATION_OTP_TTL_SECONDS: number;
+  PASSWORD_RESET_OTP_TTL_SECONDS: number;
+  PASSWORD_RESET_TOKEN_TTL_SECONDS: number;
   VERIFICATION_CODE_MAX_ATTEMPTS: number;
   EXPOSE_DEVELOPMENT_VERIFICATION_CODE: boolean;
   ADMIN_BOOTSTRAP_ENABLED: boolean;
@@ -305,6 +308,21 @@ export function validateEnvironment(
       environment,
       'VERIFICATION_CODE_TTL_SECONDS',
       60,
+    ),
+    REGISTRATION_OTP_TTL_SECONDS: positiveInteger(
+      environment,
+      'REGISTRATION_OTP_TTL_SECONDS',
+      120,
+    ),
+    PASSWORD_RESET_OTP_TTL_SECONDS: positiveInteger(
+      environment,
+      'PASSWORD_RESET_OTP_TTL_SECONDS',
+      120,
+    ),
+    PASSWORD_RESET_TOKEN_TTL_SECONDS: positiveInteger(
+      environment,
+      'PASSWORD_RESET_TOKEN_TTL_SECONDS',
+      900,
     ),
     VERIFICATION_CODE_MAX_ATTEMPTS: positiveInteger(
       environment,

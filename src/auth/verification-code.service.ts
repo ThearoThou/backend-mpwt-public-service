@@ -38,7 +38,9 @@ export class VerificationCodeService {
     now = new Date(),
   ): Promise<GeneratedVerificationCode> {
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const expiresAt = new Date(now.getTime() + this.getTtlSeconds() * 1_000);
+    const expiresAt = new Date(
+      now.getTime() + this.getTtlSeconds(input.purpose) * 1_000,
+    );
     const verificationCode = this.repository(manager).create({
       userId: input.userId,
       destination: input.destination,
@@ -121,7 +123,19 @@ export class VerificationCodeService {
     return manager?.getRepository(VerificationCode) ?? this.verificationCodes;
   }
 
-  private getTtlSeconds(): number {
+  getTtlSeconds(purpose: VerificationPurpose): number {
+    if (purpose === VerificationPurpose.RESET_PASSWORD) {
+      return this.configService.getOrThrow<number>(
+        'PASSWORD_RESET_OTP_TTL_SECONDS',
+      );
+    }
+
+    if (purpose === VerificationPurpose.REGISTER_ACCOUNT) {
+      return this.configService.getOrThrow<number>(
+        'REGISTRATION_OTP_TTL_SECONDS',
+      );
+    }
+
     return this.configService.getOrThrow<number>(
       'VERIFICATION_CODE_TTL_SECONDS',
     );

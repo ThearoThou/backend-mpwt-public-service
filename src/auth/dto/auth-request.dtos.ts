@@ -152,7 +152,12 @@ export class PasswordResetVerifyRequestDto {
   code!: string;
 }
 
-export class PasswordResetConfirmRequestDto extends PasswordResetVerifyRequestDto {
+export class PasswordResetConfirmRequestDto {
+  @IsString()
+  @MinLength(43)
+  @MaxLength(128)
+  resetToken!: string;
+
   @IsString()
   @MinLength(8)
   @MaxLength(128)

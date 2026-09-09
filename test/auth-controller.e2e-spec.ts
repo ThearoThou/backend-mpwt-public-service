@@ -34,6 +34,7 @@ describe('authentication controller (e2e)', () => {
       | 'verifyAccount'
       | 'resendVerification'
       | 'requestPasswordReset'
+      | 'verifyPasswordReset'
       | 'confirmPasswordReset'
     >
   >;
@@ -70,11 +71,16 @@ describe('authentication controller (e2e)', () => {
         message: 'Verification code created.',
         verificationRequired: true,
         destinationHint: '+855******678',
+        expiresInSeconds: 120,
       }),
       verifyAccount: jest.fn(),
       resendVerification: jest.fn(),
       login: jest.fn().mockResolvedValue(authenticationResult),
       requestPasswordReset: jest.fn(),
+      verifyPasswordReset: jest.fn().mockResolvedValue({
+        resetToken: 'a'.repeat(43),
+        expiresInSeconds: 900,
+      }),
       confirmPasswordReset: jest.fn(),
       refresh: jest.fn().mockResolvedValue(authenticationResult),
       logout: jest.fn(),
@@ -144,6 +150,7 @@ describe('authentication controller (e2e)', () => {
           message: 'Verification code created.',
           verificationRequired: true,
           destinationHint: '+855******678',
+          expiresInSeconds: 120,
         },
       });
 
@@ -264,5 +271,44 @@ describe('authentication controller (e2e)', () => {
     });
     expect(authService.logout).toHaveBeenCalledWith(undefined);
     expect(refreshCookieHelper.clearRefreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses OTP only for verification and resetToken only for confirmation', async () => {
+    authService.confirmPasswordReset.mockResolvedValue({
+      message: 'Password has been reset successfully.',
+      verificationRequired: false,
+      destinationHint: null,
+    });
+
+    await request(app.getHttpServer())
+      .post('/api/auth/password-reset/verify')
+      .send({ identifier: '012345678', code: '012345' })
+      .expect(HttpStatus.OK)
+      .expect({
+        data: { resetToken: 'a'.repeat(43), expiresInSeconds: 900 },
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/auth/password-reset/confirm')
+      .send({ resetToken: 'a'.repeat(43), newPassword: 'new-password' })
+      .expect(HttpStatus.OK);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/password-reset/confirm')
+      .send({
+        identifier: '012345678',
+        code: '012345',
+        newPassword: 'new-password',
+      })
+      .expect(HttpStatus.BAD_REQUEST);
+
+    expect(authService.verifyPasswordReset).toHaveBeenCalledWith({
+      identifier: '+85512345678',
+      code: '012345',
+    });
+    expect(authService.confirmPasswordReset).toHaveBeenCalledWith({
+      resetToken: 'a'.repeat(43),
+      newPassword: 'new-password',
+    });
   });
 });

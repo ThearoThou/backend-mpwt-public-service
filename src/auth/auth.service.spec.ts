@@ -11,6 +11,8 @@ import {
   RefreshSessionService,
 } from './refresh-session.service';
 import { VerificationCodeService } from './verification-code.service';
+import { PasswordResetAuthorizationService } from './password-reset-authorization.service';
+import { PasswordResetAuthorization } from './entities/password-reset-authorization.entity';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { User } from '../users/entities/user.entity';
@@ -52,6 +54,7 @@ describe('AuthService', () => {
       | 'findUserByIdentifier'
       | 'findUserForLogin'
       | 'findUserByIdForRefresh'
+      | 'findLockedUserById'
       | 'activateCitizenForIdentifier'
       | 'recordLogin'
       | 'replacePassword'
@@ -60,7 +63,7 @@ describe('AuthService', () => {
   let verificationCodes: jest.Mocked<
     Pick<
       VerificationCodeService,
-      'createCode' | 'validateLockedCode' | 'consumeCode'
+      'createCode' | 'validateLockedCode' | 'consumeCode' | 'getTtlSeconds'
     >
   >;
   let hashing: jest.Mocked<
@@ -84,9 +87,21 @@ describe('AuthService', () => {
       | 'revokeAllActiveSessions'
     >
   >;
+  let resetAuthorizations: jest.Mocked<
+    Pick<
+      PasswordResetAuthorizationService,
+      | 'createAuthorization'
+      | 'validateLockedAuthorization'
+      | 'consumeAuthorization'
+    >
+  >;
   let service: AuthService;
+  let nodeEnvironment: string;
+  let exposeDevelopmentCode: boolean;
 
   beforeEach(() => {
+    nodeEnvironment = 'development';
+    exposeDevelopmentCode = true;
     manager = {} as EntityManager;
     dataSource = {
       transaction: jest.fn((callback: (current: EntityManager) => unknown) =>
@@ -96,10 +111,11 @@ describe('AuthService', () => {
     users = {
       hasIdentifierConflict: jest.fn(),
       createPendingCitizen: jest.fn(),
-      findLockedUserByIdentifier: jest.fn(),
+      findLockedUserByIdentifier: jest.fn().mockResolvedValue(null),
       findUserByIdentifier: jest.fn(),
       findUserForLogin: jest.fn(),
       findUserByIdForRefresh: jest.fn(),
+      findLockedUserById: jest.fn(),
       activateCitizenForIdentifier: jest.fn(),
       recordLogin: jest.fn(),
       replacePassword: jest.fn(),
@@ -108,6 +124,7 @@ describe('AuthService', () => {
       createCode: jest.fn(),
       validateLockedCode: jest.fn(),
       consumeCode: jest.fn(),
+      getTtlSeconds: jest.fn().mockReturnValue(120),
     };
     hashing = {
       hashSecret: jest.fn().mockResolvedValue('argon2id-hash'),
@@ -139,14 +156,23 @@ describe('AuthService', () => {
       revokeLockedSession: jest.fn(),
       revokeAllActiveSessions: jest.fn(),
     };
+    resetAuthorizations = {
+      createAuthorization: jest.fn().mockResolvedValue({
+        resetToken: 'reset-token',
+        expiresAt: new Date(NOW.getTime() + 900_000),
+        expiresInSeconds: 900,
+      }),
+      validateLockedAuthorization: jest.fn(),
+      consumeAuthorization: jest.fn(),
+    };
     const config = {
       getOrThrow: jest.fn((name: string) => {
         if (name === 'NODE_ENV') {
-          return 'development';
+          return nodeEnvironment;
         }
 
         if (name === 'EXPOSE_DEVELOPMENT_VERIFICATION_CODE') {
-          return true;
+          return exposeDevelopmentCode;
         }
 
         throw new Error(`Unexpected config key ${name}`);
@@ -160,9 +186,155 @@ describe('AuthService', () => {
       hashing,
       tokens as AuthTokenService,
       sessions as RefreshSessionService,
+      resetAuthorizations as PasswordResetAuthorizationService,
       config,
     );
   });
+
+  it.each([
+    ['development', false],
+    ['production', true],
+    ['production', false],
+  ])(
+    'returns identical generic expiry for known and unknown accounts in %s with exposure %s',
+    async (environment, exposure) => {
+      nodeEnvironment = environment;
+      exposeDevelopmentCode = exposure;
+      users.findUserByIdentifier
+        .mockResolvedValueOnce(createUser())
+        .mockResolvedValueOnce(null);
+      verificationCodes.createCode.mockResolvedValue({
+        code: '012345',
+        expiresAt: new Date(NOW.getTime() + 120_000),
+      });
+
+      const known = await service.requestPasswordReset({
+        identifier: '012345678',
+      });
+      const unknown = await service.requestPasswordReset({
+        identifier: '099999999',
+      });
+
+      expect(known).toEqual(unknown);
+      expect(known).toEqual({
+        message:
+          'If the account is eligible, a verification code has been created.',
+        verificationRequired: true,
+        destinationHint: null,
+        expiresInSeconds: 120,
+      });
+      expect(verificationCodes.createCode).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('preserves optional development codes and generates a fresh reset code on resend', async () => {
+    users.findUserByIdentifier.mockResolvedValue(createUser());
+    verificationCodes.createCode
+      .mockResolvedValueOnce({ code: '012345', expiresAt: NOW })
+      .mockResolvedValueOnce({ code: '987654', expiresAt: NOW });
+    const first = await service.requestPasswordReset({
+      identifier: '012345678',
+    });
+    const resend = await service.requestPasswordReset({
+      identifier: '012345678',
+    });
+    expect(first.development).toEqual({
+      developmentCode: '012345',
+      purpose: VerificationPurpose.RESET_PASSWORD,
+    });
+    expect(resend.development).toEqual({
+      developmentCode: '987654',
+      purpose: VerificationPurpose.RESET_PASSWORD,
+    });
+    expect(resend.expiresInSeconds).toBe(120);
+    expect(verificationCodes.createCode).toHaveBeenCalledTimes(2);
+    expect(verificationCodes.createCode).toHaveBeenCalledWith({
+      userId: USER_ID,
+      destination: '+85512345678',
+      purpose: VerificationPurpose.RESET_PASSWORD,
+    });
+    users.findUserByIdentifier.mockResolvedValue(null);
+    expect(
+      await service.requestPasswordReset({ identifier: '099999999' }),
+    ).not.toHaveProperty('development');
+  });
+
+  it.each([
+    [
+      'pending citizen',
+      createUser({ status: UserStatus.PENDING_VERIFICATION }),
+    ],
+    ['disabled citizen', createUser({ status: UserStatus.DISABLED })],
+    ['active administrator', createUser({ role: UserRole.ADMIN })],
+    ['nonexistent account', null],
+  ])(
+    'returns the generic reset response without creating an OTP for a %s',
+    async (_label, user) => {
+      users.findUserByIdentifier.mockResolvedValue(user);
+
+      await expect(
+        service.requestPasswordReset({ identifier: '012345678' }),
+      ).resolves.toEqual({
+        message:
+          'If the account is eligible, a verification code has been created.',
+        verificationRequired: true,
+        destinationHint: null,
+        expiresInSeconds: 120,
+      });
+
+      expect(verificationCodes.createCode).not.toHaveBeenCalled();
+    },
+  );
+
+  it('consumes a valid reset OTP and returns a one-time reset authorization', async () => {
+    users.findLockedUserByIdentifier.mockResolvedValue(createUser());
+    const verificationCode = { id: 'reset-code' } as never;
+    verificationCodes.validateLockedCode.mockResolvedValue({
+      kind: 'valid',
+      verificationCode,
+    });
+    const response = await service.verifyPasswordReset({
+      identifier: '012345678',
+      code: '012345',
+    });
+
+    expect(response).toEqual({
+      resetToken: 'reset-token',
+      expiresInSeconds: 900,
+    });
+    expect(verificationCodes.consumeCode).toHaveBeenCalledWith(
+      verificationCode,
+      manager,
+      expect.any(Date),
+    );
+    expect(resetAuthorizations.createAuthorization).toHaveBeenCalledWith(
+      USER_ID,
+      manager,
+      expect.any(Date),
+    );
+    expect(users.replacePassword).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['expired', ApiErrorCode.AUTH_VERIFICATION_CODE_EXPIRED],
+    ['attempts-exceeded', ApiErrorCode.AUTH_VERIFICATION_ATTEMPTS_EXCEEDED],
+  ] as const)(
+    'preserves backend reset rejection for %s codes',
+    async (kind, errorCode) => {
+      users.findLockedUserByIdentifier.mockResolvedValue(createUser());
+      verificationCodes.validateLockedCode.mockResolvedValue({ kind });
+      await expect(
+        service.verifyPasswordReset({
+          identifier: '012345678',
+          code: '012345',
+        }),
+      ).rejects.toMatchObject({ code: errorCode });
+      expect(users.replacePassword).not.toHaveBeenCalled();
+      expect(verificationCodes.consumeCode).not.toHaveBeenCalled();
+      expect(resetAuthorizations.createAuthorization).not.toHaveBeenCalled();
+      expect(sessions.revokeAllActiveSessions).not.toHaveBeenCalled();
+    },
+  );
 
   it('registers a pending citizen, profile, and hashed code transactionally without a session', async () => {
     const pendingUser = createUser({
@@ -172,7 +344,7 @@ describe('AuthService', () => {
     users.createPendingCitizen.mockResolvedValue(pendingUser);
     verificationCodes.createCode.mockResolvedValue({
       code: '012345',
-      expiresAt: new Date(NOW.getTime() + 300_000),
+      expiresAt: new Date(NOW.getTime() + 120_000),
     });
 
     const response = await service.register({
@@ -193,6 +365,7 @@ describe('AuthService', () => {
       }),
       manager,
     );
+    expect(users.createPendingCitizen).toHaveBeenCalledTimes(1);
     expect(verificationCodes.createCode).toHaveBeenCalledWith(
       {
         userId: USER_ID,
@@ -204,6 +377,7 @@ describe('AuthService', () => {
     );
     expect(response).toMatchObject({
       verificationRequired: true,
+      expiresInSeconds: 120,
       development: {
         developmentCode: '012345',
         purpose: VerificationPurpose.REGISTER_ACCOUNT,
@@ -211,6 +385,255 @@ describe('AuthService', () => {
     });
     expect(sessions.createSessionDraft).not.toHaveBeenCalled();
     expect(tokens.signAccessToken).not.toHaveBeenCalled();
+    expect(verificationCodes.getTtlSeconds).toHaveBeenCalledWith(
+      VerificationPurpose.REGISTER_ACCOUNT,
+    );
+  });
+
+  it('resumes a pending citizen by phone without overwriting account data', async () => {
+    const pendingUser = createUser({
+      status: UserStatus.PENDING_VERIFICATION,
+      passwordHash: 'original-password-hash',
+      email: 'original@example.com',
+    });
+    users.findLockedUserByIdentifier.mockResolvedValue(pendingUser);
+    users.findUserByIdentifier.mockResolvedValue(null);
+    verificationCodes.createCode.mockResolvedValue({
+      code: '654321',
+      expiresAt: new Date(NOW.getTime() + 120_000),
+    });
+
+    const response = await service.register({
+      phone: '012 345 678',
+      email: 'different@example.com',
+      verificationIdentifier: 'different@example.com',
+      password: 'different-password',
+      nameKh: 'ឈ្មោះថ្មី',
+      nameEn: 'Different Name',
+      nationalIdNumber: 'DIFFERENT-NATIONAL-ID',
+      address: 'Different address',
+    });
+
+    expect(response).toMatchObject({
+      verificationRequired: true,
+      destinationHint: '+855******678',
+      expiresInSeconds: 120,
+      development: {
+        developmentCode: '654321',
+        purpose: VerificationPurpose.REGISTER_ACCOUNT,
+      },
+    });
+    expect(verificationCodes.createCode).toHaveBeenCalledWith(
+      {
+        userId: USER_ID,
+        destination: '+85512345678',
+        purpose: VerificationPurpose.REGISTER_ACCOUNT,
+      },
+      manager,
+      expect.any(Date),
+    );
+    expect(hashing.hashSecret).not.toHaveBeenCalled();
+    expect(users.hasIdentifierConflict).not.toHaveBeenCalled();
+    expect(users.createPendingCitizen).not.toHaveBeenCalled();
+    expect(pendingUser).toMatchObject({
+      passwordHash: 'original-password-hash',
+      phone: '+85512345678',
+      email: 'original@example.com',
+      role: UserRole.CITIZEN,
+      status: UserStatus.PENDING_VERIFICATION,
+    });
+  });
+
+  it.each([
+    ['active citizen', createUser()],
+    ['disabled citizen', createUser({ status: UserStatus.DISABLED })],
+    [
+      'pending administrator',
+      createUser({
+        role: UserRole.ADMIN,
+        status: UserStatus.PENDING_VERIFICATION,
+      }),
+    ],
+  ])(
+    'keeps registration conflicts for an existing %s',
+    async (_label, user) => {
+      users.findLockedUserByIdentifier.mockResolvedValue(user);
+
+      await expect(
+        service.register({
+          phone: '012345678',
+          password: 'different-password',
+          nameKh: 'ឈ្មោះថ្មី',
+        }),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.USER_IDENTIFIER_CONFLICT,
+        status: HttpStatus.CONFLICT,
+      });
+      expect(hashing.hashSecret).not.toHaveBeenCalled();
+      expect(users.createPendingCitizen).not.toHaveBeenCalled();
+      expect(verificationCodes.createCode).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects another account optional-email conflict during pending resume', async () => {
+    users.findLockedUserByIdentifier.mockResolvedValue(
+      createUser({ status: UserStatus.PENDING_VERIFICATION }),
+    );
+    users.findUserByIdentifier.mockResolvedValue(
+      createUser({ id: '33333333-3333-4333-8333-333333333333' }),
+    );
+
+    await expect(
+      service.register({
+        phone: '012345678',
+        email: 'owned@example.com',
+        verificationIdentifier: '012345678',
+        password: 'different-password',
+        nameKh: 'ឈ្មោះថ្មី',
+      }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.USER_IDENTIFIER_CONFLICT,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(users.createPendingCitizen).not.toHaveBeenCalled();
+    expect(verificationCodes.createCode).not.toHaveBeenCalled();
+  });
+
+  it('uses a fresh transaction to resume after losing a phone uniqueness race', async () => {
+    const freshManager = {} as EntityManager;
+    const pendingWinner = createUser({
+      status: UserStatus.PENDING_VERIFICATION,
+    });
+    dataSource.transaction
+      .mockImplementationOnce((callback: (current: EntityManager) => unknown) =>
+        Promise.resolve(callback(manager)),
+      )
+      .mockImplementationOnce((callback: (current: EntityManager) => unknown) =>
+        Promise.resolve(callback(freshManager)),
+      );
+    users.findLockedUserByIdentifier
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(pendingWinner);
+    users.hasIdentifierConflict.mockResolvedValue(false);
+    users.createPendingCitizen.mockRejectedValue({
+      code: '23505',
+      constraint: 'UQ_a000cca60bcf04454e727699490',
+    });
+    verificationCodes.createCode.mockResolvedValue({
+      code: '654321',
+      expiresAt: new Date(NOW.getTime() + 120_000),
+    });
+
+    await expect(
+      service.register({
+        phone: '012345678',
+        password: 'password1',
+        nameKh: 'ឈ្មោះខ្មែរ',
+      }),
+    ).resolves.toMatchObject({
+      verificationRequired: true,
+      expiresInSeconds: 120,
+    });
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+    expect(verificationCodes.createCode).toHaveBeenCalledWith(
+      {
+        userId: USER_ID,
+        destination: '+85512345678',
+        purpose: VerificationPurpose.REGISTER_ACCOUNT,
+      },
+      freshManager,
+      expect.any(Date),
+    );
+  });
+
+  it('uses a fresh transaction but rejects a non-pending race winner', async () => {
+    const freshManager = {} as EntityManager;
+    dataSource.transaction
+      .mockImplementationOnce((callback: (current: EntityManager) => unknown) =>
+        Promise.resolve(callback(manager)),
+      )
+      .mockImplementationOnce((callback: (current: EntityManager) => unknown) =>
+        Promise.resolve(callback(freshManager)),
+      );
+    users.findLockedUserByIdentifier
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(createUser({ status: UserStatus.ACTIVE }));
+    users.hasIdentifierConflict.mockResolvedValue(false);
+    users.createPendingCitizen.mockRejectedValue({
+      code: '23505',
+      constraint: 'UQ_a000cca60bcf04454e727699490',
+    });
+
+    await expect(
+      service.register({
+        phone: '012345678',
+        password: 'password1',
+        nameKh: 'ឈ្មោះខ្មែរ',
+      }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.USER_IDENTIFIER_CONFLICT,
+      status: HttpStatus.CONFLICT,
+    });
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+    expect(users.findLockedUserByIdentifier).toHaveBeenLastCalledWith(
+      '+85512345678',
+      freshManager,
+    );
+    expect(verificationCodes.createCode).not.toHaveBeenCalled();
+  });
+
+  it('returns the configured registration lifetime and a fresh code on resend', async () => {
+    users.findUserByIdentifier.mockResolvedValue(
+      createUser({ status: UserStatus.PENDING_VERIFICATION }),
+    );
+    verificationCodes.createCode
+      .mockResolvedValueOnce({ code: '012345', expiresAt: NOW })
+      .mockResolvedValueOnce({ code: '987654', expiresAt: NOW });
+
+    const first = await service.resendVerification({
+      identifier: '012345678',
+    });
+    const second = await service.resendVerification({
+      identifier: '012345678',
+    });
+
+    expect(first).toMatchObject({
+      verificationRequired: true,
+      expiresInSeconds: 120,
+      development: { developmentCode: '012345' },
+    });
+    expect(second).toMatchObject({
+      verificationRequired: true,
+      expiresInSeconds: 120,
+      development: { developmentCode: '987654' },
+    });
+    expect(verificationCodes.createCode).toHaveBeenCalledTimes(2);
+    expect(verificationCodes.createCode).toHaveBeenLastCalledWith(
+      {
+        userId: USER_ID,
+        destination: '+85512345678',
+        purpose: VerificationPurpose.REGISTER_ACCOUNT,
+      },
+      undefined,
+      expect.any(Date),
+    );
+  });
+
+  it('rejects an expired registration code without activating the account', async () => {
+    users.findLockedUserByIdentifier.mockResolvedValue(
+      createUser({ status: UserStatus.PENDING_VERIFICATION }),
+    );
+    verificationCodes.validateLockedCode.mockResolvedValue({ kind: 'expired' });
+
+    await expect(
+      service.verifyAccount({ identifier: '+85512345678', code: '012345' }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.AUTH_VERIFICATION_CODE_EXPIRED,
+    });
+    expect(users.activateCitizenForIdentifier).not.toHaveBeenCalled();
+    expect(verificationCodes.consumeCode).not.toHaveBeenCalled();
   });
 
   it('registers a Khmer-only citizen with a null optional English name', async () => {
@@ -484,33 +907,36 @@ describe('AuthService', () => {
     ).toThrow(DomainException);
   });
 
-  it('uses a server-selected reset purpose and revokes all sessions after a valid reset', async () => {
+  it('uses only the reset authorization to change the password and revoke sessions', async () => {
     const user = createUser();
-    const verificationCode = { id: 'reset-code' } as never;
-    users.findLockedUserByIdentifier.mockResolvedValue(user);
-    verificationCodes.validateLockedCode.mockResolvedValue({
+    const authorization = {
+      id: 'reset-authorization',
+      userId: USER_ID,
+    } as PasswordResetAuthorization;
+    resetAuthorizations.validateLockedAuthorization.mockResolvedValue({
       kind: 'valid',
-      verificationCode,
+      authorization,
     });
+    users.findLockedUserById.mockResolvedValue(user);
 
     const response = await service.confirmPasswordReset({
-      identifier: '+85512345678',
-      code: '012345',
+      resetToken: 'a'.repeat(43),
       newPassword: 'new-password',
     });
 
-    expect(verificationCodes.validateLockedCode).toHaveBeenCalledWith(
-      USER_ID,
-      '+85512345678',
-      VerificationPurpose.RESET_PASSWORD,
-      '012345',
-      manager,
-      expect.any(Date),
-    );
+    expect(
+      resetAuthorizations.validateLockedAuthorization,
+    ).toHaveBeenCalledWith('a'.repeat(43), manager, expect.any(Date));
+    expect(users.findLockedUserById).toHaveBeenCalledWith(USER_ID, manager);
     expect(users.replacePassword).toHaveBeenCalledWith(
       user,
       'argon2id-hash',
       manager,
+    );
+    expect(resetAuthorizations.consumeAuthorization).toHaveBeenCalledWith(
+      authorization,
+      manager,
+      expect.any(Date),
     );
     expect(sessions.revokeAllActiveSessions).toHaveBeenCalledWith(
       USER_ID,
@@ -522,31 +948,24 @@ describe('AuthService', () => {
     expect(response).toMatchObject({ verificationRequired: false });
   });
 
-  it('verifies a reset code without changing the password or consuming the code', async () => {
-    const user = createUser();
-    const verificationCode = { id: 'reset-code' } as never;
-    users.findLockedUserByIdentifier.mockResolvedValue(user);
-    verificationCodes.validateLockedCode.mockResolvedValue({
-      kind: 'valid',
-      verificationCode,
-    });
+  it.each([
+    ['invalid', ApiErrorCode.RESET_TOKEN_INVALID],
+    ['expired', ApiErrorCode.RESET_TOKEN_EXPIRED],
+    ['used', ApiErrorCode.RESET_TOKEN_USED],
+  ] as const)('rejects a %s reset authorization safely', async (kind, code) => {
+    resetAuthorizations.validateLockedAuthorization.mockResolvedValue({ kind });
 
-    const response = await service.verifyPasswordReset({
-      identifier: '+85512345678',
-      code: '012345',
-    });
+    await expect(
+      service.confirmPasswordReset({
+        resetToken: 'a'.repeat(43),
+        newPassword: 'new-password',
+      }),
+    ).rejects.toMatchObject({ code });
 
-    expect(verificationCodes.validateLockedCode).toHaveBeenCalledWith(
-      USER_ID,
-      '+85512345678',
-      VerificationPurpose.RESET_PASSWORD,
-      '012345',
-      manager,
-      expect.any(Date),
-    );
-    expect(verificationCodes.consumeCode).not.toHaveBeenCalled();
+    expect(users.findLockedUserById).not.toHaveBeenCalled();
     expect(users.replacePassword).not.toHaveBeenCalled();
-    expect(response).toMatchObject({ verificationRequired: false });
+    expect(resetAuthorizations.consumeAuthorization).not.toHaveBeenCalled();
+    expect(sessions.revokeAllActiveSessions).not.toHaveBeenCalled();
   });
 
   it('rotates the same active refresh session without extending its expiry', async () => {

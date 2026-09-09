@@ -6,9 +6,12 @@ import { DataSource, EntityManager } from 'typeorm';
 
 import {
   AuthTokenResponse,
+  PasswordResetRequestResponse,
+  PasswordResetVerifyResponse,
   createRegistrationResponse,
   mapUserSummary,
   RegistrationResponse,
+  RegistrationVerificationResponse,
 } from './auth-response.mapper';
 import { AuthHashingService } from './auth-hashing.service';
 import { AuthTokenService } from './auth-token.service';
@@ -34,6 +37,10 @@ import {
   VerificationCodeService,
   type VerificationCodeValidationOutcome,
 } from './verification-code.service';
+import {
+  PasswordResetAuthorizationService,
+  type PasswordResetAuthorizationValidationOutcome,
+} from './password-reset-authorization.service';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { User } from '../users/entities/user.entity';
@@ -48,7 +55,7 @@ export interface AuthenticatedWorkflowResult {
   refreshExpiresAt: Date;
 }
 
-type RegistrationUniqueConflict = 'identifier' | 'other';
+type RegistrationUniqueConflict = 'phone' | 'email' | 'other';
 
 @Injectable()
 export class AuthService {
@@ -61,18 +68,39 @@ export class AuthService {
     private readonly hashingService: AuthHashingService,
     private readonly authTokenService: AuthTokenService,
     private readonly refreshSessionService: RefreshSessionService,
+    private readonly passwordResetAuthorizationService: PasswordResetAuthorizationService,
     private readonly configService: ConfigService,
   ) {}
 
-  async register(input: RegisterRequestDto): Promise<RegistrationResponse> {
+  async register(
+    input: RegisterRequestDto,
+  ): Promise<RegistrationVerificationResponse> {
     const identifiers = this.normalizeRegistrationIdentifiers(input);
+    const expiresInSeconds = this.verificationCodeService.getTtlSeconds(
+      VerificationPurpose.REGISTER_ACCOUNT,
+    );
     const now = new Date();
 
     try {
       return await this.dataSource.transaction(async (manager) => {
+        const existingPhoneUser =
+          await this.usersService.findLockedUserByIdentifier(
+            identifiers.phone,
+            manager,
+          );
+
+        if (existingPhoneUser !== null) {
+          return this.resumePendingRegistration(
+            existingPhoneUser,
+            identifiers.email,
+            expiresInSeconds,
+            manager,
+          );
+        }
+
         if (
           await this.usersService.hasIdentifierConflict(
-            identifiers.phone,
+            null,
             identifiers.email,
             manager,
           )
@@ -92,25 +120,40 @@ export class AuthService {
           },
           manager,
         );
-        const generatedCode = await this.verificationCodeService.createCode(
-          {
-            userId: user.id,
-            destination: identifiers.verificationIdentifier,
-            purpose: VerificationPurpose.REGISTER_ACCOUNT,
-          },
+        return this.issueRegistrationVerification(
+          user,
+          identifiers.verificationIdentifier,
+          expiresInSeconds,
           manager,
+          true,
           now,
         );
-
-        return createRegistrationResponse({
-          destination: identifiers.verificationIdentifier,
-          developmentCode: this.exposedDevelopmentCode(generatedCode.code),
-        });
       });
     } catch (error) {
       const conflict = this.classifyRegistrationUniqueViolation(error);
 
-      if (conflict === 'identifier') {
+      if (conflict === 'phone') {
+        return this.dataSource.transaction(async (manager) => {
+          const winningUser =
+            await this.usersService.findLockedUserByIdentifier(
+              identifiers.phone,
+              manager,
+            );
+
+          if (winningUser === null) {
+            throw this.identifierConflict();
+          }
+
+          return this.resumePendingRegistration(
+            winningUser,
+            identifiers.email,
+            expiresInSeconds,
+            manager,
+          );
+        });
+      }
+
+      if (conflict === 'email') {
         throw this.identifierConflict();
       }
 
@@ -187,27 +230,22 @@ export class AuthService {
 
   async resendVerification(
     input: ResendVerificationRequestDto,
-  ): Promise<RegistrationResponse> {
+  ): Promise<RegistrationVerificationResponse> {
+    const expiresInSeconds = this.verificationCodeService.getTtlSeconds(
+      VerificationPurpose.REGISTER_ACCOUNT,
+    );
     const identifier = this.normalizeIdentifier(input.identifier);
     const user = await this.usersService.findUserByIdentifier(identifier);
 
-    if (
-      user === null ||
-      user.role !== UserRole.CITIZEN ||
-      user.status !== UserStatus.PENDING_VERIFICATION
-    ) {
-      return createRegistrationResponse();
+    if (user === null || !this.isPendingCitizen(user)) {
+      return { ...createRegistrationResponse(), expiresInSeconds };
     }
 
-    const generatedCode = await this.verificationCodeService.createCode({
-      userId: user.id,
-      destination: identifier,
-      purpose: VerificationPurpose.REGISTER_ACCOUNT,
-    });
-
-    return createRegistrationResponse({
-      developmentCode: this.exposedDevelopmentCode(generatedCode.code),
-    });
+    return this.issueRegistrationVerification(
+      user,
+      identifier,
+      expiresInSeconds,
+    );
   }
 
   async login(input: LoginRequestDto): Promise<AuthenticatedWorkflowResult> {
@@ -243,12 +281,19 @@ export class AuthService {
 
   async requestPasswordReset(
     input: PasswordResetRequestDto,
-  ): Promise<RegistrationResponse> {
+  ): Promise<PasswordResetRequestResponse> {
+    const expiresInSeconds = this.verificationCodeService.getTtlSeconds(
+      VerificationPurpose.RESET_PASSWORD,
+    );
     const identifier = this.normalizeIdentifier(input.identifier);
     const user = await this.usersService.findUserByIdentifier(identifier);
 
-    if (user === null) {
-      return createRegistrationResponse();
+    if (
+      user === null ||
+      user.role !== UserRole.CITIZEN ||
+      user.status !== UserStatus.ACTIVE
+    ) {
+      return { ...createRegistrationResponse(), expiresInSeconds };
     }
 
     const generatedCode = await this.verificationCodeService.createCode({
@@ -257,15 +302,73 @@ export class AuthService {
       purpose: VerificationPurpose.RESET_PASSWORD,
     });
 
-    return createRegistrationResponse({
-      developmentCode: this.exposedDevelopmentCode(generatedCode.code),
-      purpose: VerificationPurpose.RESET_PASSWORD,
-    });
+    return {
+      ...createRegistrationResponse({
+        developmentCode: this.exposedDevelopmentCode(generatedCode.code),
+        purpose: VerificationPurpose.RESET_PASSWORD,
+      }),
+      expiresInSeconds,
+    };
   }
 
   async confirmPasswordReset(
     input: PasswordResetConfirmRequestDto,
   ): Promise<RegistrationResponse> {
+    const now = new Date();
+    const outcome = await this.dataSource.transaction(async (manager) => {
+      const validation =
+        await this.passwordResetAuthorizationService.validateLockedAuthorization(
+          input.resetToken,
+          manager,
+          now,
+        );
+
+      if (validation.kind !== 'valid') {
+        return validation;
+      }
+
+      const user = await this.usersService.findLockedUserById(
+        validation.authorization.userId,
+        manager,
+      );
+
+      if (user === null) {
+        return { kind: 'invalid' } as const;
+      }
+
+      await this.usersService.replacePassword(
+        user,
+        await this.hashingService.hashSecret(input.newPassword),
+        manager,
+      );
+      await this.passwordResetAuthorizationService.consumeAuthorization(
+        validation.authorization,
+        manager,
+        now,
+      );
+      await this.refreshSessionService.revokeAllActiveSessions(
+        user.id,
+        RefreshSessionRevocationReason.PASSWORD_RESET,
+        manager,
+        now,
+      );
+
+      return { kind: 'success' } as const;
+    });
+
+    if (outcome.kind !== 'success') {
+      throw this.resetAuthorizationOutcomeException(outcome);
+    }
+
+    return createRegistrationResponse({
+      verificationRequired: false,
+      message: 'Password has been reset successfully.',
+    });
+  }
+
+  async verifyPasswordReset(
+    input: PasswordResetVerifyRequestDto,
+  ): Promise<PasswordResetVerifyResponse> {
     const identifier = this.normalizeIdentifier(input.identifier);
     const now = new Date();
     const outcome = await this.dataSource.transaction(async (manager) => {
@@ -291,69 +394,29 @@ export class AuthService {
         return validation;
       }
 
-      await this.usersService.replacePassword(
-        user,
-        await this.hashingService.hashSecret(input.newPassword),
-        manager,
-      );
       await this.verificationCodeService.consumeCode(
         validation.verificationCode,
         manager,
         now,
       );
-      await this.refreshSessionService.revokeAllActiveSessions(
-        user.id,
-        RefreshSessionRevocationReason.PASSWORD_RESET,
-        manager,
-        now,
-      );
+      const authorization =
+        await this.passwordResetAuthorizationService.createAuthorization(
+          user.id,
+          manager,
+          now,
+        );
 
-      return { kind: 'success' } as const;
+      return { kind: 'success' as const, authorization };
     });
 
     if (outcome.kind !== 'success') {
       throw this.verificationOutcomeException(outcome);
     }
 
-    return createRegistrationResponse({
-      verificationRequired: false,
-      message: 'Password has been reset successfully.',
-    });
-  }
-
-  async verifyPasswordReset(
-    input: PasswordResetVerifyRequestDto,
-  ): Promise<RegistrationResponse> {
-    const identifier = this.normalizeIdentifier(input.identifier);
-    const now = new Date();
-    const outcome = await this.dataSource.transaction(async (manager) => {
-      const user = await this.usersService.findLockedUserByIdentifier(
-        identifier,
-        manager,
-      );
-
-      if (user === null) {
-        return { kind: 'invalid' } as const;
-      }
-
-      return this.verificationCodeService.validateLockedCode(
-        user.id,
-        identifier,
-        VerificationPurpose.RESET_PASSWORD,
-        input.code,
-        manager,
-        now,
-      );
-    });
-
-    if (outcome.kind !== 'valid') {
-      throw this.verificationOutcomeException(outcome);
-    }
-
-    return createRegistrationResponse({
-      verificationRequired: false,
-      message: 'Verification code is valid.',
-    });
+    return {
+      resetToken: outcome.authorization.resetToken,
+      expiresInSeconds: outcome.authorization.expiresInSeconds,
+    };
   }
 
   async refresh(
@@ -585,6 +648,70 @@ export class AuthService {
     return user.role === UserRole.CITIZEN || user.role === UserRole.ADMIN;
   }
 
+  private isPendingCitizen(user: User): boolean {
+    return (
+      user.role === UserRole.CITIZEN &&
+      user.status === UserStatus.PENDING_VERIFICATION
+    );
+  }
+
+  private async resumePendingRegistration(
+    user: User,
+    submittedEmail: string | null,
+    expiresInSeconds: number,
+    manager: EntityManager,
+  ): Promise<RegistrationVerificationResponse> {
+    if (!this.isPendingCitizen(user) || user.phone === null) {
+      throw this.identifierConflict();
+    }
+
+    if (submittedEmail !== null) {
+      const emailOwner = await this.usersService.findUserByIdentifier(
+        submittedEmail,
+        manager,
+      );
+
+      if (emailOwner !== null && emailOwner.id !== user.id) {
+        throw this.identifierConflict();
+      }
+    }
+
+    return this.issueRegistrationVerification(
+      user,
+      user.phone,
+      expiresInSeconds,
+      manager,
+      true,
+    );
+  }
+
+  private async issueRegistrationVerification(
+    user: User,
+    destination: string,
+    expiresInSeconds: number,
+    manager?: EntityManager,
+    includeDestinationHint = false,
+    now = new Date(),
+  ): Promise<RegistrationVerificationResponse> {
+    const generatedCode = await this.verificationCodeService.createCode(
+      {
+        userId: user.id,
+        destination,
+        purpose: VerificationPurpose.REGISTER_ACCOUNT,
+      },
+      manager,
+      now,
+    );
+
+    return {
+      ...createRegistrationResponse({
+        destination: includeDestinationHint ? destination : null,
+        developmentCode: this.exposedDevelopmentCode(generatedCode.code),
+      }),
+      expiresInSeconds,
+    };
+  }
+
   private normalizeIdentifier(value: string): string {
     try {
       return normalizeIdentifier(value);
@@ -671,6 +798,33 @@ export class AuthService {
     }
   }
 
+  private resetAuthorizationOutcomeException(
+    outcome:
+      | Exclude<PasswordResetAuthorizationValidationOutcome, { kind: 'valid' }>
+      | { kind: 'invalid' },
+  ): DomainException {
+    switch (outcome.kind) {
+      case 'expired':
+        return new DomainException(
+          ApiErrorCode.RESET_TOKEN_EXPIRED,
+          HttpStatus.BAD_REQUEST,
+          'Password reset authorization has expired',
+        );
+      case 'used':
+        return new DomainException(
+          ApiErrorCode.RESET_TOKEN_USED,
+          HttpStatus.BAD_REQUEST,
+          'Password reset authorization has already been used',
+        );
+      default:
+        return new DomainException(
+          ApiErrorCode.RESET_TOKEN_INVALID,
+          HttpStatus.BAD_REQUEST,
+          'Password reset authorization is invalid',
+        );
+    }
+  }
+
   private invalidCredentials(): DomainException {
     return new DomainException(
       ApiErrorCode.AUTH_INVALID_CREDENTIALS,
@@ -747,11 +901,12 @@ export class AuthService {
       return undefined;
     }
 
-    if (
-      constraint === 'UQ_a000cca60bcf04454e727699490' ||
-      constraint === 'UQ_97672ac88f789774dd47f7c8be3'
-    ) {
-      return 'identifier';
+    if (constraint === 'UQ_a000cca60bcf04454e727699490') {
+      return 'phone';
+    }
+
+    if (constraint === 'UQ_97672ac88f789774dd47f7c8be3') {
+      return 'email';
     }
 
     if (constraint === 'UQ_aa30876112d7d4c1ab2d9e7c6c9') {

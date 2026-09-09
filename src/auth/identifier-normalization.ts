@@ -16,7 +16,7 @@ export interface RegistrationIdentifiersInput {
 }
 
 export interface NormalizedRegistrationIdentifiers {
-  phone: string | null;
+  phone: string;
   email: string | null;
   verificationIdentifier: string;
 }

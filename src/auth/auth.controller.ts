@@ -11,7 +11,10 @@ import type { Request, Response } from 'express';
 
 import {
   AuthTokenResponse,
+  PasswordResetRequestResponse,
+  PasswordResetVerifyResponse,
   RegistrationResponse,
+  RegistrationVerificationResponse,
 } from './auth-response.mapper';
 import { RefreshCookieHelper } from './refresh-cookie.helper';
 import { AuthService } from './auth.service';
@@ -38,7 +41,7 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   async register(
     @Body() input: RegisterRequestDto,
-  ): Promise<ApiDataResponse<RegistrationResponse>> {
+  ): Promise<ApiDataResponse<RegistrationVerificationResponse>> {
     return createDataResponse(await this.authService.register(input));
   }
 
@@ -62,7 +65,7 @@ export class AuthController {
   @HttpCode(HttpStatus.ACCEPTED)
   async resendVerification(
     @Body() input: ResendVerificationRequestDto,
-  ): Promise<ApiDataResponse<RegistrationResponse>> {
+  ): Promise<ApiDataResponse<RegistrationVerificationResponse>> {
     return createDataResponse(await this.authService.resendVerification(input));
   }
 
@@ -86,7 +89,7 @@ export class AuthController {
   @HttpCode(HttpStatus.ACCEPTED)
   async requestPasswordReset(
     @Body() input: PasswordResetRequestDto,
-  ): Promise<ApiDataResponse<RegistrationResponse>> {
+  ): Promise<ApiDataResponse<PasswordResetRequestResponse>> {
     return createDataResponse(
       await this.authService.requestPasswordReset(input),
     );
@@ -106,7 +109,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async verifyPasswordReset(
     @Body() input: PasswordResetVerifyRequestDto,
-  ): Promise<ApiDataResponse<RegistrationResponse>> {
+  ): Promise<ApiDataResponse<PasswordResetVerifyResponse>> {
     return createDataResponse(
       await this.authService.verifyPasswordReset(input),
     );

@@ -146,6 +146,17 @@ export class UsersService {
     });
   }
 
+  async findLockedUserById(
+    userId: string,
+    manager: EntityManager,
+  ): Promise<User | null> {
+    return manager.getRepository(User).findOne({
+      where: { id: userId },
+      lock: { mode: 'pessimistic_write' },
+      select: this.safeUserSelect(),
+    });
+  }
+
   async activateCitizenForIdentifier(
     user: User,
     identifier: string,

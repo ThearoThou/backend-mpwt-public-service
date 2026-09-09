@@ -5,6 +5,7 @@ import { RenewalApplication } from '../applications/entities/renewal-application
 import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { VerificationCode } from '../auth/entities/verification-code.entity';
 import { RefreshSession } from '../auth/entities/refresh-session.entity';
+import { PasswordResetAuthorization } from '../auth/entities/password-reset-authorization.entity';
 import { Inspection } from '../inspections/entities/inspection.entity';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 import { Notification } from '../notifications/entities/notification.entity';
@@ -26,6 +27,7 @@ export const databaseEntities = [
   CitizenProfile,
   VerificationCode,
   RefreshSession,
+  PasswordResetAuthorization,
   Vehicle,
   VehicleClassificationHistory,
   InspectionVehicleCategory,

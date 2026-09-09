@@ -15,6 +15,7 @@ import { ApplicationTimelineEvent } from '../../activity/entities/application-ti
 import { AuditLog } from '../../activity/entities/audit-log.entity';
 import { VerificationCode } from '../../auth/entities/verification-code.entity';
 import { RefreshSession } from '../../auth/entities/refresh-session.entity';
+import { PasswordResetAuthorization } from '../../auth/entities/password-reset-authorization.entity';
 import { Inspection } from '../../inspections/entities/inspection.entity';
 import { Payment } from '../../payments/entities/payment.entity';
 import { PaymentStatusHistory } from '../../payments/entities/payment-status-history.entity';
@@ -106,6 +107,13 @@ export class User {
     cascade: false,
   })
   refreshSessions!: RefreshSession[];
+
+  @OneToMany(
+    () => PasswordResetAuthorization,
+    (authorization) => authorization.user,
+    { cascade: false },
+  )
+  passwordResetAuthorizations!: PasswordResetAuthorization[];
 
   @OneToMany(() => Vehicle, (vehicle) => vehicle.linkedCitizen, {
     cascade: false,
