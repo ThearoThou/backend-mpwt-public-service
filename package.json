@@ -27,8 +27,12 @@
     "migration:show": "npm run typeorm -- migration:show -d src/database/data-source.ts",
     "migration:e2e:run": "node -r ts-node/register test/e2e/run-e2e-migration.ts up",
     "migration:e2e:revert": "node -r ts-node/register test/e2e/run-e2e-migration.ts down",
+    "reset:local-development": "node -r ts-node/register scripts/reset-local-development-environment.ts",
+    "seed:local-demo-actors": "node -r ts-node/register scripts/seed-local-demo-actors.ts",
     "seed:local-demo-vehicle-workflow": "node -r ts-node/register scripts/seed-local-demo-vehicle-workflow.ts",
+    "seed:mpwt-inspection-category-reference": "node -r ts-node/register scripts/seed-mpwt-inspection-category-reference.ts",
     "reset:local-demo-vehicle-workflow": "node -r ts-node/register scripts/reset-local-demo-vehicle-workflow.ts",
+    "reset:dev-pending-payment": "node -r ts-node/register scripts/reset-pending-payment-invoice.ts",
     "seed:local-inspection-stations": "node -r ts-node/register scripts/seed-local-inspection-stations.ts",
     "seed:cambodia-public-holidays": "node -r ts-node/register scripts/seed-cambodia-public-holidays.ts"
   },

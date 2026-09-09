@@ -6,21 +6,13 @@ import {
   normalizeEmail,
 } from '../src/auth/identifier-normalization';
 import { RenewalApplicationStatusHistory } from '../src/applications/entities/renewal-application-status-history.entity';
+import { InspectionVehicleCategory } from '../src/inspection-categories/entities/inspection-vehicle-category.entity';
 import { RenewalApplication } from '../src/applications/entities/renewal-application.entity';
 import { ApplicationStatus } from '../src/applications/enums/application-status.enum';
-import { InspectionVehicleCategory } from '../src/inspection-categories/entities/inspection-vehicle-category.entity';
 import { Inspection } from '../src/inspections/entities/inspection.entity';
 import { InspectionResult } from '../src/inspections/enums/inspection-result.enum';
 import { InspectionStatus } from '../src/inspections/enums/inspection-status.enum';
-import { Payment } from '../src/payments/entities/payment.entity';
-import { PaymentStatusHistory } from '../src/payments/entities/payment-status-history.entity';
-import { PaymentMethod } from '../src/payments/enums/payment-method.enum';
-import { PaymentStatus } from '../src/payments/enums/payment-status.enum';
-import { Appointment } from '../src/scheduling/entities/appointment.entity';
-import { InspectionStationDailyCapacity } from '../src/scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStation } from '../src/scheduling/entities/inspection-station.entity';
-import { AppointmentStatus } from '../src/scheduling/enums/appointment-status.enum';
-import { Sticker } from '../src/stickers/entities/sticker.entity';
 import { CitizenProfile } from '../src/users/entities/citizen-profile.entity';
 import { User } from '../src/users/entities/user.entity';
 import { UserRole } from '../src/users/enums/user-role.enum';
@@ -28,7 +20,6 @@ import { UserStatus } from '../src/users/enums/user-status.enum';
 import { Vehicle } from '../src/vehicles/entities/vehicle.entity';
 import { VehicleClass } from '../src/vehicles/enums/vehicle-class.enum';
 import {
-  LOCAL_DEMO_DATASET,
   LOCAL_DEMO_REGISTRATIONS,
   LOCAL_DEMO_VEHICLES,
   type LocalDemoVehicleFixture,
@@ -37,69 +28,124 @@ import {
 const LOCAL_SEED_ENVIRONMENT = 'development';
 const LOCAL_SEED_CONFIRMATION = 'true';
 const CYCLE_DAYS = 365;
-let localDataSource: DataSource | undefined;
 const requireFromScript = createRequire(__filename);
+
+let localDataSource: DataSource | undefined;
 
 interface SeedCitizen {
   id: string;
   profile: CitizenProfile;
   phone: string;
 }
-interface SeedResult {
-  created: string[];
-  migrated: string[];
-  skipped: string[];
-  historicalApplicationsCreated: number;
-  historicalApplicationsSkipped: number;
-  anchorDate: string;
-}
-interface HistoricalCycle {
-  cycle: number;
-  firstInspectionDate: string;
-  finalPassDate: string;
-  failedFirstAttempt: boolean;
+
+interface CategoryFixture {
+  code: 'LOCAL-DEMO-LIGHT' | 'LOCAL-DEMO-HEAVY';
+  nameKh: string;
+  nameEn: string;
+  vehicleClass: VehicleClass;
+  inspectionFeeKhr: string;
+  serviceFeeKhr: string;
+  validityMonths: number;
 }
 
-function readCitizenSelector(prefix: 'citizen' | 'other-citizen'): {
-  email?: string;
-  id?: string;
-} {
-  const id = process.argv
-    .slice(2)
-    .find((argument) => argument.startsWith(`--${prefix}-id=`))
-    ?.slice(`--${prefix}-id=`.length)
-    .trim();
-  const email = process.argv
-    .slice(2)
-    .find((argument) => argument.startsWith(`--${prefix}-email=`))
-    ?.slice(`--${prefix}-email=`.length)
-    .trim();
-  if (id !== undefined && id !== '') return { id };
-  if (email !== undefined && email !== '') return { email };
-  throw new Error(
-    `Missing required selector: --${prefix}-id=<uuid> or --${prefix}-email=<email>.`,
-  );
+interface SeedResult {
+  vehiclesCreated: string[];
+  vehiclesUpdated: string[];
+  vehiclesUnchanged: string[];
+  categoriesCreated: string[];
+  categoriesUpdated: string[];
+  categoriesUnchanged: string[];
+  historicalApplicationsCreated: string[];
+  historicalApplicationsUnchanged: string[];
+  historicalInspectionsCreated: number;
+  anchorDate: string;
 }
+
+interface HistoricalInspectionAttemptFixture {
+  attemptNumber: 1 | 2;
+  result: InspectionResult;
+  stationCode: string;
+  daysAfterLastInspection: number;
+  failureReason?: string;
+}
+
+interface HistoricalApplicationFixture {
+  referenceNumber: string;
+  vehicleRegistrationNumber: string;
+  finalStatus:
+    ApplicationStatus.COMPLETED | ApplicationStatus.INSPECTION_FAILED;
+  attempts: readonly HistoricalInspectionAttemptFixture[];
+}
+
+const LOCAL_DEMO_CATEGORIES: readonly CategoryFixture[] = [
+  {
+    code: 'LOCAL-DEMO-LIGHT',
+    nameKh: 'យានយន្តស្រាល (សាកល្បង)',
+    nameEn: 'Local demo light vehicle',
+    vehicleClass: VehicleClass.LIGHT,
+    inspectionFeeKhr: '48000.00',
+    serviceFeeKhr: '0.00',
+    validityMonths: 12,
+  },
+  {
+    code: 'LOCAL-DEMO-HEAVY',
+    nameKh: 'យានយន្តធុនធ្ងន់ (សាកល្បង)',
+    nameEn: 'Local demo heavy vehicle',
+    vehicleClass: VehicleClass.HEAVY,
+    inspectionFeeKhr: '80000.00',
+    serviceFeeKhr: '0.00',
+    validityMonths: 12,
+  },
+];
+
 function assertLocalDevelopmentSafety(): void {
-  if (process.env.NODE_ENV !== LOCAL_SEED_ENVIRONMENT)
+  if (process.env.NODE_ENV !== LOCAL_SEED_ENVIRONMENT) {
     throw new Error(
       'This seed may only run with NODE_ENV=development. No database changes were made.',
     );
-  if (process.env.ALLOW_LOCAL_VEHICLE_SEED !== LOCAL_SEED_CONFIRMATION)
+  }
+
+  if (process.env.ALLOW_LOCAL_VEHICLE_SEED !== LOCAL_SEED_CONFIRMATION) {
     throw new Error(
       'Set ALLOW_LOCAL_VEHICLE_SEED=true to explicitly allow local fixture insertion. No database changes were made.',
     );
+  }
 }
+
+function readCitizenSelector(): { email?: string; id?: string } {
+  const id = process.argv
+    .slice(2)
+    .find((argument) => argument.startsWith('--citizen-id='))
+    ?.slice('--citizen-id='.length)
+    .trim();
+  const email = process.argv
+    .slice(2)
+    .find((argument) => argument.startsWith('--citizen-email='))
+    ?.slice('--citizen-email='.length)
+    .trim();
+
+  if (id !== undefined && id !== '') return { id };
+  if (email !== undefined && email !== '') return { email };
+
+  throw new Error(
+    'Missing required selector: --citizen-id=<uuid> or --citizen-email=<email>.',
+  );
+}
+
 function dataSource(): DataSource {
-  if (localDataSource === undefined)
+  if (localDataSource === undefined) {
     throw new Error('The local seed data source has not been initialized.');
+  }
+
   return localDataSource;
 }
+
 function loadValidatedDataSource(): DataSource {
   return (
     requireFromScript('../src/database/data-source') as { default: DataSource }
   ).default;
 }
+
 async function resolveCitizen(
   manager: EntityManager,
   selector: { email?: string; id?: string },
@@ -112,6 +158,7 @@ async function resolveCitizen(
     relations: { citizenProfile: true },
   });
   const user = users[0];
+
   if (
     users.length !== 1 ||
     user === undefined ||
@@ -119,168 +166,247 @@ async function resolveCitizen(
     user.status !== UserStatus.ACTIVE ||
     user.citizenProfile === null ||
     user.phone === null
-  )
+  ) {
     throw new Error(
-      'Expected one ACTIVE citizen with a profile and phone number.',
+      'Expected one ACTIVE citizen with a profile and phone number. No database changes were made.',
     );
+  }
+
+  if (user.citizenProfile.nameEn === null) {
+    throw new Error(
+      'Citizen must have an English name for the required vehicle owner data. No database changes were made.',
+    );
+  }
+
   return {
     id: user.id,
     profile: user.citizenProfile,
     phone: normalizeCambodianPhone(user.phone),
   };
 }
+
 async function resolveAdministrator(manager: EntityManager): Promise<string> {
   const users = await manager.getRepository(User).find({
     where: { role: UserRole.ADMIN, status: UserStatus.ACTIVE },
+    order: { createdAt: 'ASC' },
     select: { id: true },
   });
-  if (users.length !== 1 || users[0] === undefined)
+
+  if (users.length !== 1 || users[0] === undefined) {
     throw new Error(
-      'Expected exactly one ACTIVE ADMIN for local fixture data.',
+      'Expected exactly one ACTIVE ADMIN for local fixture data. No database changes were made.',
     );
+  }
+
   return users[0].id;
 }
-async function resolveCategories(
-  manager: EntityManager,
-): Promise<Map<VehicleClass, InspectionVehicleCategory>> {
-  const categories = await manager
-    .getRepository(InspectionVehicleCategory)
-    .find({ where: { isActive: true }, order: { createdAt: 'ASC' } });
-  const output = new Map<VehicleClass, InspectionVehicleCategory>();
-  for (const category of categories)
-    if (!output.has(category.vehicleClass))
-      output.set(category.vehicleClass, category);
-  if (!output.has(VehicleClass.LIGHT) || !output.has(VehicleClass.HEAVY))
-    throw new Error(
-      'Active LIGHT and HEAVY inspection categories are required.',
-    );
-  return output;
-}
+
 async function cambodiaToday(manager: EntityManager): Promise<string> {
   const [clock] = await manager.query<{ today: string }[]>(
     `SELECT (now() AT TIME ZONE 'Asia/Phnom_Penh')::date::text AS "today"`,
   );
-  if (clock === undefined)
+
+  if (clock === undefined) {
     throw new Error('Cambodia-local seed clock unavailable.');
+  }
+
   return clock.today;
 }
+
 function addDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00.000Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
 }
-function at(date: string, hourUtc: number): Date {
-  return new Date(`${date}T${hourUtc.toString().padStart(2, '0')}:00:00.000Z`);
-}
-function compact(date: string): string {
-  return date.replaceAll('-', '');
-}
-function referenceFor(date: string, slot: number, cycle: number): string {
-  return `VIR-${compact(date)}-A${slot}${cycle}${'0'.repeat(9)}`;
-}
-function invoiceFor(date: string, slot: number, cycle: number): string {
-  return `INV-${compact(date)}-${(slot * 10 + cycle).toString().padStart(6, '0')}`;
-}
-function receiptFor(date: string, slot: number, cycle: number): string {
-  return `RCP-${compact(date)}-${(slot * 10 + cycle).toString().padStart(6, '0')}`;
-}
-function stickerFor(date: string, slot: number, cycle: number): string {
-  return `STK-${compact(date)}-${slot}${cycle}`;
-}
-function cyclesFor(
+
+const HISTORY_STATION_CODES_BY_SLOT: Readonly<Record<number, string[]>> = {
+  1: ['PP-RUSSEY-KEO', 'PP-NR6A'],
+  2: ['PP-MONG-RETHY', 'BTB-VEHICLE-INSPECTION'],
+  3: ['SR-VEHICLE-INSPECTION'],
+  4: ['PP-VEAL-SBOV', 'PP-KAMBOL', 'PP-POR-SEN-CHEY-ODEM'],
+  5: ['KPC-VEHICLE-INSPECTION'],
+  6: [
+    'KPS-VEHICLE-INSPECTION',
+    'KRT-VEHICLE-INSPECTION',
+    'PSH-VEHICLE-INSPECTION',
+  ],
+  7: ['PP-POR-SEN-CHEY-ODEM', 'PSH-VEHICLE-INSPECTION'],
+  8: ['RTK-VEHICLE-INSPECTION', 'KCH-VEHICLE-INSPECTION'],
+  9: [
+    'PVH-VEHICLE-INSPECTION',
+    'KTH-VEHICLE-INSPECTION',
+    'BMC-VEHICLE-INSPECTION',
+  ],
+  10: [
+    'SVR-VEHICLE-INSPECTION',
+    'KPT-VEHICLE-INSPECTION',
+    'TKO-VEHICLE-INSPECTION',
+  ],
+};
+
+function historyReference(
   fixture: LocalDemoVehicleFixture,
-  anchorDate: string,
-): HistoricalCycle[] {
-  const latestPass = addDays(
-    addDays(anchorDate, fixture.expiryOffsetDays),
-    -CYCLE_DAYS,
-  );
-  if (fixture.history === 'ONE_PASS')
-    return [
+  sequence: number,
+): string {
+  return `LDMO-HIST-${String(fixture.slot).padStart(2, '0')}-${sequence}`;
+}
+
+function historicalApplicationsForVehicle(
+  fixture: LocalDemoVehicleFixture,
+): HistoricalApplicationFixture[] {
+  const stationCodes = HISTORY_STATION_CODES_BY_SLOT[fixture.slot];
+  if (stationCodes === undefined) {
+    throw new Error(
+      `Missing historical station mapping for slot ${fixture.slot}.`,
+    );
+  }
+
+  const pass = (
+    sequence: number,
+    stationCode: string,
+    daysAfterLastInspection: number,
+  ): HistoricalApplicationFixture => ({
+    referenceNumber: historyReference(fixture, sequence),
+    vehicleRegistrationNumber: fixture.registrationNumber,
+    finalStatus: ApplicationStatus.COMPLETED,
+    attempts: [
       {
-        cycle: 1,
-        firstInspectionDate: latestPass,
-        finalPassDate: latestPass,
-        failedFirstAttempt: false,
+        attemptNumber: 1,
+        result: InspectionResult.PASS,
+        stationCode,
+        daysAfterLastInspection,
       },
-    ];
-  const olderPass = addDays(latestPass, -CYCLE_DAYS);
-  if (fixture.history === 'TWO_PASS')
-    return [
-      {
-        cycle: 1,
-        firstInspectionDate: olderPass,
-        finalPassDate: olderPass,
-        failedFirstAttempt: false,
-      },
-      {
-        cycle: 2,
-        firstInspectionDate: latestPass,
-        finalPassDate: latestPass,
-        failedFirstAttempt: false,
-      },
-    ];
+    ],
+  });
+
+  if (fixture.history === 'TWO_PASS') {
+    if (stationCodes.length !== 2) {
+      throw new Error(
+        `Expected two historical stations for slot ${fixture.slot}.`,
+      );
+    }
+    return [pass(1, stationCodes[0], -CYCLE_DAYS), pass(2, stationCodes[1], 0)];
+  }
+
+  if (fixture.history === 'ONE_PASS') {
+    if (stationCodes.length !== 1) {
+      throw new Error(
+        `Expected one historical station for slot ${fixture.slot}.`,
+      );
+    }
+    return [pass(1, stationCodes[0], 0)];
+  }
+
+  if (stationCodes.length !== 3) {
+    throw new Error(
+      `Expected three historical stations for slot ${fixture.slot}.`,
+    );
+  }
   return [
+    pass(1, stationCodes[0], -CYCLE_DAYS),
     {
-      cycle: 1,
-      firstInspectionDate: olderPass,
-      finalPassDate: olderPass,
-      failedFirstAttempt: false,
+      referenceNumber: historyReference(fixture, 2),
+      vehicleRegistrationNumber: fixture.registrationNumber,
+      finalStatus: ApplicationStatus.INSPECTION_FAILED,
+      attempts: [
+        {
+          attemptNumber: 1,
+          result: InspectionResult.FAIL,
+          stationCode: stationCodes[1],
+          daysAfterLastInspection: -14,
+          failureReason: 'Brake performance requires correction.',
+        },
+      ],
     },
-    {
-      cycle: 2,
-      firstInspectionDate: addDays(latestPass, -14),
-      finalPassDate: latestPass,
-      failedFirstAttempt: true,
-    },
+    pass(3, stationCodes[2], 0),
   ];
 }
-async function existingAnchorDate(
-  manager: EntityManager,
-): Promise<string | null> {
-  const [row] = await manager.query<{ anchorDate: string | null }[]>(
-    `SELECT application."applicant_snapshot" ->> 'fixtureAnchorDate' AS "anchorDate"
-       FROM "renewal_applications" application INNER JOIN "vehicles" vehicle ON vehicle."id" = application."vehicle_id"
-      WHERE vehicle."registration_number" = ANY($1::text[]) AND application."applicant_snapshot" ->> 'fixture' = $2
-      ORDER BY application."created_at" ASC LIMIT 1`,
-    [LOCAL_DEMO_REGISTRATIONS, LOCAL_DEMO_DATASET],
-  );
-  return row?.anchorDate ?? null;
+
+function inspectionTimestamp(date: string): Date {
+  return new Date(`${date}T02:00:00.000Z`);
 }
-async function assertNoLegacyWorkflow(
-  manager: EntityManager,
-  vehicleIds: string[],
-): Promise<void> {
-  if (vehicleIds.length === 0) return;
-  const rows = await manager.query<{ fixture: string | null }[]>(
-    `SELECT "applicant_snapshot" ->> 'fixture' AS "fixture" FROM "renewal_applications" WHERE "vehicle_id" = ANY($1::uuid[])`,
-    [vehicleIds],
-  );
-  if (rows.some((row) => row.fixture !== LOCAL_DEMO_DATASET))
-    throw new Error(
-      'Legacy workflow exists for a local demo vehicle. Run the explicit reset command first.',
-    );
-}
-function snapshot(vehicle: Vehicle): Record<string, unknown> {
+
+function historicalApplicationSnapshots(
+  citizen: SeedCitizen,
+  vehicle: Vehicle,
+) {
   return {
-    vehicleId: vehicle.id,
-    registrationNumber: vehicle.registrationNumber,
-    plateNumber: vehicle.plateNumber,
-    plateCategory: vehicle.plateCategory,
-    plateProvince: vehicle.plateProvince,
-    plateType: vehicle.plateType,
-    vehicleType: vehicle.vehicleType,
-    vehicleClass: vehicle.vehicleClass,
-    inspectionCategoryId: vehicle.inspectionCategoryId,
-    make: vehicle.make,
-    model: vehicle.model,
-    manufactureYear: vehicle.manufactureYear,
-    chassisNumber: vehicle.chassisNumber,
-    firstRegistrationDate: vehicle.firstRegistrationDate,
-    lastInspectionDate: vehicle.lastInspectionDate,
-    inspectionExpiryDate: vehicle.inspectionExpiryDate,
+    applicantSnapshot: {
+      userId: citizen.id,
+      nameKh: citizen.profile.nameKh,
+      nameEn: citizen.profile.nameEn,
+      nationalIdNumber: citizen.profile.nationalIdNumber,
+      phone: citizen.phone,
+      email: null,
+      address: citizen.profile.address,
+    },
+    vehicleSnapshot: {
+      vehicleId: vehicle.id,
+      registrationNumber: vehicle.registrationNumber,
+      plateNumber: vehicle.plateNumber,
+      plateCategory: vehicle.plateCategory,
+      plateProvince: vehicle.plateProvince,
+      plateType: vehicle.plateType,
+      vehicleType: vehicle.vehicleType,
+      vehicleClass: vehicle.vehicleClass,
+      inspectionCategoryId: vehicle.inspectionCategoryId,
+      make: vehicle.make,
+      model: vehicle.model,
+      manufactureYear: vehicle.manufactureYear,
+      chassisNumber: vehicle.chassisNumber,
+      firstRegistrationDate: vehicle.firstRegistrationDate,
+      lastInspectionDate: vehicle.lastInspectionDate,
+      inspectionExpiryDate: vehicle.inspectionExpiryDate,
+      registeredOwnerNameKh: vehicle.registeredOwnerNameKh,
+      registeredOwnerNameEn: vehicle.registeredOwnerNameEn,
+      registeredOwnerPhone: vehicle.registeredOwnerPhone,
+    },
   };
 }
+
+function categoryMatches(
+  category: InspectionVehicleCategory,
+  fixture: CategoryFixture,
+): boolean {
+  return (
+    category.nameKh === fixture.nameKh &&
+    category.nameEn === fixture.nameEn &&
+    category.vehicleClass === fixture.vehicleClass &&
+    category.inspectionFeeKhr === fixture.inspectionFeeKhr &&
+    category.serviceFeeKhr === fixture.serviceFeeKhr &&
+    category.validityMonths === fixture.validityMonths &&
+    category.isActive
+  );
+}
+
+async function ensureDemoCategories(
+  manager: EntityManager,
+  result: SeedResult,
+): Promise<Map<VehicleClass, InspectionVehicleCategory>> {
+  const repository = manager.getRepository(InspectionVehicleCategory);
+  const categories = new Map<VehicleClass, InspectionVehicleCategory>();
+
+  for (const fixture of LOCAL_DEMO_CATEGORIES) {
+    const existing = await repository.findOneBy({ code: fixture.code });
+    const values = { ...fixture, isActive: true };
+    const category =
+      existing === null
+        ? await repository.save(repository.create(values))
+        : categoryMatches(existing, fixture)
+          ? existing
+          : await repository.save(repository.merge(existing, values));
+
+    if (existing === null) result.categoriesCreated.push(fixture.code);
+    else if (category === existing)
+      result.categoriesUnchanged.push(fixture.code);
+    else result.categoriesUpdated.push(fixture.code);
+
+    categories.set(fixture.vehicleClass, category);
+  }
+
+  return categories;
+}
+
 async function findFixtureVehicle(
   manager: EntityManager,
   fixture: LocalDemoVehicleFixture,
@@ -292,12 +418,84 @@ async function findFixtureVehicle(
     }),
     repository.findOneBy({ registrationNumber: fixture.registrationNumber }),
   ]);
-  if (legacy !== null && current !== null && legacy.id !== current.id)
+
+  if (legacy !== null && current !== null && legacy.id !== current.id) {
     throw new Error(
-      `Both legacy and current registrations exist for slot ${fixture.slot}.`,
+      `Both legacy and current registrations exist for slot ${fixture.slot}. Run the local reset first.`,
     );
+  }
+
   return current ?? legacy;
 }
+
+async function assertNoWorkflow(
+  manager: EntityManager,
+  vehicleId: string,
+  registrationNumber: string,
+): Promise<void> {
+  const count = await manager.getRepository(RenewalApplication).count({
+    where: { vehicleId },
+  });
+
+  if (count !== 0) {
+    throw new Error(
+      `${registrationNumber} has renewal workflow data. Run the guarded local reset before changing demo fixtures.`,
+    );
+  }
+}
+
+function vehicleMatches(
+  vehicle: Vehicle,
+  values: Pick<
+    Vehicle,
+    | 'linkedCitizenId'
+    | 'registrationNumber'
+    | 'plateNumber'
+    | 'plateCategory'
+    | 'plateProvince'
+    | 'plateType'
+    | 'vehicleType'
+    | 'vehicleClass'
+    | 'inspectionCategoryId'
+    | 'make'
+    | 'model'
+    | 'manufactureYear'
+    | 'chassisNumber'
+    | 'firstRegistrationDate'
+    | 'lastInspectionDate'
+    | 'inspectionExpiryDate'
+    | 'registeredOwnerNameKh'
+    | 'registeredOwnerNameEn'
+    | 'registeredOwnerPhone'
+    | 'isActive'
+  >,
+): boolean {
+  return (
+    vehicle.linkedCitizenId === values.linkedCitizenId &&
+    vehicle.registrationNumber === values.registrationNumber &&
+    vehicle.plateNumber === values.plateNumber &&
+    vehicle.plateCategory === values.plateCategory &&
+    vehicle.plateProvince === values.plateProvince &&
+    vehicle.plateType === values.plateType &&
+    vehicle.vehicleType === values.vehicleType &&
+    vehicle.vehicleClass === values.vehicleClass &&
+    vehicle.inspectionCategoryId === values.inspectionCategoryId &&
+    vehicle.classificationVerifiedAt !== null &&
+    vehicle.classificationVerifiedBy !== null &&
+    vehicle.make === values.make &&
+    vehicle.model === values.model &&
+    vehicle.manufactureYear === values.manufactureYear &&
+    vehicle.chassisNumber === values.chassisNumber &&
+    vehicle.firstRegistrationDate === values.firstRegistrationDate &&
+    vehicle.lastInspectionDate === values.lastInspectionDate &&
+    vehicle.inspectionExpiryDate === values.inspectionExpiryDate &&
+    vehicle.registeredOwnerNameKh === values.registeredOwnerNameKh &&
+    vehicle.registeredOwnerNameEn === values.registeredOwnerNameEn &&
+    vehicle.registeredOwnerPhone === values.registeredOwnerPhone &&
+    vehicle.isActive
+  );
+}
+
 async function upsertVehicles(
   manager: EntityManager,
   citizen: SeedCitizen,
@@ -305,33 +503,24 @@ async function upsertVehicles(
   categories: Map<VehicleClass, InspectionVehicleCategory>,
   anchorDate: string,
   result: SeedResult,
-): Promise<Map<number, Vehicle>> {
+): Promise<void> {
   const repository = manager.getRepository(Vehicle);
-  const found = new Map<number, Vehicle | null>();
-  for (const fixture of LOCAL_DEMO_VEHICLES)
-    found.set(fixture.slot, await findFixtureVehicle(manager, fixture));
-  await assertNoLegacyWorkflow(
-    manager,
-    Array.from(found.values()).flatMap((vehicle) =>
-      vehicle === null ? [] : [vehicle.id],
-    ),
-  );
-  const output = new Map<number, Vehicle>();
+
   for (const fixture of LOCAL_DEMO_VEHICLES) {
     const category = categories.get(fixture.vehicleClass);
-    if (category === undefined)
-      throw new Error(`No active ${fixture.vehicleClass} category.`);
+    if (category === undefined) {
+      throw new Error(
+        `No explicit local demo category for ${fixture.vehicleClass}.`,
+      );
+    }
+
     const expiryDate = addDays(anchorDate, fixture.expiryOffsetDays);
-    const registeredOwnerNameKh = citizen.profile.nameKh;
-    if (registeredOwnerNameKh === null)
-      throw new Error(
-        'Citizen must have a Khmer name for the required vehicle owner snapshot.',
-      );
     const registeredOwnerNameEn = citizen.profile.nameEn;
-    if (registeredOwnerNameEn === null)
+    if (registeredOwnerNameEn === null) {
       throw new Error(
-        'Citizen must have an English name for the required vehicle owner snapshot.',
+        'Citizen must have an English name for the required vehicle owner data.',
       );
+    }
     const values = {
       linkedCitizenId: citizen.id,
       registrationNumber: fixture.registrationNumber,
@@ -351,393 +540,351 @@ async function upsertVehicles(
       firstRegistrationDate: fixture.firstRegistrationDate,
       lastInspectionDate: addDays(expiryDate, -CYCLE_DAYS),
       inspectionExpiryDate: expiryDate,
-      registeredOwnerNameKh,
+      registeredOwnerNameKh: citizen.profile.nameKh,
       registeredOwnerNameEn,
       registeredOwnerPhone: citizen.phone,
       isActive: true,
     };
-    const existing = found.get(fixture.slot) ?? null;
+    const existing = await findFixtureVehicle(manager, fixture);
+
     if (existing === null) {
-      output.set(
-        fixture.slot,
-        await repository.save(repository.create(values)),
-      );
-      result.created.push(fixture.registrationNumber);
+      await repository.save(repository.create(values));
+      result.vehiclesCreated.push(fixture.registrationNumber);
       continue;
     }
-    if (existing.linkedCitizenId !== citizen.id)
+
+    if (existing.linkedCitizenId !== citizen.id) {
       throw new Error(
-        `Fixture slot ${fixture.slot} is owned by another citizen.`,
+        `Fixture slot ${fixture.slot} is owned by another citizen. No database changes were made.`,
       );
-    if (existing.registrationNumber !== fixture.legacyRegistrationNumber) {
-      const match =
-        existing.registrationNumber === values.registrationNumber &&
-        existing.plateNumber === values.plateNumber &&
-        existing.plateCategory === values.plateCategory &&
-        existing.plateProvince === values.plateProvince &&
-        existing.plateType === values.plateType &&
-        existing.vehicleType === values.vehicleType &&
-        existing.vehicleClass === values.vehicleClass &&
-        existing.inspectionCategoryId === values.inspectionCategoryId &&
-        existing.make === values.make &&
-        existing.model === values.model &&
-        existing.manufactureYear === values.manufactureYear &&
-        existing.chassisNumber === values.chassisNumber &&
-        existing.firstRegistrationDate === values.firstRegistrationDate &&
-        existing.lastInspectionDate === values.lastInspectionDate &&
-        existing.inspectionExpiryDate === values.inspectionExpiryDate &&
-        existing.registeredOwnerNameKh === values.registeredOwnerNameKh &&
-        existing.registeredOwnerNameEn === values.registeredOwnerNameEn &&
-        existing.registeredOwnerPhone === values.registeredOwnerPhone &&
-        existing.isActive;
-      if (!match)
-        throw new Error(
-          `Current local fixture slot ${fixture.slot} differs from the expected seed. It was not modified.`,
-        );
-      output.set(fixture.slot, existing);
-      result.skipped.push(fixture.registrationNumber);
+    }
+
+    if (vehicleMatches(existing, values)) {
+      result.vehiclesUnchanged.push(fixture.registrationNumber);
       continue;
     }
-    output.set(
-      fixture.slot,
-      await repository.save(repository.merge(existing, values)),
-    );
-    result.migrated.push(fixture.registrationNumber);
+
+    await assertNoWorkflow(manager, existing.id, fixture.registrationNumber);
+
+    await repository.save(repository.merge(existing, values));
+    result.vehiclesUpdated.push(fixture.registrationNumber);
   }
-  return output;
 }
-async function reserveHistoricalCapacity(
-  manager: EntityManager,
-  stationId: string,
-  capacityDate: string,
-): Promise<InspectionStationDailyCapacity> {
-  const repository = manager.getRepository(InspectionStationDailyCapacity);
-  let capacity = await repository.findOne({
-    where: { stationId, capacityDate },
-  });
-  if (capacity === null)
-    capacity = repository.create({
-      stationId,
-      capacityDate,
-      dailyCapacity: 20,
-      reservedCount: 0,
-      isClosed: false,
-    });
-  if (capacity.reservedCount >= capacity.dailyCapacity)
-    throw new Error(`Historical capacity is full for ${capacityDate}.`);
-  capacity.reservedCount += 1;
-  return repository.save(capacity);
+
+function addUtcDays(date: Date, days: number): Date {
+  const result = new Date(date.getTime());
+  result.setUTCDate(result.getUTCDate() + days);
+  return result;
 }
-async function createCompletedAttempt(
+
+function sameTimestamp(left: Date | null, right: Date): boolean {
+  return left !== null && left.getTime() === right.getTime();
+}
+
+async function seedHistoricalInspections(
   manager: EntityManager,
-  applicationId: string,
-  station: InspectionStation,
-  date: string,
-  attemptNumber: number,
-  result: InspectionResult,
+  citizen: SeedCitizen,
   administratorId: string,
-  failureReason: string | null,
-): Promise<Inspection> {
-  const capacity = await reserveHistoricalCapacity(manager, station.id, date);
-  const appointment = await manager.getRepository(Appointment).save(
-    manager.getRepository(Appointment).create({
-      applicationId,
-      dailyCapacityId: capacity.id,
-      slotId: null,
-      status: AppointmentStatus.COMPLETED,
-      bookedAt: at(addDays(date, -2), 3),
-      completedAt: at(date, 3),
-      cancelledAt: null,
-      cancelledByUserId: null,
-      cancellationReason: null,
-      noShowMarkedAt: null,
-      noShowMarkedByUserId: null,
-    }),
-  );
-  return manager.getRepository(Inspection).save(
-    manager.getRepository(Inspection).create({
-      applicationId,
-      appointmentId: appointment.id,
-      attemptNumber,
-      status: InspectionStatus.COMPLETED,
-      result,
-      recordedByUserId: administratorId,
-      startedAt: at(date, 1),
-      completedAt: at(date, 3),
-      failureReason,
-      notes: null,
-    }),
-  );
-}
-async function createHistoricalCycle(
-  manager: EntityManager,
-  fixture: LocalDemoVehicleFixture,
-  vehicle: Vehicle,
-  cycle: HistoricalCycle,
-  citizenId: string,
-  administratorId: string,
-  category: InspectionVehicleCategory,
-  station: InspectionStation,
-  anchorDate: string,
-): Promise<void> {
-  const applicationDate = addDays(cycle.firstInspectionDate, -12);
-  const submittedDate = addDays(cycle.firstInspectionDate, -10);
-  const approvedDate = addDays(cycle.firstInspectionDate, -2);
-  const completedAt = at(cycle.finalPassDate, 4);
-  const application = await manager.getRepository(RenewalApplication).save(
-    manager.getRepository(RenewalApplication).create({
-      referenceNumber: referenceFor(
-        cycle.firstInspectionDate,
-        fixture.slot,
-        cycle.cycle,
-      ),
-      citizenId,
-      vehicleId: vehicle.id,
-      status: ApplicationStatus.COMPLETED,
-      applicantSnapshot: {
-        fixture: LOCAL_DEMO_DATASET,
-        fixtureAnchorDate: anchorDate,
-      },
-      vehicleSnapshot: snapshot(vehicle),
-      currentCorrectionReason: null,
-      currentRejectionReason: null,
-      preferredInspectionStationId: station.id,
-      preferredInspectionDate: cycle.firstInspectionDate,
-      submittedAt: at(submittedDate, 2),
-      reviewStartedAt: at(addDays(cycle.firstInspectionDate, -8), 2),
-      readyForInspectionAt: at(approvedDate, 2),
-      completedAt,
-      cancelledAt: null,
-      cancelledByUserId: null,
-      cancellationReason: null,
-      createdAt: at(applicationDate, 2),
-      updatedAt: completedAt,
-    }),
-  );
-  const history = manager.getRepository(RenewalApplicationStatusHistory);
-  const transitions: Array<
-    [ApplicationStatus | null, ApplicationStatus, Date, string]
-  > = [
-    [
-      null,
-      ApplicationStatus.DRAFT,
-      at(applicationDate, 2),
-      'LOCAL_DEMO_CREATED',
-    ],
-    [
-      ApplicationStatus.DRAFT,
-      ApplicationStatus.SUBMITTED,
-      at(submittedDate, 2),
-      'LOCAL_DEMO_SUBMITTED',
-    ],
-    [
-      ApplicationStatus.SUBMITTED,
-      ApplicationStatus.UNDER_REVIEW,
-      at(addDays(cycle.firstInspectionDate, -8), 2),
-      'LOCAL_DEMO_REVIEWED',
-    ],
-    [
-      ApplicationStatus.UNDER_REVIEW,
-      ApplicationStatus.APPROVED,
-      at(approvedDate, 2),
-      'LOCAL_DEMO_APPROVED',
-    ],
-    [
-      ApplicationStatus.APPROVED,
-      ApplicationStatus.COMPLETED,
-      completedAt,
-      'STICKER_ISSUED',
-    ],
-  ];
-  for (const [previousStatus, newStatus, createdAt, reason] of transitions)
-    await history.save(
-      history.create({
-        applicationId: application.id,
-        previousStatus,
-        newStatus,
-        changedByUserId: administratorId,
-        reason,
-        createdAt,
-      }),
-    );
-  const baseAmount = (
-    Number(category.inspectionFeeKhr) + Number(category.serviceFeeKhr)
-  ).toFixed(2);
-  const payment = await manager.getRepository(Payment).save(
-    manager.getRepository(Payment).create({
-      applicationId: application.id,
-      invoiceNumber: invoiceFor(submittedDate, fixture.slot, cycle.cycle),
-      receiptNumber: receiptFor(cycle.finalPassDate, fixture.slot, cycle.cycle),
-      method: PaymentMethod.PAY_AT_STATION,
-      status: PaymentStatus.CONFIRMED,
-      inspectionFeeKhr: category.inspectionFeeKhr,
-      serviceFeeKhr: category.serviceFeeKhr,
-      baseAmount,
-      previousInspectionExpiryDate: addDays(cycle.firstInspectionDate, -1),
-      lateDays: 0,
-      lateFee: '0.00',
-      totalAmount: baseAmount,
-      currency: 'KHR',
-      paymentReference: `CASH-${fixture.slot}${cycle.cycle}`,
-      providerName: null,
-      providerTransactionId: null,
-      confirmedByUserId: administratorId,
-      confirmedAt: at(addDays(cycle.firstInspectionDate, -1), 2),
-      failedAt: null,
-      failureReason: null,
-      rejectedAt: null,
-      rejectedByUserId: null,
-      rejectionReason: null,
-      invoiceIssuedAt: at(addDays(cycle.firstInspectionDate, -6), 2),
-      invoiceFileKey: null,
-      receiptFileKey: null,
-      inspectionSheetFileKey: null,
-      createdAt: at(addDays(cycle.firstInspectionDate, -6), 2),
-      updatedAt: at(addDays(cycle.firstInspectionDate, -1), 2),
-    }),
-  );
-  await manager.getRepository(PaymentStatusHistory).save(
-    manager.getRepository(PaymentStatusHistory).create({
-      paymentId: payment.id,
-      fromStatus: PaymentStatus.PENDING,
-      toStatus: PaymentStatus.CONFIRMED,
-      changedByUserId: administratorId,
-      reason: 'LOCAL_DEMO_CASH_CONFIRMED',
-      createdAt: at(addDays(cycle.firstInspectionDate, -1), 2),
-    }),
-  );
-  let pass: Inspection;
-  if (cycle.failedFirstAttempt) {
-    await createCompletedAttempt(
-      manager,
-      application.id,
-      station,
-      cycle.firstInspectionDate,
-      1,
-      InspectionResult.FAIL,
-      administratorId,
-      'Lighting system requires correction',
-    );
-    pass = await createCompletedAttempt(
-      manager,
-      application.id,
-      station,
-      cycle.finalPassDate,
-      2,
-      InspectionResult.PASS,
-      administratorId,
-      null,
-    );
-  } else {
-    pass = await createCompletedAttempt(
-      manager,
-      application.id,
-      station,
-      cycle.finalPassDate,
-      1,
-      InspectionResult.PASS,
-      administratorId,
-      null,
-    );
-  }
-  await manager.getRepository(Sticker).save(
-    manager.getRepository(Sticker).create({
-      applicationId: application.id,
-      inspectionId: pass.id,
-      stickerNumber: stickerFor(cycle.finalPassDate, fixture.slot, cycle.cycle),
-      issuedAt: completedAt,
-      issuedByUserId: administratorId,
-      createdAt: completedAt,
-      updatedAt: completedAt,
-    }),
-  );
-}
-async function seedHistoricalWorkflow(
-  manager: EntityManager,
-  vehicles: Map<number, Vehicle>,
-  citizenId: string,
-  administratorId: string,
-  categories: Map<VehicleClass, InspectionVehicleCategory>,
-  anchorDate: string,
   result: SeedResult,
 ): Promise<void> {
-  const stations = await manager
-    .getRepository(InspectionStation)
-    .find({ where: { isActive: true }, order: { createdAt: 'ASC' } });
-  if (stations.length === 0)
-    throw new Error('At least one active inspection station is required.');
-  for (const fixture of LOCAL_DEMO_VEHICLES) {
-    const cycles = cyclesFor(fixture, anchorDate);
-    const references = cycles.map((cycle) =>
-      referenceFor(cycle.firstInspectionDate, fixture.slot, cycle.cycle),
+  const vehicles = await manager.getRepository(Vehicle).find({
+    where: {
+      linkedCitizenId: citizen.id,
+    },
+  });
+  const vehicleByRegistration = new Map(
+    vehicles.map((vehicle) => [vehicle.registrationNumber, vehicle]),
+  );
+  const plans = LOCAL_DEMO_VEHICLES.flatMap((fixture) => {
+    const vehicle = vehicleByRegistration.get(fixture.registrationNumber);
+    if (vehicle === undefined) {
+      throw new Error(
+        `Historical inspection fixture vehicle ${fixture.registrationNumber} is unavailable.`,
+      );
+    }
+    const lastInspectionDate = vehicle.lastInspectionDate;
+    if (lastInspectionDate === null) {
+      throw new Error(
+        `Historical inspection fixture vehicle ${fixture.registrationNumber} has no last inspection date.`,
+      );
+    }
+    return historicalApplicationsForVehicle(fixture).map((plan) => ({
+      plan,
+      vehicle,
+      lastInspectionDate,
+    }));
+  });
+  const stationCodes = [
+    ...new Set(
+      plans.flatMap(({ plan }) =>
+        plan.attempts.map((attempt) => attempt.stationCode),
+      ),
+    ),
+  ];
+  const stations = await manager.getRepository(InspectionStation).find({
+    where: { isActive: true },
+  });
+  const stationIdByCode = new Map(
+    stations
+      .filter((station) => stationCodes.includes(station.code))
+      .map((station) => [station.code, station.id]),
+  );
+  if (stationIdByCode.size !== stationCodes.length) {
+    throw new Error(
+      'One or more historical inspection stations are unavailable or inactive.',
     );
-    const existing = await manager.getRepository(RenewalApplication).find({
-      where: references.map((referenceNumber) => ({ referenceNumber })),
+  }
+
+  const applications = manager.getRepository(RenewalApplication);
+  const inspections = manager.getRepository(Inspection);
+  const statusHistory = manager.getRepository(RenewalApplicationStatusHistory);
+
+  for (const { plan, vehicle, lastInspectionDate } of plans) {
+    if (plan.attempts.length !== 1 || plan.attempts[0]?.attemptNumber !== 1) {
+      throw new Error(
+        `${plan.referenceNumber} must contain exactly one attempt-number-one historical inspection.`,
+      );
+    }
+    const attempts = plan.attempts.map((attempt) => ({
+      ...attempt,
+      completedAt: inspectionTimestamp(
+        addDays(lastInspectionDate, attempt.daysAfterLastInspection),
+      ),
+      stationId: stationIdByCode.get(attempt.stationCode),
+    }));
+    const firstCompletedAt = attempts[0]?.completedAt;
+    const lastCompletedAt = attempts.at(-1)?.completedAt;
+    if (firstCompletedAt === undefined || lastCompletedAt === undefined) {
+      throw new Error(
+        `Historical inspection plan ${plan.referenceNumber} is empty.`,
+      );
+    }
+    const existing = await applications.findOneBy({
+      referenceNumber: plan.referenceNumber,
     });
-    if (existing.length === cycles.length) {
-      if (
-        existing.some(
-          (application) =>
-            application.vehicleId !== vehicles.get(fixture.slot)?.id,
-        )
-      )
+
+    if (existing !== null) {
+      const existingInspections = await inspections.find({
+        where: { applicationId: existing.id },
+        order: { attemptNumber: 'ASC' },
+      });
+      const matches =
+        existing.citizenId === citizen.id &&
+        existing.vehicleId === vehicle.id &&
+        existing.status === plan.finalStatus &&
+        sameTimestamp(existing.completedAt, lastCompletedAt) &&
+        existing.vehicleSnapshot?.registrationNumber ===
+          plan.vehicleRegistrationNumber &&
+        existingInspections.length === attempts.length &&
+        existingInspections.every((inspection, index) => {
+          const attempt = attempts[index];
+          return (
+            attempt !== undefined &&
+            inspection.attemptNumber === attempt.attemptNumber &&
+            inspection.status === InspectionStatus.COMPLETED &&
+            inspection.result === attempt.result &&
+            inspection.actualStationId === attempt.stationId &&
+            inspection.recordedByUserId === administratorId &&
+            sameTimestamp(inspection.completedAt, attempt.completedAt) &&
+            inspection.failureReason === (attempt.failureReason ?? null)
+          );
+        });
+      if (!matches) {
         throw new Error(
-          `Historical reference collision for slot ${fixture.slot}.`,
+          `${plan.referenceNumber} does not match the expected local historical fixture. Run the guarded local workflow reset before changing demo fixtures.`,
         );
-      result.historicalApplicationsSkipped += existing.length;
+      }
+      result.historicalApplicationsUnchanged.push(plan.referenceNumber);
       continue;
     }
-    if (existing.length !== 0)
-      throw new Error(
-        `Partial historical workflow exists for slot ${fixture.slot}.`,
-      );
-    const vehicle = vehicles.get(fixture.slot);
-    const category = categories.get(fixture.vehicleClass);
-    if (vehicle === undefined || category === undefined)
-      throw new Error(`Fixture setup missing for slot ${fixture.slot}.`);
-    for (const cycle of cycles) {
-      const station =
-        stations[(fixture.slot + cycle.cycle - 2) % stations.length];
-      await createHistoricalCycle(
-        manager,
-        fixture,
-        vehicle,
-        cycle,
-        citizenId,
-        administratorId,
-        category,
-        station,
-        anchorDate,
-      );
-      result.historicalApplicationsCreated += 1;
-    }
+
+    const submittedAt = addUtcDays(firstCompletedAt, -7);
+    const approvedAt = addUtcDays(firstCompletedAt, -1);
+    const application = await applications.save(
+      applications.create({
+        referenceNumber: plan.referenceNumber,
+        citizenId: citizen.id,
+        vehicleId: vehicle.id,
+        status: plan.finalStatus,
+        ...historicalApplicationSnapshots(citizen, vehicle),
+        currentCorrectionReason: null,
+        currentRejectionReason: null,
+        preferredInspectionStationId: null,
+        preferredInspectionDate: null,
+        submittedAt,
+        reviewStartedAt: null,
+        readyForInspectionAt: approvedAt,
+        completedAt: lastCompletedAt,
+        cancelledAt: null,
+        cancelledByUserId: null,
+        cancellationReason: null,
+        createdAt: addUtcDays(submittedAt, -1),
+        updatedAt: lastCompletedAt,
+      }),
+    );
+
+    const transitions: Array<{
+      previousStatus: ApplicationStatus | null;
+      newStatus: ApplicationStatus;
+      createdAt: Date;
+      reason: string | null;
+    }> = [
+      {
+        previousStatus: null,
+        newStatus: ApplicationStatus.DRAFT,
+        createdAt: addUtcDays(submittedAt, -1),
+        reason: null,
+      },
+      {
+        previousStatus: ApplicationStatus.DRAFT,
+        newStatus: ApplicationStatus.SUBMITTED,
+        createdAt: submittedAt,
+        reason: null,
+      },
+      {
+        previousStatus: ApplicationStatus.SUBMITTED,
+        newStatus: ApplicationStatus.APPROVED,
+        createdAt: approvedAt,
+        reason: null,
+      },
+    ];
+    transitions.push({
+      previousStatus: ApplicationStatus.APPROVED,
+      newStatus: plan.finalStatus,
+      createdAt: lastCompletedAt,
+      reason:
+        plan.finalStatus === ApplicationStatus.INSPECTION_FAILED
+          ? 'INITIAL_INSPECTION_FAILED'
+          : null,
+    });
+    await statusHistory.save(
+      transitions.map((transition) =>
+        statusHistory.create({
+          applicationId: application.id,
+          changedByUserId: administratorId,
+          ...transition,
+        }),
+      ),
+    );
+    await inspections.save(
+      attempts.map((attempt) =>
+        inspections.create({
+          applicationId: application.id,
+          appointmentId: null,
+          actualStationId: attempt.stationId,
+          attemptNumber: attempt.attemptNumber,
+          status: InspectionStatus.COMPLETED,
+          result: attempt.result,
+          recordedByUserId: administratorId,
+          startedAt: null,
+          completedAt: attempt.completedAt,
+          failureReason: attempt.failureReason ?? null,
+          notes: 'Local demo historical inspection record.',
+          createdAt: attempt.completedAt,
+          updatedAt: attempt.completedAt,
+        }),
+      ),
+    );
+    result.historicalApplicationsCreated.push(plan.referenceNumber);
+    result.historicalInspectionsCreated += attempts.length;
   }
 }
+
+async function verifySeed(
+  manager: EntityManager,
+  citizenId: string,
+  categories: Map<VehicleClass, InspectionVehicleCategory>,
+): Promise<void> {
+  const vehicles = await manager.getRepository(Vehicle).find({
+    where: LOCAL_DEMO_REGISTRATIONS.map((registrationNumber) => ({
+      registrationNumber,
+      linkedCitizenId: citizenId,
+    })),
+  });
+
+  if (
+    vehicles.length !== LOCAL_DEMO_VEHICLES.length ||
+    vehicles.some(
+      (vehicle) =>
+        vehicle.vehicleClass === null ||
+        vehicle.inspectionCategoryId !==
+          categories.get(vehicle.vehicleClass)?.id ||
+        vehicle.classificationVerifiedAt === null ||
+        vehicle.classificationVerifiedBy === null,
+    )
+  ) {
+    throw new Error('Local demo vehicle verification failed.');
+  }
+
+  const expectedReferences = LOCAL_DEMO_VEHICLES.flatMap((fixture) =>
+    historicalApplicationsForVehicle(fixture).map(
+      (application) => application.referenceNumber,
+    ),
+  );
+  const historicalApplications = await manager
+    .getRepository(RenewalApplication)
+    .find({
+      where: expectedReferences.map((referenceNumber) => ({
+        referenceNumber,
+        citizenId,
+      })),
+    });
+  const historicalInspections = await manager.getRepository(Inspection).find({
+    where: historicalApplications.map((application) => ({
+      applicationId: application.id,
+      status: InspectionStatus.COMPLETED,
+    })),
+  });
+
+  const expectedInspectionCount = LOCAL_DEMO_VEHICLES.reduce(
+    (count, fixture) =>
+      count +
+      historicalApplicationsForVehicle(fixture).reduce(
+        (applicationCount, application) =>
+          applicationCount + application.attempts.length,
+        0,
+      ),
+    0,
+  );
+  if (
+    historicalApplications.length !== expectedReferences.length ||
+    historicalApplications.some(
+      (application) =>
+        ![
+          ApplicationStatus.COMPLETED,
+          ApplicationStatus.INSPECTION_FAILED,
+        ].includes(application.status),
+    ) ||
+    historicalInspections.length !== expectedInspectionCount ||
+    historicalInspections.some(
+      (inspection) =>
+        inspection.attemptNumber !== 1 || inspection.actualStationId === null,
+    )
+  ) {
+    throw new Error('Local demo historical inspection verification failed.');
+  }
+}
+
 async function seedFixtures(): Promise<SeedResult> {
   return dataSource().transaction(async (manager) => {
-    const citizen = await resolveCitizen(
-      manager,
-      readCitizenSelector('citizen'),
-    );
-    const otherCitizen = await resolveCitizen(
-      manager,
-      readCitizenSelector('other-citizen'),
-    );
-    if (citizen.id === otherCitizen.id)
-      throw new Error('Primary and ownership-isolation citizens must differ.');
+    const citizen = await resolveCitizen(manager, readCitizenSelector());
     const administratorId = await resolveAdministrator(manager);
-    const categories = await resolveCategories(manager);
-    const anchorDate =
-      (await existingAnchorDate(manager)) ?? (await cambodiaToday(manager));
+    const anchorDate = await cambodiaToday(manager);
     const result: SeedResult = {
-      created: [],
-      migrated: [],
-      skipped: [],
-      historicalApplicationsCreated: 0,
-      historicalApplicationsSkipped: 0,
+      vehiclesCreated: [],
+      vehiclesUpdated: [],
+      vehiclesUnchanged: [],
+      categoriesCreated: [],
+      categoriesUpdated: [],
+      categoriesUnchanged: [],
+      historicalApplicationsCreated: [],
+      historicalApplicationsUnchanged: [],
+      historicalInspectionsCreated: 0,
       anchorDate,
     };
-    const vehicles = await upsertVehicles(
+    const categories = await ensureDemoCategories(manager, result);
+
+    await upsertVehicles(
       manager,
       citizen,
       administratorId,
@@ -745,43 +892,56 @@ async function seedFixtures(): Promise<SeedResult> {
       anchorDate,
       result,
     );
-    await seedHistoricalWorkflow(
-      manager,
-      vehicles,
-      citizen.id,
-      administratorId,
-      categories,
-      anchorDate,
-      result,
-    );
+    await seedHistoricalInspections(manager, citizen, administratorId, result);
+    await verifySeed(manager, citizen.id, categories);
+
     return result;
   });
 }
+
 async function main(): Promise<void> {
   assertLocalDevelopmentSafety();
-  readCitizenSelector('citizen');
-  readCitizenSelector('other-citizen');
+  readCitizenSelector();
   localDataSource = loadValidatedDataSource();
   await dataSource().initialize();
+
   try {
     const result = await seedFixtures();
     console.log(`Fixture anchor date: ${result.anchorDate}`);
-    result.created.forEach((value) => console.log(`CREATED ${value}`));
-    result.migrated.forEach((value) => console.log(`MIGRATED ${value}`));
-    result.skipped.forEach((value) => console.log(`SKIPPED ${value}`));
     console.log(
-      `Historical applications created: ${result.historicalApplicationsCreated}`,
+      `Categories created: ${result.categoriesCreated.join(', ') || 'none'}`,
     );
     console.log(
-      `Historical applications skipped: ${result.historicalApplicationsSkipped}`,
+      `Categories updated: ${result.categoriesUpdated.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Categories unchanged: ${result.categoriesUnchanged.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Vehicles created: ${result.vehiclesCreated.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Vehicles updated: ${result.vehiclesUpdated.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Vehicles unchanged: ${result.vehiclesUnchanged.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Historical applications created: ${result.historicalApplicationsCreated.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Historical applications unchanged: ${result.historicalApplicationsUnchanged.join(', ') || 'none'}`,
+    );
+    console.log(
+      `Historical inspections created: ${result.historicalInspectionsCreated}`,
     );
   } finally {
     await dataSource().destroy();
   }
 }
+
 void main().catch((error: unknown) => {
-  console.error(
-    `Local vehicle seed aborted: ${error instanceof Error ? error.message : 'Unknown error.'}`,
-  );
+  const message = error instanceof Error ? error.message : 'Unknown error.';
+  console.error(`Local vehicle seed aborted: ${message}`);
   process.exitCode = 1;
 });

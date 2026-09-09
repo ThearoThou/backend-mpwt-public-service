@@ -11,7 +11,7 @@ const PHNOM_PENH_TIME_ZONE = 'Asia/Phnom_Penh';
 let localDataSource: DataSource | undefined;
 const requireFromScript = createRequire(__filename);
 
-interface StationFixture {
+export interface StationFixture {
   code: string;
   nameKh: string;
   nameEn: string;
@@ -34,7 +34,7 @@ interface PreviousStationDisplay {
   address: string;
 }
 
-interface SeedResult {
+export interface SeedResult {
   stationsCreated: string[];
   stationsSkipped: string[];
   stationsUpdated: string[];
@@ -42,7 +42,13 @@ interface SeedResult {
   capacitiesSkipped: string[];
 }
 
-const stationFixtures: readonly StationFixture[] = [
+export interface SeedOptions {
+  includeCapacities?: boolean;
+}
+
+// Temporary/demo inspection station reference data for development/testing.
+// Replace or update it when confirmed official MPWT station data is available.
+export const stationFixtures: readonly StationFixture[] = [
   {
     code: 'PP-RUSSEY-KEO',
     nameKh: 'ទីតាំងឫស្សីកែវ',
@@ -84,6 +90,118 @@ const stationFixtures: readonly StationFixture[] = [
     nameEn: 'Kambol Vehicle Technical Inspection',
     province: 'Phnom Penh',
     address: 'Kambol, National Road 4',
+  },
+  {
+    code: 'PP-POR-SEN-CHEY-ODEM',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ពោធិ៍សែនជ័យ-អូដឹម',
+    nameEn: 'Po Sen Chey–Odem Vehicle Technical Inspection',
+    province: 'Phnom Penh',
+    address: 'Por Sen Chey District, Phnom Penh',
+  },
+  {
+    code: 'PP-SEN-SOK',
+    nameKh: 'សែនសុខ',
+    nameEn: 'Sen Sok',
+    province: 'Phnom Penh',
+    address: 'Sen Sok, Phnom Penh',
+  },
+  {
+    code: 'BTB-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តបាត់ដំបង',
+    nameEn: 'Battambang Vehicle Technical Inspection Centre',
+    province: 'Battambang',
+    address: 'Battambang Province',
+  },
+  {
+    code: 'KPC-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តកំពង់ចាម',
+    nameEn: 'Kampong Cham Vehicle Technical Inspection Centre',
+    province: 'Kampong Cham',
+    address: 'Kampong Cham Province',
+  },
+  {
+    code: 'SR-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តសៀមរាប',
+    nameEn: 'Siem Reap Vehicle Technical Inspection Centre',
+    province: 'Siem Reap',
+    address: 'Siem Reap Province',
+  },
+  {
+    code: 'PSH-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តព្រះសីហនុ',
+    nameEn: 'Preah Sihanouk Vehicle Technical Inspection Centre',
+    province: 'Preah Sihanouk',
+    address: 'Preah Sihanouk Province',
+  },
+  {
+    code: 'KPS-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តកំពង់ស្ពឺ',
+    nameEn: 'Kampong Speu Vehicle Technical Inspection Centre',
+    province: 'Kampong Speu',
+    address: 'Kampong Speu Province',
+  },
+  {
+    code: 'KRT-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តក្រចេះ',
+    nameEn: 'Kratie Vehicle Technical Inspection Centre',
+    province: 'Kratie',
+    address: 'Kratie Province',
+  },
+  {
+    code: 'RTK-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តរតនគិរី',
+    nameEn: 'Ratanakiri Vehicle Technical Inspection Centre',
+    province: 'Ratanakiri',
+    address: 'Ratanakiri Province',
+  },
+  {
+    code: 'KCH-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តកំពង់ឆ្នាំង',
+    nameEn: 'Kampong Chhnang Vehicle Technical Inspection Centre',
+    province: 'Kampong Chhnang',
+    address: 'Kampong Chhnang Province',
+  },
+  {
+    code: 'PVH-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តព្រះវិហារ',
+    nameEn: 'Preah Vihear Vehicle Technical Inspection Centre',
+    province: 'Preah Vihear',
+    address: 'Preah Vihear Province',
+  },
+  {
+    code: 'KTH-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តកំពង់ធំ',
+    nameEn: 'Kampong Thom Vehicle Technical Inspection Centre',
+    province: 'Kampong Thom',
+    address: 'Kampong Thom Province',
+  },
+  {
+    code: 'BMC-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តបន្ទាយមានជ័យ',
+    nameEn: 'Banteay Meanchey Vehicle Technical Inspection Centre',
+    province: 'Banteay Meanchey',
+    address: 'Banteay Meanchey Province',
+  },
+  {
+    code: 'SVR-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តស្វាយរៀង',
+    nameEn: 'Svay Rieng Vehicle Technical Inspection Centre',
+    province: 'Svay Rieng',
+    address: 'Svay Rieng Province',
+  },
+  {
+    code: 'KPT-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តកំពត',
+    nameEn: 'Kampot Vehicle Technical Inspection Centre',
+    province: 'Kampot',
+    address: 'Kampot Province',
+  },
+  {
+    code: 'TKO-VEHICLE-INSPECTION',
+    nameKh: 'មជ្ឈមណ្ឌលត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត ខេត្តតាកែវ',
+    nameEn: 'Takeo Vehicle Technical Inspection Centre',
+    province: 'Takeo',
+    address: 'Takeo Province',
   },
 ];
 
@@ -353,9 +471,13 @@ function capacityMatches(
   );
 }
 
-async function seedFixtures(): Promise<SeedResult> {
-  const capacities = createCapacityFixtures();
-  return dataSource().transaction(async (manager) => {
+export async function seedFixtures(
+  source: DataSource = dataSource(),
+  options: SeedOptions = {},
+): Promise<SeedResult> {
+  const capacities =
+    options.includeCapacities === false ? [] : createCapacityFixtures();
+  return source.transaction(async (manager) => {
     const result: SeedResult = {
       stationsCreated: [],
       stationsSkipped: [],
@@ -372,14 +494,11 @@ async function seedFixtures(): Promise<SeedResult> {
 
     for (const fixture of stationFixtures) {
       const previousFixture = previousStationDisplayByCode[fixture.code];
-      if (previousFixture === undefined) {
-        throw new Error(`Missing legacy code mapping for ${fixture.code}.`);
-      }
-
-      const [existing, legacyExisting] = await Promise.all([
-        stations.findOneBy({ code: fixture.code }),
-        stations.findOneBy({ code: previousFixture.code }),
-      ]);
+      const existing = await stations.findOneBy({ code: fixture.code });
+      const legacyExisting =
+        previousFixture === undefined
+          ? null
+          : await stations.findOneBy({ code: previousFixture.code });
 
       if (existing !== null && legacyExisting !== null) {
         throw new Error(
@@ -519,8 +638,10 @@ async function main(): Promise<void> {
   }
 }
 
-void main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : 'Unknown error.';
-  console.error(`Local inspection-station seed aborted: ${message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  void main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : 'Unknown error.';
+    console.error(`Local inspection-station seed aborted: ${message}`);
+    process.exitCode = 1;
+  });
+}
