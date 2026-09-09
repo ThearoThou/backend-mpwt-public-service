@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
+import type { Browser } from 'puppeteer';
 
 export interface InvoicePdfData {
   invoiceNumber: string;
@@ -51,7 +52,19 @@ const PDF_FONT_FILE = 'NotoSansKhmer-Regular.ttf';
 const requirePuppeteer = createRequire(__filename);
 
 @Injectable()
-export class PaymentPdfService {
+export class PaymentPdfService implements OnModuleDestroy {
+  private browserPromise: Promise<Browser> | null = null;
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.browserPromise === null) {
+      return;
+    }
+
+    const browser = await this.browserPromise;
+    this.browserPromise = null;
+    await browser.close();
+  }
+
   async generateInvoice(data: InvoicePdfData): Promise<Buffer> {
     return this.generateDocument({
       title: 'MPWT Demo Invoice',
@@ -69,8 +82,7 @@ export class PaymentPdfService {
       ],
       summary: [
         ['Inspection fee', data.inspectionFeeKhr, data.currency],
-        ['Service fee', data.serviceFeeKhr, data.currency],
-        ['Base amount', data.baseAmount, data.currency],
+        ...positiveFeeRow('Service fee', data.serviceFeeKhr, data.currency),
         ['Late days', String(data.lateDays), 'days'],
         ['Late fee', data.lateFee, data.currency],
         ['Total due', data.totalAmount, data.currency],
@@ -94,8 +106,7 @@ export class PaymentPdfService {
       ],
       summary: [
         ['Inspection fee', data.inspectionFeeKhr, data.currency],
-        ['Service fee', data.serviceFeeKhr, data.currency],
-        ['Base amount', data.baseAmount, data.currency],
+        ...positiveFeeRow('Service fee', data.serviceFeeKhr, data.currency),
         ['Late days', String(data.lateDays), 'days'],
         ['Late fee', data.lateFee, data.currency],
         ['Total paid', data.totalAmount, data.currency],
@@ -138,10 +149,10 @@ export class PaymentPdfService {
     inspectionRecord?: boolean;
     showDemoNotice?: boolean;
   }): Promise<Buffer> {
-    const browser = await this.getPuppeteer().launch({ headless: true });
+    const browser = await this.getBrowser();
+    const page = await browser.newPage();
 
     try {
-      const page = await browser.newPage();
       await page.setContent(
         this.documentHtml({
           title,
@@ -164,8 +175,16 @@ export class PaymentPdfService {
         }),
       );
     } finally {
-      await browser.close();
+      await page.close();
     }
+  }
+
+  private getBrowser(): Promise<Browser> {
+    if (this.browserPromise === null) {
+      this.browserPromise = this.getPuppeteer().launch({ headless: true });
+    }
+
+    return this.browserPromise;
   }
 
   private documentHtml({
@@ -274,6 +293,14 @@ function optionalRow(
   return value === null || value === undefined || value === ''
     ? []
     : [[label, value]];
+}
+
+function positiveFeeRow(
+  label: string,
+  amount: string,
+  currency: string,
+): Array<[label: string, amount: string, currency: string]> {
+  return Number(amount) > 0 ? [[label, amount, currency]] : [];
 }
 
 function escapeHtml(value: string): string {

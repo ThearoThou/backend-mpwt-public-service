@@ -4,6 +4,7 @@ import { randomInt } from 'node:crypto';
 import { DataSource, type EntityManager, type Repository } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { DocumentStatus } from '../applications/enums/document-status.enum';
@@ -41,10 +42,13 @@ import {
 import { PaymentPdfService } from './payment-pdf.service';
 import { inspectionPolicy } from '../config/inspection-policy';
 import { maximumChargeableLateDays } from './late-penalty-policy';
+import { expireInitialApplicationIfDue } from '../applications/initial-application-expiry';
 
 const PAYMENT_CURRENCY = 'KHR';
+const CITIZEN_SERVICE_FEE_KHR = '0.00';
 const MAX_INVOICE_NUMBER_ATTEMPTS = 3;
 const MAX_RECEIPT_NUMBER_ATTEMPTS = 3;
+const INITIAL_APPLICATION_EXPIRED = Symbol('INITIAL_APPLICATION_EXPIRED');
 
 export interface CitizenFeeEstimateResponse {
   inspectionFeeKhr: string;
@@ -123,7 +127,7 @@ export class PaymentsService {
       let invoiceFileKey: string | null = null;
 
       try {
-        return await this.dataSource.transaction(async (manager) => {
+        const result = await this.dataSource.transaction(async (manager) => {
           const application = await manager
             .getRepository(RenewalApplication)
             .findOne({
@@ -151,6 +155,20 @@ export class PaymentsService {
             return existing;
           }
 
+          // Citizen invoices are created while DRAFT, before submittedAt
+          // exists. Guard the legacy approved-application initializer so it
+          // cannot create a new charge during the scheduler's hourly lag.
+          if (
+            citizenId === undefined &&
+            (await expireInitialApplicationIfDue(
+              manager,
+              application,
+              new Date(),
+            ))
+          ) {
+            return INITIAL_APPLICATION_EXPIRED;
+          }
+
           if (citizenId === undefined) {
             this.assertApproved(application);
             await this.assertExactlyOneScheduledAppointment(
@@ -176,7 +194,7 @@ export class PaymentsService {
             vehicle.inspectionExpiryDate,
             vehicle.vehicleClass,
             category.inspectionFeeKhr,
-            category.serviceFeeKhr,
+            CITIZEN_SERVICE_FEE_KHR,
           );
           const invoiceNumber = this.generateInvoiceNumber(
             snapshot.paymentDate,
@@ -235,6 +253,14 @@ export class PaymentsService {
             }),
           );
         });
+        if (result === INITIAL_APPLICATION_EXPIRED) {
+          throw new DomainException(
+            ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+            HttpStatus.CONFLICT,
+            'The application has expired',
+          );
+        }
+        return result;
       } catch (error) {
         if (invoiceFileKey !== null) {
           await this.deleteInvoiceAfterFailedInitialization(invoiceFileKey);
@@ -269,7 +295,7 @@ export class PaymentsService {
       const artifactKeys: string[] = [];
 
       try {
-        return await this.dataSource.transaction(async (manager) => {
+        const result = await this.dataSource.transaction(async (manager) => {
           const payment = await this.lockedPayment(manager, paymentId);
           this.assertTransition(payment.status, [
             PaymentStatus.PENDING,
@@ -277,14 +303,27 @@ export class PaymentsService {
           ]);
           const application = await manager
             .getRepository(RenewalApplication)
-            .findOne({ where: { id: payment.applicationId } });
+            .findOne({
+              where: { id: payment.applicationId },
+              lock: { mode: 'pessimistic_write' },
+            });
           if (application === null) throw this.applicationNotFound();
+          const { confirmedAt, confirmationDate } =
+            await this.confirmationTimestamp(manager);
+          if (
+            await expireInitialApplicationIfDue(
+              manager,
+              application,
+              confirmedAt,
+            )
+          ) {
+            return INITIAL_APPLICATION_EXPIRED;
+          }
+          this.assertApplicationConfirmable(application);
           const vehicle = await this.loadVehicle(
             manager,
             application.vehicleId,
           );
-          const { confirmedAt, confirmationDate } =
-            await this.confirmationTimestamp(manager);
           const receiptNumber = generateReceiptNumber(confirmationDate);
           const paymentReference =
             input?.paymentReference === undefined
@@ -340,6 +379,9 @@ export class PaymentsService {
             payment.paymentReference = paymentReference;
           }
           await manager.getRepository(Payment).save(payment);
+          application.status = ApplicationStatus.APPROVED;
+          application.readyForInspectionAt = confirmedAt;
+          await manager.getRepository(RenewalApplication).save(application);
           await this.addStatusHistory(
             manager,
             payment.id,
@@ -348,8 +390,21 @@ export class PaymentsService {
             actorUserId,
             null,
           );
+          await this.addApplicationStatusHistory(
+            manager,
+            application.id,
+            actorUserId,
+          );
           return mapAdminPayment(payment);
         });
+        if (result === INITIAL_APPLICATION_EXPIRED) {
+          throw new DomainException(
+            ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+            HttpStatus.CONFLICT,
+            'The application has expired',
+          );
+        }
+        return result;
       } catch (error) {
         await this.deleteArtifactsAfterFailedTransition(artifactKeys);
         if (!isUniqueConstraintError(error)) throw error;
@@ -464,7 +519,7 @@ export class PaymentsService {
         vehicle.inspectionExpiryDate,
         vehicle.vehicleClass,
         category.inspectionFeeKhr,
-        category.serviceFeeKhr,
+        CITIZEN_SERVICE_FEE_KHR,
       );
 
       return {
@@ -655,6 +710,23 @@ export class PaymentsService {
     );
   }
 
+  private async addApplicationStatusHistory(
+    manager: EntityManager,
+    applicationId: string,
+    changedByUserId: string,
+  ): Promise<void> {
+    const histories = manager.getRepository(RenewalApplicationStatusHistory);
+    await histories.save(
+      histories.create({
+        applicationId,
+        previousStatus: ApplicationStatus.SUBMITTED,
+        newStatus: ApplicationStatus.APPROVED,
+        changedByUserId,
+        reason: 'PAYMENT_CONFIRMED',
+      }),
+    );
+  }
+
   private async confirmationTimestamp(
     manager: EntityManager,
   ): Promise<ConfirmationTimestamp> {
@@ -702,6 +774,20 @@ export class PaymentsService {
         ApiErrorCode.APPLICATION_INVALID_TRANSITION,
         HttpStatus.CONFLICT,
         'Payment initialization is only available for draft applications',
+      );
+    }
+  }
+
+  private assertApplicationConfirmable(application: RenewalApplication): void {
+    if (
+      application.status !== ApplicationStatus.SUBMITTED ||
+      application.submittedAt === null ||
+      application.readyForInspectionAt !== null
+    ) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+        HttpStatus.CONFLICT,
+        'Payment confirmation requires a submitted application awaiting inspection readiness',
       );
     }
   }
@@ -904,20 +990,26 @@ export class PaymentsService {
               0
             ) <= $5::integer THEN 0
             WHEN $4::text = '${VehicleClass.LIGHT}' THEN
-              LEAST(
-                GREATEST(
-                  (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
-                  0
-                ),
-                $6::integer
+              GREATEST(
+                LEAST(
+                  GREATEST(
+                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                    0
+                  ),
+                  $6::integer
+                ) - $5::integer,
+                0
               ) * $7::integer
             ELSE
-              LEAST(
-                GREATEST(
-                  (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
-                  0
-                ),
-                $6::integer
+              GREATEST(
+                LEAST(
+                  GREATEST(
+                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                    0
+                  ),
+                  $6::integer
+                ) - $5::integer,
+                0
               ) * $8::integer
           END
           )::numeric(12,2)::text AS "lateFee",
@@ -929,20 +1021,26 @@ export class PaymentsService {
                 0
               ) <= $5::integer THEN 0
               WHEN $4::text = '${VehicleClass.LIGHT}' THEN
-                LEAST(
-                  GREATEST(
-                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
-                    0
-                  ),
-                  $6::integer
+                GREATEST(
+                  LEAST(
+                    GREATEST(
+                      (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                      0
+                    ),
+                    $6::integer
+                  ) - $5::integer,
+                  0
                 ) * $7::integer
               ELSE
-                LEAST(
-                  GREATEST(
-                    (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
-                    0
-                  ),
-                  $6::integer
+                GREATEST(
+                  LEAST(
+                    GREATEST(
+                      (now() AT TIME ZONE 'Asia/Phnom_Penh')::date - $1::date,
+                      0
+                    ),
+                    $6::integer
+                  ) - $5::integer,
+                  0
                 ) * $8::integer
             END
           )::numeric(12,2)::text AS "totalAmount"

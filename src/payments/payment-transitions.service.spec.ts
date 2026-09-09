@@ -4,6 +4,8 @@ import { HttpStatus } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
+import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { FilesService } from '../files/files.service';
 import { Vehicle } from '../vehicles/entities/vehicle.entity';
@@ -76,6 +78,25 @@ describe('PaymentsService transitions', () => {
       status: PaymentStatus.CONFIRMED,
       confirmedByUserId: ACTOR_ID,
     });
+    expect(fixture.application).toMatchObject({
+      status: ApplicationStatus.APPROVED,
+      readyForInspectionAt: new Date('2026-08-12T00:00:00.000Z'),
+    });
+    expect(fixture.applicationRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 'application-id' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(fixture.applicationHistoryRepository.create).toHaveBeenCalledWith({
+      applicationId: 'application-id',
+      previousStatus: ApplicationStatus.SUBMITTED,
+      newStatus: ApplicationStatus.APPROVED,
+      changedByUserId: ACTOR_ID,
+      reason: 'PAYMENT_CONFIRMED',
+    });
+    expect(fixture.applicationHistoryRepository.save).toHaveBeenCalledTimes(1);
+    expect(fixture.payment.confirmedAt).toBe(
+      fixture.application.readyForInspectionAt,
+    );
     expect(fixture.payment.providerName).toBeNull();
     expect(fixture.payment.providerTransactionId).toBeNull();
   });
@@ -101,6 +122,83 @@ describe('PaymentsService transitions', () => {
         reason: null,
       }),
     );
+    expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+  });
+
+  it('rejects confirmation for a draft application', async () => {
+    const fixture = createFixture(payment(), {
+      status: ApplicationStatus.DRAFT,
+      submittedAt: null,
+    });
+
+    await expect(
+      fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.payment.status).toBe(PaymentStatus.PENDING);
+    expect(fixture.paymentPdf.generateReceipt).not.toHaveBeenCalled();
+    expect(fixture.applicationHistoryRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('canonically expires at the Day-31 boundary before payment confirmation', async () => {
+    const fixture = createFixture(payment(), {
+      submittedAt: new Date('2026-07-13T00:00:00.000Z'),
+    });
+
+    await expect(
+      fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.application.status).toBe(ApplicationStatus.EXPIRED);
+    expect(fixture.application.readyForInspectionAt).toBeNull();
+    expect(fixture.payment.status).toBe(PaymentStatus.PENDING);
+    expect(fixture.applicationHistoryRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousStatus: ApplicationStatus.SUBMITTED,
+        newStatus: ApplicationStatus.EXPIRED,
+        changedByUserId: null,
+        reason: 'INITIAL_INSPECTION_PERIOD_EXPIRED',
+      }),
+    );
+    expect(fixture.paymentPdf.generateReceipt).not.toHaveBeenCalled();
+  });
+
+  it('keeps double confirmation idempotent at the application boundary', async () => {
+    const fixture = createFixture();
+    await fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID);
+    const confirmedAt = fixture.payment.confirmedAt;
+
+    await expect(
+      fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.PAYMENT_INVALID_TRANSITION,
+      status: HttpStatus.CONFLICT,
+    });
+    expect(fixture.payment.confirmedAt).toBe(confirmedAt);
+    expect(fixture.applicationRepository.save).toHaveBeenCalledTimes(1);
+    expect(fixture.applicationHistoryRepository.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes concurrent confirmation so readiness and history are written once', async () => {
+    const fixture = createFixture();
+    serializeTransactions(fixture);
+
+    const results = await Promise.allSettled([
+      fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID),
+      fixture.service.confirmPayment(PAYMENT_ID, ACTOR_ID),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual([
+      'fulfilled',
+      'rejected',
+    ]);
+    expect(fixture.application.status).toBe(ApplicationStatus.APPROVED);
+    expect(fixture.applicationRepository.save).toHaveBeenCalledTimes(1);
+    expect(fixture.applicationHistoryRepository.save).toHaveBeenCalledTimes(1);
   });
 
   it.each([PaymentStatus.CONFIRMED, PaymentStatus.FAILED])(
@@ -135,6 +233,8 @@ describe('PaymentsService transitions', () => {
         reason: 'no cash',
       }),
     );
+    expect(fixture.application.status).toBe(ApplicationStatus.SUBMITTED);
+    expect(fixture.applicationRepository.save).not.toHaveBeenCalled();
     expect(fixture.paymentPdf.generateReceipt).not.toHaveBeenCalled();
   });
 
@@ -255,17 +355,26 @@ describe('PaymentsService transitions', () => {
   });
 });
 
-function createFixture(initialPayment = payment()) {
+function createFixture(
+  initialPayment = payment(),
+  applicationOverrides: Partial<RenewalApplication> = {},
+) {
   const paymentRepository = {
     findOne: jest.fn().mockResolvedValue(initialPayment),
     save: jest.fn(<T>(value: T): Promise<T> => Promise.resolve(value)),
   };
+  const application = {
+    id: 'application-id',
+    vehicleId: 'vehicle-id',
+    referenceNumber: 'VIR-20260812-ABCDEF123456',
+    status: ApplicationStatus.SUBMITTED,
+    submittedAt: new Date('2026-08-01T00:00:00.000Z'),
+    readyForInspectionAt: null,
+    ...applicationOverrides,
+  } as RenewalApplication;
   const applicationRepository = {
-    findOne: jest.fn().mockResolvedValue({
-      id: 'application-id',
-      vehicleId: 'vehicle-id',
-      referenceNumber: 'VIR-20260812-ABCDEF123456',
-    }),
+    findOne: jest.fn().mockResolvedValue(application),
+    save: jest.fn(<T>(value: T): Promise<T> => Promise.resolve(value)),
   };
   const vehicleRepository = {
     findOne: jest.fn().mockResolvedValue({
@@ -281,6 +390,10 @@ function createFixture(initialPayment = payment()) {
     create: jest.fn(<T>(value: T): T => value),
     save: jest.fn().mockResolvedValue(undefined),
   };
+  const applicationHistoryRepository = {
+    create: jest.fn(<T>(value: T): T => value),
+    save: jest.fn().mockResolvedValue(undefined),
+  };
   const categoryRepository = { findOne: jest.fn() };
   const manager = {
     getRepository: jest.fn((target: unknown) => {
@@ -288,6 +401,8 @@ function createFixture(initialPayment = payment()) {
       if (target === RenewalApplication) return applicationRepository;
       if (target === Vehicle) return vehicleRepository;
       if (target === PaymentStatusHistory) return historyRepository;
+      if (target === RenewalApplicationStatusHistory)
+        return applicationHistoryRepository;
       return categoryRepository;
     }),
     query: jest.fn().mockResolvedValue([
@@ -326,16 +441,35 @@ function createFixture(initialPayment = payment()) {
       {} as Repository<RenewalApplication>,
       files as unknown as FilesService,
       paymentPdf as unknown as PaymentPdfService,
+      {} as never,
     ),
     payment: initialPayment,
+    application,
     paymentRepository,
     applicationRepository,
     vehicleRepository,
     historyRepository,
+    applicationHistoryRepository,
     categoryRepository,
     files,
     paymentPdf,
+    dataSource,
+    manager,
   };
+}
+
+function serializeTransactions(fixture: ReturnType<typeof createFixture>) {
+  let previous = Promise.resolve();
+  fixture.dataSource.transaction.mockImplementation(
+    (callback: (transactionManager: typeof fixture.manager) => unknown) => {
+      const current = previous.then(() => callback(fixture.manager));
+      previous = current.then(
+        () => undefined,
+        () => undefined,
+      );
+      return current;
+    },
+  );
 }
 
 function payment(status = PaymentStatus.PENDING): Payment {

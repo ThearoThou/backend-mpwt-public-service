@@ -19,8 +19,10 @@ export function chargeableLateDays(
   inspectionExpiryDate: string,
   policy: InspectionPolicy['latePenalty'],
 ): number {
-  return Math.min(
-    actualLateDays,
+  const effectiveLateDays = Math.min(
+    Math.max(actualLateDays, 0),
     maximumChargeableLateDays(inspectionExpiryDate, policy.maxPenaltyYears),
   );
+
+  return Math.max(effectiveLateDays - policy.startsAfterDays, 0);
 }

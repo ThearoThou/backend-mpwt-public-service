@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { DataSource, Repository } from 'typeorm';
 
 import { RenewalApplication } from '../applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../applications/entities/renewal-application-status-history.entity';
 import { ApplicationDocument } from '../applications/entities/application-document.entity';
 import { ApplicationStatus } from '../applications/enums/application-status.enum';
 import { DocumentStatus } from '../applications/enums/document-status.enum';
@@ -59,7 +60,7 @@ describe('PaymentsService payment initialization', () => {
       [
         '2026-08-01',
         '25000.00',
-        '5000.00',
+        '0.00',
         VehicleClass.LIGHT,
         30,
         731,
@@ -71,11 +72,11 @@ describe('PaymentsService payment initialization', () => {
       expect.objectContaining({
         applicationReferenceNumber: 'VIR-20260812-ABCDEF123456',
         inspectionFeeKhr: '25000.00',
-        serviceFeeKhr: '5000.00',
-        baseAmount: '30000.00',
+        serviceFeeKhr: '0.00',
+        baseAmount: '25000.00',
         lateDays: 10,
         lateFee: '0.00',
-        totalAmount: '30000.00',
+        totalAmount: '25000.00',
         currency: 'KHR',
         invoiceNumber: expect.stringMatching(/^INV-20260812-\d{6}$/) as unknown,
       }),
@@ -92,11 +93,11 @@ describe('PaymentsService payment initialization', () => {
         method: PaymentMethod.PAY_AT_STATION,
         status: PaymentStatus.PENDING,
         inspectionFeeKhr: '25000.00',
-        serviceFeeKhr: '5000.00',
-        baseAmount: '30000.00',
+        serviceFeeKhr: '0.00',
+        baseAmount: '25000.00',
         lateDays: 10,
         lateFee: '0.00',
-        totalAmount: '30000.00',
+        totalAmount: '25000.00',
         currency: 'KHR',
         invoiceFileKey: 'payment-artifacts/application-id/invoice/invoice.pdf',
         receiptFileKey: null,
@@ -140,6 +141,31 @@ describe('PaymentsService payment initialization', () => {
     expect(fixture.paymentRepository.save).not.toHaveBeenCalled();
   });
 
+  it('canonically expires an overdue approved application before creating a new legacy invoice', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
+    try {
+      const fixture = createFixture();
+      const overdue = application();
+      overdue.submittedAt = new Date('2026-09-07T08:30:00.000Z');
+      fixture.applicationRepository.findOne.mockResolvedValue(overdue);
+
+      await expect(
+        fixture.service.initializePayment(APPLICATION_ID),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.APPLICATION_INVALID_TRANSITION,
+        status: HttpStatus.CONFLICT,
+      });
+
+      expect(overdue.status).toBe(ApplicationStatus.EXPIRED);
+      expect(fixture.paymentPdf.generateInvoice).not.toHaveBeenCalled();
+      expect(fixture.paymentRepository.save).not.toHaveBeenCalled();
+      expect(fixture.expiryHistory.save).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('rejects missing scheduled appointments without changing appointment state', async () => {
     const fixture = createFixture();
     fixture.appointmentRepository.find.mockResolvedValue([]);
@@ -181,11 +207,11 @@ describe('PaymentsService payment initialization', () => {
       fixture.service.getCitizenFeeEstimate(CITIZEN_ID, APPLICATION_ID),
     ).resolves.toEqual({
       inspectionFeeKhr: '25000.00',
-      serviceFeeKhr: '5000.00',
-      baseAmount: '30000.00',
+      serviceFeeKhr: '0.00',
+      baseAmount: '25000.00',
       lateDays: 10,
       lateFee: '0.00',
-      totalAmount: '30000.00',
+      totalAmount: '25000.00',
       currency: 'KHR',
     });
     expect(fixture.query).toHaveBeenCalledWith(
@@ -193,7 +219,7 @@ describe('PaymentsService payment initialization', () => {
       [
         '2026-08-01',
         '25000.00',
-        '5000.00',
+        '0.00',
         VehicleClass.LIGHT,
         30,
         731,
@@ -221,13 +247,14 @@ describe('PaymentsService payment initialization', () => {
 
     const [query, values] = fixture.query.mock.calls[0] as [string, unknown[]];
     expect(query).toContain('<= $5::integer THEN 0');
+    expect(query).toContain(') - $5::integer');
     expect(query).toContain("WHEN $4::text = 'LIGHT'");
     expect(query).toContain('* $7::integer');
     expect(query).toContain('* $8::integer');
     expect(values).toEqual([
       '2026-08-01',
       '25000.00',
-      '5000.00',
+      '0.00',
       VehicleClass.HEAVY,
       30,
       731,
@@ -235,6 +262,168 @@ describe('PaymentsService payment initialization', () => {
       2000,
     ]);
   });
+
+  it('returns the grace-adjusted fee estimate for a 36-day overdue HEAVY vehicle', async () => {
+    const fixture = createFixture();
+    fixture.applicationRepository.findOne.mockResolvedValue(
+      application(ApplicationStatus.DRAFT, CITIZEN_ID),
+    );
+    fixture.vehicleRepository.findOne.mockResolvedValue(
+      vehicle({ vehicleClass: VehicleClass.HEAVY }),
+    );
+    fixture.query.mockResolvedValue([
+      {
+        invoiceIssuedAt: new Date('2026-08-12T00:00:00.000Z'),
+        paymentDate: '2026-08-12',
+        lateDays: 36,
+        inspectionFeeKhr: '25000.00',
+        serviceFeeKhr: '0.00',
+        baseAmount: '25000.00',
+        lateFee: '12000.00',
+        totalAmount: '37000.00',
+      },
+    ]);
+
+    await expect(
+      fixture.service.getCitizenFeeEstimate(CITIZEN_ID, APPLICATION_ID),
+    ).resolves.toMatchObject({
+      lateDays: 36,
+      lateFee: '12000.00',
+      totalAmount: '37000.00',
+    });
+  });
+
+  it('freezes the grace-adjusted fee in a new draft invoice', async () => {
+    const fixture = createFixture();
+    const draft = {
+      ...application(ApplicationStatus.DRAFT, CITIZEN_ID),
+      referenceNumber: null,
+    };
+    fixture.applicationRepository.findOne.mockResolvedValue(draft);
+    fixture.vehicleRepository.findOne.mockResolvedValue(
+      vehicle({ vehicleClass: VehicleClass.HEAVY }),
+    );
+    fixture.query.mockResolvedValue([
+      {
+        invoiceIssuedAt: new Date('2026-08-12T00:00:00.000Z'),
+        paymentDate: '2026-08-12',
+        lateDays: 36,
+        inspectionFeeKhr: '25000.00',
+        serviceFeeKhr: '0.00',
+        baseAmount: '25000.00',
+        lateFee: '12000.00',
+        totalAmount: '37000.00',
+      },
+    ]);
+
+    await fixture.service.initializeCitizenDraftPayment(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+
+    expect(fixture.paymentPdf.generateInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lateDays: 36,
+        lateFee: '12000.00',
+        totalAmount: '37000.00',
+      }),
+    );
+    expect(fixture.paymentRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lateDays: 36,
+        lateFee: '12000.00',
+        totalAmount: '37000.00',
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: 'a LIGHT vehicle with no late penalty',
+      vehicleClass: VehicleClass.LIGHT,
+      inspectionFeeKhr: '48000.00',
+      lateDays: 0,
+      lateFee: '0.00',
+      totalAmount: '48000.00',
+    },
+    {
+      name: 'a LIGHT vehicle 31 days overdue',
+      vehicleClass: VehicleClass.LIGHT,
+      inspectionFeeKhr: '48000.00',
+      lateDays: 31,
+      lateFee: '500.00',
+      totalAmount: '48500.00',
+    },
+    {
+      name: 'a LIGHT vehicle 36 days overdue',
+      vehicleClass: VehicleClass.LIGHT,
+      inspectionFeeKhr: '48000.00',
+      lateDays: 36,
+      lateFee: '3000.00',
+      totalAmount: '51000.00',
+    },
+    {
+      name: 'a HEAVY vehicle 36 days overdue',
+      vehicleClass: VehicleClass.HEAVY,
+      inspectionFeeKhr: '80000.00',
+      lateDays: 36,
+      lateFee: '12000.00',
+      totalAmount: '92000.00',
+    },
+  ])(
+    'returns the zero-service-fee estimate for $name',
+    async ({
+      vehicleClass,
+      inspectionFeeKhr,
+      lateDays,
+      lateFee,
+      totalAmount,
+    }) => {
+      const fixture = createFixture();
+      fixture.applicationRepository.findOne.mockResolvedValue(
+        application(ApplicationStatus.DRAFT, CITIZEN_ID),
+      );
+      fixture.vehicleRepository.findOne.mockResolvedValue(
+        vehicle({ vehicleClass }),
+      );
+      fixture.categoryRepository.findOne.mockResolvedValue({
+        ...category(),
+        inspectionFeeKhr,
+      });
+      fixture.query.mockResolvedValueOnce([
+        {
+          invoiceIssuedAt: new Date('2026-08-12T00:00:00.000Z'),
+          paymentDate: '2026-08-12',
+          lateDays,
+          inspectionFeeKhr,
+          serviceFeeKhr: '0.00',
+          baseAmount: inspectionFeeKhr,
+          lateFee,
+          totalAmount,
+        },
+      ]);
+
+      await expect(
+        fixture.service.getCitizenFeeEstimate(CITIZEN_ID, APPLICATION_ID),
+      ).resolves.toMatchObject({
+        inspectionFeeKhr,
+        serviceFeeKhr: '0.00',
+        baseAmount: inspectionFeeKhr,
+        lateDays,
+        lateFee,
+        totalAmount,
+      });
+      expect(fixture.query).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining([
+          '2026-08-01',
+          inspectionFeeKhr,
+          '0.00',
+          vehicleClass,
+        ]),
+      );
+    },
+  );
 
   it('initializes one pending station-payment invoice for an owned draft without reserving capacity', async () => {
     const fixture = createFixture();
@@ -261,9 +450,9 @@ describe('PaymentsService payment initialization', () => {
         method: PaymentMethod.PAY_AT_STATION,
         status: PaymentStatus.PENDING,
         inspectionFeeKhr: '25000.00',
-        serviceFeeKhr: '5000.00',
+        serviceFeeKhr: '0.00',
         lateDays: 10,
-        totalAmount: '30000.00',
+        totalAmount: '25000.00',
       }),
     );
     expect(result).toMatchObject({
@@ -374,10 +563,10 @@ describe('PaymentsService payment initialization', () => {
         paymentDate: '2026-08-12',
         lateDays: 0,
         inspectionFeeKhr: '25000.00',
-        serviceFeeKhr: '5000.00',
-        baseAmount: '30000.00',
+        serviceFeeKhr: '0.00',
+        baseAmount: '25000.00',
         lateFee: '0.00',
-        totalAmount: '30000.00',
+        totalAmount: '25000.00',
       },
     ]);
 
@@ -386,7 +575,7 @@ describe('PaymentsService payment initialization', () => {
     ).resolves.toMatchObject({
       lateDays: 0,
       lateFee: '0.00',
-      totalAmount: '30000.00',
+      totalAmount: '25000.00',
     });
   });
 
@@ -519,7 +708,14 @@ describe('PaymentsService payment initialization', () => {
 });
 
 function createFixture() {
-  const applicationRepository = { findOne: jest.fn() };
+  const applicationRepository = {
+    findOne: jest.fn(),
+    save: jest.fn((value) => Promise.resolve(value)),
+  };
+  const expiryHistory = {
+    create: jest.fn((value: unknown) => value),
+    save: jest.fn((value) => Promise.resolve(value)),
+  };
   const paymentRepository = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn(<T extends object>(value: T): T => value),
@@ -562,10 +758,10 @@ function createFixture() {
       paymentDate: '2026-08-12',
       lateDays: 10,
       inspectionFeeKhr: '25000.00',
-      serviceFeeKhr: '5000.00',
-      baseAmount: '30000.00',
+      serviceFeeKhr: '0.00',
+      baseAmount: '25000.00',
       lateFee: '0.00',
-      totalAmount: '30000.00',
+      totalAmount: '25000.00',
     },
   ]);
   const manager = {
@@ -578,6 +774,7 @@ function createFixture() {
       if (target === CitizenProfile) return profileRepository;
       if (target === Vehicle) return vehicleRepository;
       if (target === InspectionVehicleCategory) return categoryRepository;
+      if (target === RenewalApplicationStatusHistory) return expiryHistory;
       throw new Error('Unexpected repository');
     }),
     query,
@@ -626,6 +823,7 @@ function createFixture() {
     manager,
     paymentPdf,
     preferredScheduling,
+    expiryHistory,
     transaction,
   };
 }
