@@ -27,7 +27,10 @@ import {
   CreateVehicleRequestDto,
   ListCitizenVehiclesQueryDto,
 } from './dto/vehicle-request.dtos';
-import type { VehicleResponse } from './vehicle-response.mapper';
+import type {
+  VehicleDetailResponse,
+  VehicleResponse,
+} from './vehicle-response.mapper';
 import { VehiclesService } from './vehicles.service';
 
 @Controller('vehicles')
@@ -63,7 +66,7 @@ export class VehiclesController {
   async getVehicle(
     @CurrentActor() actor: AuthenticatedActor,
     @Param('vehicleId', new ParseUUIDPipe({ version: '4' })) vehicleId: string,
-  ): Promise<ApiDataResponse<VehicleResponse>> {
+  ): Promise<ApiDataResponse<VehicleDetailResponse>> {
     return createDataResponse(
       await this.vehiclesService.getCitizenVehicle(actor.userId, vehicleId),
     );

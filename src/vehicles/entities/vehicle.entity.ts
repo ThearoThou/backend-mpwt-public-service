@@ -55,6 +55,65 @@ export class Vehicle {
   @Column({ name: 'vehicle_type', type: 'varchar', length: 50 })
   vehicleType!: string;
 
+  @Column({ name: 'colour', type: 'varchar', length: 50, nullable: true })
+  colour!: string | null;
+
+  @Column({
+    name: 'engine_number',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  engineNumber!: string | null;
+
+  @Column({ name: 'number_of_cylinders', type: 'smallint', nullable: true })
+  numberOfCylinders!: number | null;
+
+  @Column({ name: 'engine_displacement_cc', type: 'integer', nullable: true })
+  engineDisplacementCc!: number | null;
+
+  @Column({
+    name: 'engine_power_hp',
+    type: 'numeric',
+    precision: 8,
+    scale: 2,
+    nullable: true,
+  })
+  enginePowerHp!: string | null;
+
+  @Column({ name: 'fuel_type', type: 'varchar', length: 50, nullable: true })
+  fuelType!: string | null;
+
+  @Column({ name: 'number_of_seats', type: 'smallint', nullable: true })
+  numberOfSeats!: number | null;
+
+  @Column({ name: 'number_of_axles', type: 'smallint', nullable: true })
+  numberOfAxles!: number | null;
+
+  @Column({ name: 'steering', type: 'varchar', length: 20, nullable: true })
+  steering!: string | null;
+
+  @Column({ name: 'vehicle_weight_kg', type: 'integer', nullable: true })
+  vehicleWeightKg!: number | null;
+
+  @Column({ name: 'maximum_load_kg', type: 'integer', nullable: true })
+  maximumLoadKg!: number | null;
+
+  @Column({ name: 'maximum_gross_weight_kg', type: 'integer', nullable: true })
+  maximumGrossWeightKg!: number | null;
+
+  @Column({ name: 'wheel_size', type: 'varchar', length: 50, nullable: true })
+  wheelSize!: string | null;
+
+  @Column({ name: 'length_mm', type: 'integer', nullable: true })
+  lengthMm!: number | null;
+
+  @Column({ name: 'width_mm', type: 'integer', nullable: true })
+  widthMm!: number | null;
+
+  @Column({ name: 'height_mm', type: 'integer', nullable: true })
+  heightMm!: number | null;
+
   @Column({
     name: 'vehicle_class',
     type: 'enum',

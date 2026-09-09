@@ -26,11 +26,15 @@ import { UserRole } from '../users/enums/user-role.enum';
 import {
   ClassifyVehicleRequestDto,
   ListAdminVehiclesQueryDto,
+  UpdateVehicleTechnicalDataRequestDto,
   VehicleClassificationHistoryQueryDto,
 } from './dto/vehicle-request.dtos';
 import type { VehicleClassificationHistoryResponse } from './vehicle-classification-history-response.mapper';
 import { VehicleClassificationService } from './vehicle-classification.service';
-import type { VehicleResponse } from './vehicle-response.mapper';
+import type {
+  VehicleDetailResponse,
+  VehicleResponse,
+} from './vehicle-response.mapper';
 import { VehiclesService } from './vehicles.service';
 
 @Controller('admin/vehicles')
@@ -54,7 +58,7 @@ export class AdminVehiclesController {
   @Get(':vehicleId')
   async getVehicle(
     @Param('vehicleId', new ParseUUIDPipe({ version: '4' })) vehicleId: string,
-  ): Promise<ApiDataResponse<VehicleResponse>> {
+  ): Promise<ApiDataResponse<VehicleDetailResponse>> {
     return createDataResponse(
       await this.vehiclesService.getAdminVehicle(vehicleId),
     );
@@ -72,6 +76,16 @@ export class AdminVehiclesController {
         vehicleId,
         input,
       ),
+    );
+  }
+
+  @Patch(':vehicleId/technical-data')
+  async updateTechnicalData(
+    @Param('vehicleId', new ParseUUIDPipe({ version: '4' })) vehicleId: string,
+    @Body() input: UpdateVehicleTechnicalDataRequestDto,
+  ): Promise<ApiDataResponse<VehicleDetailResponse>> {
+    return createDataResponse(
+      await this.vehiclesService.updateTechnicalData(vehicleId, input),
     );
   }
 

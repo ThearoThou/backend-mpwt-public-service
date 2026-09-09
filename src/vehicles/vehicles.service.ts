@@ -6,15 +6,23 @@ import { normalizeCambodianPhone } from '../auth/identifier-normalization';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
+import type { SortOrder } from '../common/pagination/base-pagination-query.dto';
 import {
   type CreateVehicleRequestDto,
   type ListAdminVehiclesQueryDto,
   type ListCitizenVehiclesQueryDto,
+  type UpdateVehicleTechnicalDataRequestDto,
   type VehicleSortField,
 } from './dto/vehicle-request.dtos';
 import { Vehicle } from './entities/vehicle.entity';
 import { VehiclePlateCategory } from './enums/vehicle-plate-category.enum';
-import { mapVehicle, type VehicleResponse } from './vehicle-response.mapper';
+import {
+  mapVehicle,
+  mapVehicleDetail,
+  type VehicleDetailResponse,
+  type VehicleResponse,
+} from './vehicle-response.mapper';
 import {
   normalizeVehicleIdentifier,
   trimRequiredVehicleText,
@@ -139,13 +147,17 @@ export class VehiclesService {
       });
     }
 
-    return this.executeList(query, input);
+    return this.executeList(
+      query,
+      input,
+      this.citizenSortTiebreak(input.sortBy),
+    );
   }
 
   async getCitizenVehicle(
     citizenId: string,
     vehicleId: string,
-  ): Promise<VehicleResponse> {
+  ): Promise<VehicleDetailResponse> {
     const vehicle = await this.findVehicleById(vehicleId);
 
     if (vehicle === null) {
@@ -160,7 +172,7 @@ export class VehiclesService {
       );
     }
 
-    return mapVehicle(vehicle);
+    return mapVehicleDetail(vehicle);
   }
 
   async listAdminVehicles(
@@ -211,19 +223,107 @@ export class VehiclesService {
     return this.executeList(query, input);
   }
 
-  async getAdminVehicle(vehicleId: string): Promise<VehicleResponse> {
+  async getAdminVehicle(vehicleId: string): Promise<VehicleDetailResponse> {
     const vehicle = await this.findVehicleById(vehicleId);
 
     if (vehicle === null) {
       throw this.vehicleNotFound();
     }
 
-    return mapVehicle(vehicle);
+    return mapVehicleDetail(vehicle);
   }
 
-  private vehicleQuery() {
-    return this.vehicles
+  async updateTechnicalData(
+    vehicleId: string,
+    input: UpdateVehicleTechnicalDataRequestDto,
+  ): Promise<VehicleDetailResponse> {
+    if (!Object.values(input).some((value) => value !== undefined)) {
+      throw new DomainException(
+        ApiErrorCode.VALIDATION_ERROR,
+        HttpStatus.BAD_REQUEST,
+        'At least one technical vehicle field is required',
+      );
+    }
+
+    const vehicle = await this.findVehicleById(vehicleId);
+    if (vehicle === null) throw this.vehicleNotFound();
+
+    if (input.colour !== undefined) {
+      vehicle.colour = this.normalizedNullableText(input.colour, 'Colour');
+    }
+    if (input.engineNumber !== undefined) {
+      vehicle.engineNumber =
+        input.engineNumber === null
+          ? null
+          : normalizeVehicleIdentifier(input.engineNumber);
+    }
+    if (input.numberOfCylinders !== undefined) {
+      vehicle.numberOfCylinders = input.numberOfCylinders;
+    }
+    if (input.engineDisplacementCc !== undefined) {
+      vehicle.engineDisplacementCc = input.engineDisplacementCc;
+    }
+    if (input.enginePowerHp !== undefined) {
+      vehicle.enginePowerHp = this.normalizedNullableText(
+        input.enginePowerHp,
+        'Engine power',
+      );
+    }
+    if (input.fuelType !== undefined) {
+      vehicle.fuelType = this.normalizedNullableText(
+        input.fuelType,
+        'Fuel type',
+      );
+    }
+    if (input.numberOfSeats !== undefined) {
+      vehicle.numberOfSeats = input.numberOfSeats;
+    }
+    if (input.numberOfAxles !== undefined) {
+      vehicle.numberOfAxles = input.numberOfAxles;
+    }
+    if (input.steering !== undefined) {
+      vehicle.steering = this.normalizedNullableText(
+        input.steering,
+        'Steering',
+      );
+    }
+    if (input.vehicleWeightKg !== undefined) {
+      vehicle.vehicleWeightKg = input.vehicleWeightKg;
+    }
+    if (input.maximumLoadKg !== undefined) {
+      vehicle.maximumLoadKg = input.maximumLoadKg;
+    }
+    if (input.maximumGrossWeightKg !== undefined) {
+      vehicle.maximumGrossWeightKg = input.maximumGrossWeightKg;
+    }
+    if (input.wheelSize !== undefined) {
+      vehicle.wheelSize = this.normalizedNullableText(
+        input.wheelSize,
+        'Wheel size',
+      );
+    }
+    if (input.lengthMm !== undefined) {
+      vehicle.lengthMm = input.lengthMm;
+    }
+    if (input.widthMm !== undefined) {
+      vehicle.widthMm = input.widthMm;
+    }
+    if (input.heightMm !== undefined) {
+      vehicle.heightMm = input.heightMm;
+    }
+
+    return mapVehicleDetail(await this.vehicles.save(vehicle));
+  }
+
+  private vehicleQuery(includeTechnicalData = false) {
+    const query = this.vehicles
       .createQueryBuilder('vehicle')
+      .leftJoinAndMapOne(
+        'vehicle.inspectionCategory',
+        InspectionVehicleCategory,
+        'inspectionCategory',
+        'inspectionCategory.id = vehicle.inspectionCategoryId',
+      )
       .select([
         'vehicle.id',
         'vehicle.linkedCitizenId',
@@ -249,7 +349,33 @@ export class VehiclesService {
         'vehicle.isActive',
         'vehicle.createdAt',
         'vehicle.updatedAt',
+        'inspectionCategory.id',
+        'inspectionCategory.nameKh',
+        'inspectionCategory.nameEn',
       ]);
+
+    if (includeTechnicalData) {
+      query.addSelect([
+        'vehicle.colour',
+        'vehicle.engineNumber',
+        'vehicle.numberOfCylinders',
+        'vehicle.engineDisplacementCc',
+        'vehicle.enginePowerHp',
+        'vehicle.fuelType',
+        'vehicle.numberOfSeats',
+        'vehicle.numberOfAxles',
+        'vehicle.steering',
+        'vehicle.vehicleWeightKg',
+        'vehicle.maximumLoadKg',
+        'vehicle.maximumGrossWeightKg',
+        'vehicle.wheelSize',
+        'vehicle.lengthMm',
+        'vehicle.widthMm',
+        'vehicle.heightMm',
+      ]);
+    }
+
+    return query;
   }
 
   private vehicleSearchTokens(search: string): string[] {
@@ -259,12 +385,21 @@ export class VehiclesService {
   private async executeList(
     query: ReturnType<VehiclesService['vehicleQuery']>,
     input: ListCitizenVehiclesQueryDto | ListAdminVehiclesQueryDto,
+    tiebreak?: VehicleOrdering,
   ): Promise<VehicleListResult> {
-    const [vehicles, total] = await query
-      .orderBy(
-        `vehicle.${this.vehicleSortColumn(input.sortBy)}`,
-        input.sortOrder.toUpperCase() as 'ASC' | 'DESC',
-      )
+    const orderedQuery = query.orderBy(
+      `vehicle.${this.vehicleSortColumn(input.sortBy)}`,
+      input.sortOrder.toUpperCase() as 'ASC' | 'DESC',
+    );
+
+    if (tiebreak !== undefined) {
+      orderedQuery.addOrderBy(
+        `vehicle.${tiebreak.column}`,
+        tiebreak.order.toUpperCase() as 'ASC' | 'DESC',
+      );
+    }
+
+    const [vehicles, total] = await orderedQuery
       .skip((input.page - 1) * input.limit)
       .take(input.limit)
       .getManyAndCount();
@@ -276,35 +411,9 @@ export class VehiclesService {
   }
 
   private async findVehicleById(vehicleId: string): Promise<Vehicle | null> {
-    return this.vehicles.findOne({
-      where: { id: vehicleId },
-      select: {
-        id: true,
-        linkedCitizenId: true,
-        registrationNumber: true,
-        plateNumber: true,
-        plateCategory: true,
-        plateProvince: true,
-        plateType: true,
-        vehicleType: true,
-        vehicleClass: true,
-        inspectionCategoryId: true,
-        classificationVerifiedAt: true,
-        make: true,
-        model: true,
-        manufactureYear: true,
-        chassisNumber: true,
-        firstRegistrationDate: true,
-        lastInspectionDate: true,
-        inspectionExpiryDate: true,
-        registeredOwnerNameKh: true,
-        registeredOwnerNameEn: true,
-        registeredOwnerPhone: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+    return this.vehicleQuery(true)
+      .where('vehicle.id = :vehicleId', { vehicleId })
+      .getOne();
   }
 
   private normalizeCreateInput(input: CreateVehicleRequestDto) {
@@ -335,6 +444,13 @@ export class VehiclesService {
       ),
       registeredOwnerPhone: normalizeCambodianPhone(input.registeredOwnerPhone),
     };
+  }
+
+  private normalizedNullableText(
+    value: string | null,
+    label: string,
+  ): string | null {
+    return value === null ? null : trimRequiredVehicleText(value, label);
   }
 
   private async assertNoUniqueConflict(input: {
@@ -390,6 +506,14 @@ export class VehiclesService {
 
   private vehicleSortColumn(sortBy: VehicleSortField): VehicleSortField {
     return sortBy;
+  }
+
+  private citizenSortTiebreak(
+    sortBy: VehicleSortField,
+  ): VehicleOrdering | undefined {
+    return sortBy === 'inspectionExpiryDate'
+      ? { column: 'updatedAt', order: 'desc' }
+      : undefined;
   }
 
   private uniqueConflictFor(error: unknown): DomainException | null {
@@ -465,4 +589,9 @@ export class VehiclesService {
 interface VehicleListResult {
   data: VehicleResponse[];
   meta: ReturnType<typeof createPaginationMeta>;
+}
+
+interface VehicleOrdering {
+  column: VehicleSortField;
+  order: SortOrder;
 }

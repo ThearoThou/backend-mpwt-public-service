@@ -1,4 +1,4 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
@@ -9,6 +9,7 @@ import {
   IsUUID,
   Max,
   MaxLength,
+  Matches,
   Min,
   Validate,
   type ValidationArguments,
@@ -36,6 +37,8 @@ export const VEHICLE_SORT_FIELDS = [
   'createdAt',
   'registrationNumber',
   'plateNumber',
+  'inspectionExpiryDate',
+  'updatedAt',
 ] as const;
 
 export type VehicleSortField = (typeof VEHICLE_SORT_FIELDS)[number];
@@ -134,6 +137,124 @@ function normalizePlateProvinceValue(params: { value: unknown }): unknown {
   return typeof params.value === 'string'
     ? normalizePlateProvince(params.value)
     : params.value;
+}
+
+const POSITIVE_NUMERIC_8_2_PATTERN =
+  /^(?:0\.(?:0[1-9]|[1-9]\d?)|[1-9]\d{0,5}(?:\.\d{1,2})?)$/;
+
+export class UpdateVehicleTechnicalDataRequestDto {
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  @Transform(trimString)
+  colour?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  @Transform(canonicalizeVehicleIdentifierValue)
+  engineNumber?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(32767)
+  numberOfCylinders?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  engineDisplacementCc?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @Transform(trimString)
+  @Matches(POSITIVE_NUMERIC_8_2_PATTERN, {
+    message: 'must be a positive number with at most two decimal places',
+  })
+  enginePowerHp?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  @Transform(trimString)
+  fuelType?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(32767)
+  numberOfSeats?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(32767)
+  numberOfAxles?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  @Transform(trimString)
+  steering?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  vehicleWeightKg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(2147483647)
+  maximumLoadKg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  maximumGrossWeightKg?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  @Transform(trimString)
+  wheelSize?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  lengthMm?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  widthMm?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2147483647)
+  heightMm?: number | null;
 }
 
 export class CreateVehicleRequestDto {

@@ -173,9 +173,11 @@ describe('VehiclesService', () => {
 
   it("prevents a citizen from retrieving another citizen's vehicle", async () => {
     const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
     const service = createService(repository);
 
-    repository.findOne.mockResolvedValueOnce(
+    query.getOne.mockResolvedValueOnce(
       vehicle({ linkedCitizenId: OTHER_CITIZEN_ID }),
     );
     await expect(
@@ -185,7 +187,7 @@ describe('VehiclesService', () => {
       status: HttpStatus.FORBIDDEN,
     });
 
-    repository.findOne.mockResolvedValueOnce(null);
+    query.getOne.mockResolvedValueOnce(null);
     await expect(
       service.getCitizenVehicle(CITIZEN_ID, VEHICLE_ID),
     ).rejects.toMatchObject({
@@ -217,12 +219,101 @@ describe('VehiclesService', () => {
     );
     expect(query.skip).toHaveBeenCalledWith(10);
     expect(query.take).toHaveBeenCalledWith(10);
+    expect(query.select).toHaveBeenCalledWith(
+      expect.not.arrayContaining(['vehicle.engineNumber']),
+    );
+    expect(query.addSelect).not.toHaveBeenCalled();
     expect(result.meta).toEqual({
       page: 2,
       limit: 10,
       total: 1,
       totalPages: 1,
     });
+  });
+
+  it('orders citizen vehicles by inspection expiry with an updatedAt tie-break', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'asc',
+      sortBy: 'inspectionExpiryDate',
+    });
+
+    expect(query.orderBy).toHaveBeenNthCalledWith(
+      1,
+      'vehicle.inspectionExpiryDate',
+      'ASC',
+    );
+    expect(query.addOrderBy).toHaveBeenCalledWith('vehicle.updatedAt', 'DESC');
+  });
+
+  it('orders citizen vehicles directly by updatedAt without an expiry tie-break', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'updatedAt',
+    });
+
+    expect(query.orderBy).toHaveBeenCalledWith('vehicle.updatedAt', 'DESC');
+    expect(query.addOrderBy).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the updatedAt tie-break to admin vehicle lists', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listAdminVehicles({
+      page: 1,
+      limit: 20,
+      sortOrder: 'asc',
+      sortBy: 'inspectionExpiryDate',
+    });
+
+    expect(query.orderBy).toHaveBeenCalledTimes(1);
+    expect(query.addOrderBy).not.toHaveBeenCalled();
+    expect(query.orderBy).toHaveBeenCalledWith(
+      'vehicle.inspectionExpiryDate',
+      'ASC',
+    );
+  });
+
+  it('applies ordering before pagination limit and offset', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 2,
+      limit: 10,
+      sortOrder: 'asc',
+      sortBy: 'inspectionExpiryDate',
+    });
+
+    expect(query.orderBy.mock.invocationCallOrder[0]).toBeLessThan(
+      query.addOrderBy.mock.invocationCallOrder[0],
+    );
+    expect(query.addOrderBy.mock.invocationCallOrder[0]).toBeLessThan(
+      query.skip.mock.invocationCallOrder[0],
+    );
+    expect(query.skip.mock.invocationCallOrder[0]).toBeLessThan(
+      query.take.mock.invocationCallOrder[0],
+    );
+    expect(query.skip).toHaveBeenCalledWith(10);
+    expect(query.take).toHaveBeenCalledWith(10);
   });
 
   it('looks up a citizen vehicle by normalized registration number', async () => {
@@ -579,6 +670,137 @@ describe('VehiclesService', () => {
     });
     expect(mapped).not.toHaveProperty('linkedCitizen');
     expect(mapped).not.toHaveProperty('renewalApplications');
+    expect(mapped).not.toHaveProperty('engineNumber');
+  });
+
+  it('loads technical master data only for a vehicle detail query', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    query.getOne.mockResolvedValue(vehicle({ engineNumber: 'ENGINE-123' }));
+    const service = createService(repository);
+
+    const result = await service.getAdminVehicle(VEHICLE_ID);
+
+    expect(query.addSelect).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        'vehicle.colour',
+        'vehicle.engineNumber',
+        'vehicle.maximumGrossWeightKg',
+        'vehicle.heightMm',
+      ]),
+    );
+    expect(result.engineNumber).toBe('ENGINE-123');
+  });
+
+  it('updates and normalizes authoritative technical master data', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    const existing = vehicle();
+    repository.createQueryBuilder.mockReturnValue(query);
+    repository.save.mockImplementation((value) => Promise.resolve(value));
+    query.getOne.mockResolvedValue(existing);
+    const service = createService(repository);
+
+    const result = await service.updateTechnicalData(VEHICLE_ID, {
+      colour: ' White ',
+      engineNumber: ' eng  123 ',
+      numberOfCylinders: 4,
+      engineDisplacementCc: 2199,
+      enginePowerHp: '177.50',
+      fuelType: ' Diesel ',
+      numberOfSeats: 11,
+      numberOfAxles: 2,
+      steering: ' Left ',
+      vehicleWeightKg: 2200,
+      maximumLoadKg: 220,
+      maximumGrossWeightKg: 2970,
+      wheelSize: ' 215/60R17 ',
+      lengthMm: 5250,
+      widthMm: 2000,
+      heightMm: 1900,
+    });
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        colour: 'White',
+        engineNumber: 'ENG 123',
+        enginePowerHp: '177.50',
+        fuelType: 'Diesel',
+        steering: 'Left',
+        wheelSize: '215/60R17',
+        lengthMm: 5250,
+      }),
+    );
+    expect(result).toMatchObject({
+      colour: 'White',
+      engineNumber: 'ENG 123',
+      enginePowerHp: '177.50',
+    });
+  });
+
+  it('supports partial clearing without changing omitted fields', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    const existing = vehicle({
+      colour: 'White',
+      engineNumber: 'ENG-123',
+      numberOfSeats: 5,
+    });
+    repository.createQueryBuilder.mockReturnValue(query);
+    repository.save.mockImplementation((value) => Promise.resolve(value));
+    query.getOne.mockResolvedValue(existing);
+    const service = createService(repository);
+
+    const result = await service.updateTechnicalData(VEHICLE_ID, {
+      colour: null,
+      numberOfSeats: 7,
+    });
+
+    expect(result).toMatchObject({
+      colour: null,
+      engineNumber: 'ENG-123',
+      numberOfSeats: 7,
+    });
+  });
+
+  it('keeps engine number independent from chassis number', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    const existing = vehicle({ chassisNumber: 'CHASSIS-123' });
+    repository.createQueryBuilder.mockReturnValue(query);
+    repository.save.mockImplementation((value) => Promise.resolve(value));
+    query.getOne.mockResolvedValue(existing);
+    const service = createService(repository);
+
+    const result = await service.updateTechnicalData(VEHICLE_ID, {
+      engineNumber: 'ENGINE-987',
+    });
+
+    expect(result.engineNumber).toBe('ENGINE-987');
+    expect(result.chassisNumber).toBe('CHASSIS-123');
+  });
+
+  it('rejects an empty technical update and reports missing vehicles', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await expect(
+      service.updateTechnicalData(VEHICLE_ID, {}),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.VALIDATION_ERROR,
+      status: HttpStatus.BAD_REQUEST,
+    });
+
+    query.getOne.mockResolvedValue(null);
+    await expect(
+      service.updateTechnicalData(VEHICLE_ID, { colour: 'White' }),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.VEHICLE_NOT_FOUND,
+      status: HttpStatus.NOT_FOUND,
+    });
   });
 });
 
@@ -600,11 +822,16 @@ function createRepository() {
 
 function createListQuery(vehicles: Vehicle[] = [vehicle()], total = 1) {
   return {
+    leftJoinAndMapOne: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
+    getOne: jest.fn(),
     getManyAndCount: jest.fn().mockResolvedValue([vehicles, total]),
   };
 }
@@ -619,6 +846,22 @@ function createInput(
     plateProvince: 'ភ្នំពេញ',
     plateType: 'Private',
     vehicleType: 'Car',
+    colour: null,
+    engineNumber: null,
+    numberOfCylinders: null,
+    engineDisplacementCc: null,
+    enginePowerHp: null,
+    fuelType: null,
+    numberOfSeats: null,
+    numberOfAxles: null,
+    steering: null,
+    vehicleWeightKg: null,
+    maximumLoadKg: null,
+    maximumGrossWeightKg: null,
+    wheelSize: null,
+    lengthMm: null,
+    widthMm: null,
+    heightMm: null,
     make: 'Toyota',
     model: 'Camry',
     chassisNumber: 'CH-123',
