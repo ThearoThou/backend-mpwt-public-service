@@ -42,7 +42,7 @@ function normalizeWhenValid(
 
 function normalizeOptionalEnglishName(params: { value: unknown }): unknown {
   if (typeof params.value !== 'string') return params.value;
-  const value = params.value.trim();
+  const value = params.value.trim().replace(/\s+/g, ' ');
   return value === '' ? null : value;
 }
 
@@ -157,6 +157,18 @@ export class PasswordResetConfirmRequestDto {
   @MinLength(43)
   @MaxLength(128)
   resetToken!: string;
+
+  @IsString()
+  @MinLength(8)
+  @MaxLength(128)
+  newPassword!: string;
+}
+
+export class ChangePasswordRequestDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  currentPassword!: string;
 
   @IsString()
   @MinLength(8)

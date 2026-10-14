@@ -296,6 +296,7 @@ describe('InspectionReadsService citizen reads', () => {
         {
           applicationId: 'application-id',
           referenceNumber: 'VIR-1',
+          transactionNumber: '90L202609081400',
           attemptNumber: 1,
           result: InspectionResult.FAIL,
           inspectedAt: new Date(),
@@ -303,6 +304,10 @@ describe('InspectionReadsService citizen reads', () => {
           stationId: 'station-id',
           stationNameKh: 'Station Kh',
           stationNameEn: 'Station',
+          categoryId: 'category-id',
+          categoryCode: 'MPWT0011526',
+          categoryNameKh: 'Category Kh',
+          categoryNameEn: 'Family passenger vehicle',
           registrationNumber: 'REG-1',
           plateNumber: '2AB-1234',
           plateCategory: 'PROVINCE',
@@ -322,17 +327,75 @@ describe('InspectionReadsService citizen reads', () => {
     });
 
     expect(result.data[0]).toMatchObject({
+      transactionNumber: '90L202609081400',
       failureReason: 'Brake issue',
       attemptNumber: 1,
       vehicle: { plateCategory: 'PROVINCE', plateProvince: 'Phnom Penh' },
+      inspectionCategory: {
+        id: 'category-id',
+        code: 'MPWT0011526',
+        nameKh: 'Category Kh',
+        nameEn: 'Family passenger vehicle',
+      },
     });
     expect(result.data[0]).not.toHaveProperty('recordedByUserId');
     expect(statements[0]).toContain('application."citizen_id" = $1');
+    expect(statements[0]).toContain(
+      'payment."invoice_number" AS "transactionNumber"',
+    );
     expect(statements[0]).toContain('inspection."status" = \'COMPLETED\'');
     expect(statements[0]).toContain('inspection."actual_station_id"');
     expect(statements[0]).toContain('COALESCE(actual_station."id"');
     expect(statements[0]).toContain(
       'ORDER BY inspection."completed_at" DESC, inspection."id" DESC',
+    );
+  });
+
+  it('filters citizen inspection history by result before pagination', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new InspectionReadsService({ query } as never);
+
+    await service.listCitizenInspectionHistory('citizen-id', {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      result: InspectionResult.PASS,
+    });
+
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'inspection."result" = $2::"public"."inspection_result"',
+      ),
+      ['citizen-id', InspectionResult.PASS, 20, 0],
+    );
+  });
+
+  it('searches visible inspection history fields before pagination', async () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const service = new InspectionReadsService({ query } as never);
+
+    await service.listCitizenInspectionHistory('citizen-id', {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      search: 'Mitsubishi Pajero',
+    });
+
+    const [statement, parameters] = query.mock.calls[0] as [string, unknown[]];
+    expect(statement).toContain('payment."invoice_number" ILIKE $2');
+    expect(statement).toContain(
+      `CONCAT_WS(' ', application."vehicle_snapshot" ->> 'plateProvince', application."vehicle_snapshot" ->> 'plateNumber') ILIKE $2`,
+    );
+    expect(statement).toContain(
+      `CONCAT_WS(' ', application."vehicle_snapshot" ->> 'make', application."vehicle_snapshot" ->> 'model') ILIKE $2`,
+    );
+    expect(statement).toContain(
+      `application."vehicle_snapshot" ->> 'manufactureYear' ILIKE $2`,
+    );
+    expect(statement).not.toContain('application."reference_number" ILIKE');
+    expect(parameters).toEqual(['citizen-id', '%Mitsubishi Pajero%', 20, 0]);
+    expect(statement.indexOf('ILIKE $2')).toBeLessThan(
+      statement.indexOf('LIMIT $3 OFFSET $4'),
     );
   });
 

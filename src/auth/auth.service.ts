@@ -14,6 +14,7 @@ import {
   RegistrationVerificationResponse,
 } from './auth-response.mapper';
 import { AuthHashingService } from './auth-hashing.service';
+import { EmailDomainValidationService } from './email-domain-validation.service';
 import { AuthTokenService } from './auth-token.service';
 import {
   LoginRequestDto,
@@ -23,6 +24,7 @@ import {
   RegisterRequestDto,
   ResendVerificationRequestDto,
   VerifyAccountRequestDto,
+  ChangePasswordRequestDto,
 } from './dto/auth-request.dtos';
 import {
   IdentifierNormalizationError,
@@ -70,12 +72,16 @@ export class AuthService {
     private readonly refreshSessionService: RefreshSessionService,
     private readonly passwordResetAuthorizationService: PasswordResetAuthorizationService,
     private readonly configService: ConfigService,
+    private readonly emailDomainValidationService: EmailDomainValidationService,
   ) {}
 
   async register(
     input: RegisterRequestDto,
   ): Promise<RegistrationVerificationResponse> {
     const identifiers = this.normalizeRegistrationIdentifiers(input);
+    if (identifiers.email !== null && !(await this.emailDomainValidationService.hasMailDomain(identifiers.email))) {
+      throw this.invalidEmailDomain();
+    }
     const expiresInSeconds = this.verificationCodeService.getTtlSeconds(
       VerificationPurpose.REGISTER_ACCOUNT,
     );
@@ -309,6 +315,39 @@ export class AuthService {
       }),
       expiresInSeconds,
     };
+  }
+
+  async changePassword(
+    userId: string,
+    input: ChangePasswordRequestDto,
+  ): Promise<AuthenticatedWorkflowResult> {
+    const now = new Date();
+    return this.dataSource.transaction(async (manager) => {
+      const user = await this.usersService.findLockedUserById(userId, manager);
+      if (user === null || user.status !== UserStatus.ACTIVE) {
+        throw this.invalidCredentials();
+      }
+      if (
+        !(await this.hashingService.verifySecret(
+          user.passwordHash,
+          input.currentPassword,
+        ))
+      ) {
+        throw this.invalidCredentials();
+      }
+      await this.usersService.replacePassword(
+        user,
+        await this.hashingService.hashSecret(input.newPassword),
+        manager,
+      );
+      await this.refreshSessionService.revokeAllActiveSessions(
+        user.id,
+        RefreshSessionRevocationReason.PASSWORD_RESET,
+        manager,
+        now,
+      );
+      return this.createSessionTokens(user, manager, now);
+    });
   }
 
   async confirmPasswordReset(
@@ -862,6 +901,14 @@ export class AuthService {
       ApiErrorCode.USER_IDENTIFIER_CONFLICT,
       HttpStatus.CONFLICT,
       'Phone or email is already in use',
+    );
+  }
+
+  private invalidEmailDomain(): DomainException {
+    return new DomainException(
+      ApiErrorCode.EMAIL_DOMAIN_INVALID,
+      HttpStatus.BAD_REQUEST,
+      'Email domain cannot receive mail',
     );
   }
 

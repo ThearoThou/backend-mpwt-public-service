@@ -18,14 +18,26 @@ import { DocumentType } from './enums/document-type.enum';
 import {
   ApplicationWorkflowService,
   UNFINISHED_APPLICATION_STATUSES,
+  generateApplicationReferenceNumber,
 } from './application-workflow.service';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentMethod } from '../payments/enums/payment-method.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { Inspection } from '../inspections/entities/inspection.entity';
+import { Sticker } from '../stickers/entities/sticker.entity';
+import { TechnicalInspectionCertificate } from '../certificates/entities/technical-inspection-certificate.entity';
 
 const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_CITIZEN_ID = '22222222-2222-4222-8222-222222222222';
 const VEHICLE_ID = '33333333-3333-4333-8333-333333333333';
+
+describe('generateApplicationReferenceNumber', () => {
+  it('uses the project-defined MPWT-YYMMDD-XXXXXX format in Cambodia time', () => {
+    expect(
+      generateApplicationReferenceNumber(new Date('2026-09-07T17:30:00.000Z')),
+    ).toMatch(/^MPWT-260908-[A-F0-9]{6}$/);
+  });
+});
 
 describe('ApplicationWorkflowService', () => {
   it('creates a draft and its initial history row in one transaction', async () => {
@@ -136,15 +148,9 @@ describe('ApplicationWorkflowService', () => {
     });
   });
 
-  it.each([
-    [31, ApiErrorCode.VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL],
-    [30, undefined],
-    [1, undefined],
-    [0, undefined],
-    [-1, undefined],
-  ])(
-    'applies the Cambodia-local renewal boundary at %i days until expiry',
-    async (daysUntilExpiry, expectedErrorCode) => {
+  it.each([31, 30, 1, 0, -1])(
+    'creates a draft regardless of %i days until inspection expiry',
+    async (daysUntilExpiry) => {
       const fixture = createFixture();
       fixture.manager.query.mockResolvedValue([{ daysUntilExpiry }]);
       const service = new ApplicationWorkflowService(
@@ -152,26 +158,12 @@ describe('ApplicationWorkflowService', () => {
         preferredSchedulingStub() as never,
       );
 
-      if (expectedErrorCode !== undefined) {
-        await expect(
-          service.createDraft(CITIZEN_ID, VEHICLE_ID),
-        ).rejects.toMatchObject({
-          code: expectedErrorCode,
-          status: HttpStatus.CONFLICT,
-        });
-        expect(fixture.applications.create).not.toHaveBeenCalled();
-        return;
-      }
-
       await expect(
         service.createDraft(CITIZEN_ID, VEHICLE_ID),
       ).resolves.toMatchObject({
         status: ApplicationStatus.DRAFT,
       });
-      expect(fixture.manager.query).toHaveBeenCalledWith(
-        expect.stringContaining('Asia/Phnom_Penh'),
-        ['2027-01-01'],
-      );
+      expect(fixture.manager.query).not.toHaveBeenCalled();
     },
   );
 
@@ -202,10 +194,14 @@ describe('ApplicationWorkflowService', () => {
     );
   });
 
-  it('does not treat EXPIRED as an unfinished application', () => {
-    expect(UNFINISHED_APPLICATION_STATUSES).not.toContain(
-      ApplicationStatus.EXPIRED,
-    );
+  it.each([
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.INSPECTION_FAILED,
+    ApplicationStatus.REJECTED,
+    ApplicationStatus.CANCELLED,
+    ApplicationStatus.EXPIRED,
+  ])('does not treat terminal status %s as unfinished', (status) => {
+    expect(UNFINISHED_APPLICATION_STATUSES).not.toContain(status);
   });
 
   it('propagates a history-insertion failure so the transaction rolls back', async () => {
@@ -360,6 +356,17 @@ describe('ApplicationWorkflowService.submit', () => {
     expect(fixture.application).not.toHaveProperty('reservedCount');
   });
 
+  it('reprices the pending draft invoice at the submission instant', async () => {
+    const fixture = createSubmitFixture();
+
+    await fixture.service.submit(CITIZEN_ID, 'application-id');
+
+    expect(
+      fixture.paymentsService.finalizeDraftInvoiceForSubmission,
+    ).toHaveBeenCalledWith(fixture.manager, fixture.application);
+    expect(fixture.application.submittedAt).toBeInstanceOf(Date);
+  });
+
   it('requires a pending pay-at-station invoice before submission', async () => {
     const fixture = createSubmitFixture();
     fixture.payments.findOne.mockResolvedValue(null);
@@ -402,8 +409,8 @@ describe('ApplicationWorkflowService.submit', () => {
       lock: { mode: 'pessimistic_write' },
     });
     expect(result.status).toBe(ApplicationStatus.SUBMITTED);
-    expect(result.referenceNumber).toMatch(/^VIR-\d{8}-[A-F0-9]{12}$/);
-    expect(result.referenceNumber).toHaveLength(25);
+    expect(result.referenceNumber).toMatch(/^MPWT-\d{6}-[A-F0-9]{6}$/);
+    expect(result.referenceNumber).toHaveLength(18);
     expect(fixture.application.submittedAt).toBeInstanceOf(Date);
     expect(fixture.application.applicantSnapshot).toEqual({
       userId: CITIZEN_ID,
@@ -547,9 +554,9 @@ describe('ApplicationWorkflowService.submit', () => {
     const result = await fixture.service.submit(CITIZEN_ID, 'application-id');
 
     expect(fixture.dataSource.transaction).toHaveBeenCalledTimes(2);
-    expect(firstReferenceNumber).toMatch(/^VIR-\d{8}-[A-F0-9]{12}$/);
+    expect(firstReferenceNumber).toMatch(/^MPWT-\d{6}-[A-F0-9]{6}$/);
     expect(result.status).toBe(ApplicationStatus.SUBMITTED);
-    expect(result.referenceNumber).toMatch(/^VIR-\d{8}-[A-F0-9]{12}$/);
+    expect(result.referenceNumber).toMatch(/^MPWT-\d{6}-[A-F0-9]{6}$/);
     expect(result.referenceNumber).not.toBe(firstReferenceNumber);
   });
 
@@ -572,7 +579,7 @@ describe('ApplicationWorkflowService.submit', () => {
 
     expect(fixture.dataSource.transaction).toHaveBeenCalledTimes(3);
     expect(result.status).toBe(ApplicationStatus.SUBMITTED);
-    expect(result.referenceNumber).toMatch(/^VIR-\d{8}-[A-F0-9]{12}$/);
+    expect(result.referenceNumber).toMatch(/^MPWT-\d{6}-[A-F0-9]{6}$/);
   });
 
   it('returns a safe error after three exact reference collisions', async () => {
@@ -920,8 +927,6 @@ describe('ApplicationWorkflowService.submit', () => {
     it.each([
       ApplicationStatus.DRAFT,
       ApplicationStatus.SUBMITTED,
-      ApplicationStatus.CORRECTION_REQUIRED,
-      ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
     ])(
       'cancels a %s application in one transaction',
       async (originalStatus) => {
@@ -994,6 +999,63 @@ describe('ApplicationWorkflowService.submit', () => {
       );
     });
 
+    it('rejects submitted cancellation after payment confirmation', async () => {
+      const fixture = createCancelFixture(ApplicationStatus.SUBMITTED);
+      fixture.payments.findOne.mockResolvedValue({
+        applicationId: 'application-id',
+        status: PaymentStatus.CONFIRMED,
+      });
+
+      await expect(
+        fixture.service.cancel(CITIZEN_ID, 'application-id'),
+      ).rejects.toMatchObject({
+        code: ApiErrorCode.APPLICATION_CANNOT_CANCEL,
+        status: HttpStatus.CONFLICT,
+      });
+      expect(fixture.history.save).not.toHaveBeenCalled();
+    });
+
+    it('allows submitted cancellation when payment is not confirmed', async () => {
+      const fixture = createCancelFixture(ApplicationStatus.SUBMITTED);
+      fixture.payments.findOne.mockResolvedValue({
+        applicationId: 'application-id',
+        status: PaymentStatus.REJECTED,
+      });
+
+      await expect(
+        fixture.service.cancel(CITIZEN_ID, 'application-id'),
+      ).resolves.toMatchObject({ status: ApplicationStatus.CANCELLED });
+    });
+
+    it('allows submitted cancellation when no payment exists', async () => {
+      const fixture = createCancelFixture(ApplicationStatus.SUBMITTED);
+      fixture.payments.findOne.mockResolvedValue(null);
+
+      await expect(
+        fixture.service.cancel(CITIZEN_ID, 'application-id'),
+      ).resolves.toMatchObject({ status: ApplicationStatus.CANCELLED });
+    });
+
+    it.each([
+      ['an inspection exists', 'inspections'],
+      ['a sticker exists', 'stickers'],
+      ['a certificate exists', 'certificates'],
+    ] as const)(
+      'rejects submitted cancellation when %s',
+      async (_label, repository) => {
+        const fixture = createCancelFixture(ApplicationStatus.SUBMITTED);
+        fixture[repository].exists.mockResolvedValue(true);
+
+        await expect(
+          fixture.service.cancel(CITIZEN_ID, 'application-id'),
+        ).rejects.toMatchObject({
+          code: ApiErrorCode.APPLICATION_CANNOT_CANCEL,
+          status: HttpStatus.CONFLICT,
+        });
+        expect(fixture.history.save).not.toHaveBeenCalled();
+      },
+    );
+
     it('rejects an application that does not exist', async () => {
       const fixture = createCancelFixture(ApplicationStatus.DRAFT);
       fixture.applications.findOne.mockResolvedValue(null);
@@ -1023,9 +1085,9 @@ describe('ApplicationWorkflowService.submit', () => {
 
     it.each([
       ApplicationStatus.UNDER_REVIEW,
+      ApplicationStatus.CORRECTION_REQUIRED,
       ApplicationStatus.APPROVED,
       ApplicationStatus.REJECTED,
-      ApplicationStatus.REINSPECTION_REQUIRED,
       ApplicationStatus.CANCELLED,
       ApplicationStatus.COMPLETED,
     ])(
@@ -1108,6 +1170,9 @@ function createSubmitFixture(
       status: PaymentStatus.PENDING,
     }),
   };
+  const inspections = { exists: jest.fn().mockResolvedValue(false) };
+  const stickers = { exists: jest.fn().mockResolvedValue(false) };
+  const certificates = { exists: jest.fn().mockResolvedValue(false) };
   const manager = {
     getRepository: jest.fn((entity) => {
       if (entity === RenewalApplication) return applications;
@@ -1116,6 +1181,9 @@ function createSubmitFixture(
       if (entity === CitizenProfile) return profiles;
       if (entity === Vehicle) return vehicles;
       if (entity === Payment) return payments;
+      if (entity === Inspection) return inspections;
+      if (entity === Sticker) return stickers;
+      if (entity === TechnicalInspectionCertificate) return certificates;
       if (entity === RenewalApplicationStatusHistory) return history;
       throw new Error('Unexpected repository');
     }),
@@ -1128,20 +1196,29 @@ function createSubmitFixture(
     ),
   };
   const preferredScheduling = preferredSchedulingStub();
+  const paymentsService = {
+    finalizeDraftInvoiceForSubmission: jest.fn().mockResolvedValue(undefined),
+  };
 
   return {
     application,
     applications,
     dataSource,
     documents,
+    payments,
+    inspections,
+    stickers,
+    certificates,
     history,
     manager,
     profiles,
     payments,
+    paymentsService,
     preferredScheduling,
     service: new ApplicationWorkflowService(
       dataSource as unknown as DataSource,
       preferredScheduling as never,
+      paymentsService as never,
     ),
     vehicle,
   };

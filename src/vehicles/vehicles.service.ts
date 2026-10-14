@@ -7,7 +7,6 @@ import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
 import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
-import type { SortOrder } from '../common/pagination/base-pagination-query.dto';
 import {
   type CreateVehicleRequestDto,
   type ListAdminVehiclesQueryDto,
@@ -34,6 +33,23 @@ const REGISTRATION_UNIQUE_CONSTRAINT = 'UQ_2abf18fae2b9477bc1927675311';
 const CHASSIS_UNIQUE_CONSTRAINT = 'UQ_90d5b70f93e2d5e4517020c2dff';
 const PROVINCE_PLATE_UNIQUE_INDEX = 'uq_vehicles_province_plate_identity';
 const PERSONALIZED_PLATE_UNIQUE_INDEX = 'uq_vehicles_personalized_plate_number';
+const ACTIVE_CARD_CYCLE_STATUSES = [
+  'DRAFT',
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'CORRECTION_REQUIRED',
+  'APPROVED',
+] as const;
+const CITIZEN_ACTION_REQUIRED_STATUSES = [
+  'CORRECTION_REQUIRED',
+  'DRAFT',
+] as const;
+const ACTIVE_PROCESSING_STATUSES = [
+  'SUBMITTED',
+  'UNDER_REVIEW',
+  'APPROVED',
+] as const;
+const UNSUCCESSFUL_CYCLE_STATUSES = ['INSPECTION_FAILED', 'REJECTED'] as const;
 
 @Injectable()
 export class VehiclesService {
@@ -100,13 +116,26 @@ export class VehiclesService {
         const yearParameter = `searchYear${index}`;
 
         query.andWhere(
-          `(vehicle.plateNumber ILIKE :${textParameter} OR vehicle.registrationNumber ILIKE :${textParameter} OR vehicle.make ILIKE :${textParameter} OR vehicle.model ILIKE :${textParameter} OR CAST(vehicle.manufactureYear AS TEXT) = :${yearParameter})`,
+          `(vehicle.plateNumber ILIKE :${textParameter} OR vehicle.plateProvince ILIKE :${textParameter} OR CONCAT_WS(' ', vehicle.plateProvince, vehicle.plateNumber) ILIKE :${textParameter} OR vehicle.registrationNumber ILIKE :${textParameter} OR vehicle.make ILIKE :${textParameter} OR vehicle.model ILIKE :${textParameter} OR CAST(vehicle.manufactureYear AS TEXT) = :${yearParameter} OR ${this.currentCardCycleIdentifierSearch(textParameter)})`,
           {
             [textParameter]: `%${token}%`,
             [yearParameter]: token,
           },
         );
       });
+    }
+
+    if (input.inspectionStatus !== undefined) {
+      const today = `(now() AT TIME ZONE 'Asia/Phnom_Penh')::date`;
+      if (input.inspectionStatus === 'expired') {
+        query.andWhere(`vehicle.inspectionExpiryDate <= ${today}`);
+      } else if (input.inspectionStatus === 'expiring') {
+        query.andWhere(
+          `vehicle.inspectionExpiryDate > ${today} AND vehicle.inspectionExpiryDate <= ${today} + 30`,
+        );
+      } else {
+        query.andWhere(`vehicle.inspectionExpiryDate > ${today} + 30`);
+      }
     }
 
     if (input.registrationNumber !== undefined) {
@@ -147,11 +176,7 @@ export class VehiclesService {
       });
     }
 
-    return this.executeList(
-      query,
-      input,
-      this.citizenSortTiebreak(input.sortBy),
-    );
+    return this.executeCitizenVehicleList(query, input);
   }
 
   async getCitizenVehicle(
@@ -382,23 +407,111 @@ export class VehiclesService {
     return search.trim().split(/\s+/).filter(Boolean);
   }
 
+  private currentCardCycleIdentifierSearch(textParameter: string): string {
+    const activeStatuses = ACTIVE_CARD_CYCLE_STATUSES.map(
+      (status) => `'${status}'`,
+    ).join(', ');
+
+    return `EXISTS (
+      SELECT 1
+      FROM (
+        SELECT application.id
+        FROM renewal_applications application
+        WHERE application.vehicle_id = vehicle.id
+          AND application.citizen_id = :citizenId
+        ORDER BY
+          CASE WHEN application.status IN (${activeStatuses}) THEN 0 ELSE 1 END ASC,
+          application.updated_at DESC
+        LIMIT 1
+      ) current_cycle
+      LEFT JOIN payments current_payment ON current_payment.application_id = current_cycle.id
+      LEFT JOIN technical_inspection_certificates current_certificate ON current_certificate.application_id = current_cycle.id
+      WHERE current_payment.invoice_number ILIKE :${textParameter}
+         OR current_certificate.certificate_number ILIKE :${textParameter}
+    )`;
+  }
+
+  private currentCardCycleColumn(
+    column: 'id' | 'status' | 'preferred_inspection_date' | 'updated_at',
+  ): string {
+    const activeStatuses = this.sqlStrings(ACTIVE_CARD_CYCLE_STATUSES);
+    return `(SELECT application.${column}
+      FROM renewal_applications application
+      WHERE application.vehicle_id = vehicle.id
+        AND application.citizen_id = :citizenId
+      ORDER BY
+        CASE WHEN application.status IN (${activeStatuses}) THEN 0 ELSE 1 END ASC,
+        application.updated_at DESC
+      LIMIT 1)`;
+  }
+
+  private sqlStrings(values: readonly string[]): string {
+    return values.map((value) => `'${value}'`).join(', ');
+  }
+
+  private async executeCitizenVehicleList(
+    query: ReturnType<VehiclesService['vehicleQuery']>,
+    input: ListCitizenVehiclesQueryDto,
+  ): Promise<VehicleListResult> {
+    const currentCycleId = this.currentCardCycleColumn('id');
+    const currentStatus = this.currentCardCycleColumn('status');
+    const currentPaymentStatus = `(SELECT payment.status
+      FROM payments payment
+      WHERE payment.application_id = ${currentCycleId}
+      LIMIT 1)`;
+    const cardPreferredInspectionDate = this.currentCardCycleColumn(
+      'preferred_inspection_date',
+    );
+    const today = `(now() AT TIME ZONE 'Asia/Phnom_Penh')::date`;
+    const preferredInspectionDate = `CASE
+      WHEN ${cardPreferredInspectionDate} >= ${today} THEN ${cardPreferredInspectionDate}
+      ELSE NULL
+    END`;
+    const relevantUpdatedAt = `COALESCE(${this.currentCardCycleColumn('updated_at')}, vehicle.updated_at)`;
+    const priority = `CASE
+      WHEN ${currentStatus} IN (${this.sqlStrings(CITIZEN_ACTION_REQUIRED_STATUSES)})
+        OR ${currentPaymentStatus} IN ('REJECTED') THEN 1
+      WHEN ${currentStatus} IN ('CANCELLED', 'EXPIRED') THEN 6
+      WHEN ${currentStatus} IN (${this.sqlStrings(UNSUCCESSFUL_CYCLE_STATUSES)}) THEN 4
+      WHEN ${currentStatus} IN (${this.sqlStrings(ACTIVE_PROCESSING_STATUSES)}) THEN 3
+      WHEN ${currentStatus} IS NULL OR ${currentStatus} = 'COMPLETED' THEN
+        CASE WHEN vehicle.inspection_expiry_date <= ${today} + 30 THEN 2 ELSE 5 END
+      ELSE 5
+    END`;
+
+    const [vehicles, total] = await query
+      .addSelect(priority, 'citizen_vehicle_priority')
+      .addSelect(
+        preferredInspectionDate,
+        'citizen_vehicle_upcoming_inspection_date',
+      )
+      .addSelect(relevantUpdatedAt, 'citizen_vehicle_relevant_updated_at')
+      .orderBy('citizen_vehicle_priority', 'ASC')
+      .addOrderBy(
+        'citizen_vehicle_upcoming_inspection_date',
+        'ASC',
+        'NULLS LAST',
+      )
+      .addOrderBy('citizen_vehicle_relevant_updated_at', 'DESC')
+      .addOrderBy('vehicle.id', 'ASC')
+      .skip((input.page - 1) * input.limit)
+      .take(input.limit)
+      .getManyAndCount();
+
+    return {
+      data: vehicles.map(mapVehicle),
+      meta: createPaginationMeta(input.page, input.limit, total),
+    };
+  }
+
   private async executeList(
     query: ReturnType<VehiclesService['vehicleQuery']>,
     input: ListCitizenVehiclesQueryDto | ListAdminVehiclesQueryDto,
-    tiebreak?: VehicleOrdering,
   ): Promise<VehicleListResult> {
     const orderedQuery = query.orderBy(
       `vehicle.${this.vehicleSortColumn(input.sortBy)}`,
       input.sortOrder.toUpperCase() as 'ASC' | 'DESC',
     );
-
-    if (tiebreak !== undefined) {
-      orderedQuery.addOrderBy(
-        `vehicle.${tiebreak.column}`,
-        tiebreak.order.toUpperCase() as 'ASC' | 'DESC',
-      );
-    }
-
     const [vehicles, total] = await orderedQuery
       .skip((input.page - 1) * input.limit)
       .take(input.limit)
@@ -508,14 +621,6 @@ export class VehiclesService {
     return sortBy;
   }
 
-  private citizenSortTiebreak(
-    sortBy: VehicleSortField,
-  ): VehicleOrdering | undefined {
-    return sortBy === 'inspectionExpiryDate'
-      ? { column: 'updatedAt', order: 'desc' }
-      : undefined;
-  }
-
   private uniqueConflictFor(error: unknown): DomainException | null {
     const databaseError = this.databaseError(error);
 
@@ -589,9 +694,4 @@ export class VehiclesService {
 interface VehicleListResult {
   data: VehicleResponse[];
   meta: ReturnType<typeof createPaginationMeta>;
-}
-
-interface VehicleOrdering {
-  column: VehicleSortField;
-  order: SortOrder;
 }

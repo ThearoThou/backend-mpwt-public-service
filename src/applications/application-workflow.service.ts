@@ -21,7 +21,10 @@ import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferr
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentMethod } from '../payments/enums/payment-method.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
-import { inspectionPolicy } from '../config/inspection-policy';
+import { Inspection } from '../inspections/entities/inspection.entity';
+import { Sticker } from '../stickers/entities/sticker.entity';
+import { TechnicalInspectionCertificate } from '../certificates/entities/technical-inspection-certificate.entity';
+import { PaymentsService } from '../payments/payments.service';
 import { expireInitialApplicationIfDue } from './initial-application-expiry';
 import { createApplicationVehicleSnapshot } from './application-vehicle-snapshot';
 
@@ -30,9 +33,7 @@ export const UNFINISHED_APPLICATION_STATUSES = [
   ApplicationStatus.SUBMITTED,
   ApplicationStatus.UNDER_REVIEW,
   ApplicationStatus.CORRECTION_REQUIRED,
-  ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
   ApplicationStatus.APPROVED,
-  ApplicationStatus.REINSPECTION_REQUIRED,
 ] as const;
 
 const UNFINISHED_APPLICATION_UNIQUE_INDEX =
@@ -44,6 +45,7 @@ export class ApplicationWorkflowService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly preferredScheduling: CitizenPreferredSchedulingService,
+    private readonly paymentsService?: PaymentsService,
   ) {}
 
   async createDraft(
@@ -124,8 +126,6 @@ export class ApplicationWorkflowService {
         ![
           ApplicationStatus.DRAFT,
           ApplicationStatus.SUBMITTED,
-          ApplicationStatus.CORRECTION_REQUIRED,
-          ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
         ].includes(a.status)
       )
         throw new DomainException(
@@ -135,6 +135,32 @@ export class ApplicationWorkflowService {
         );
       if (await expireInitialApplicationIfDue(m, a, new Date())) {
         return INITIAL_APPLICATION_EXPIRED;
+      }
+      if (a.status === ApplicationStatus.SUBMITTED) {
+        const [payment, inspectionExists, stickerExists, certificateExists] =
+          await Promise.all([
+            m
+              .getRepository(Payment)
+              .findOne({ where: { applicationId: a.id } }),
+            m
+              .getRepository(Inspection)
+              .exists({ where: { applicationId: a.id } }),
+            m.getRepository(Sticker).exists({ where: { applicationId: a.id } }),
+            m
+              .getRepository(TechnicalInspectionCertificate)
+              .exists({ where: { applicationId: a.id } }),
+          ]);
+        if (
+          payment?.status === PaymentStatus.CONFIRMED ||
+          inspectionExists ||
+          stickerExists ||
+          certificateExists
+        )
+          throw new DomainException(
+            ApiErrorCode.APPLICATION_CANNOT_CANCEL,
+            HttpStatus.CONFLICT,
+            'Application cannot be cancelled',
+          );
       }
       const p = a.status,
         now = new Date();
@@ -192,7 +218,7 @@ export class ApplicationWorkflowService {
       a.preferredInspectionStationId,
     );
     await this.assertStepFourPayment(m, a.id);
-    a.referenceNumber = this.ref(now);
+    a.referenceNumber = generateApplicationReferenceNumber(now);
     a.applicantSnapshot = {
       userId: u.id,
       nameKh: p.nameKh,
@@ -204,6 +230,7 @@ export class ApplicationWorkflowService {
     };
     a.vehicleSnapshot = createApplicationVehicleSnapshot(v);
     a.submittedAt = now;
+    await this.paymentsService?.finalizeDraftInvoiceForSubmission(m, a);
     a.status = ApplicationStatus.SUBMITTED;
     await m.getRepository(RenewalApplication).save(a);
     await this.history(
@@ -368,17 +395,6 @@ export class ApplicationWorkflowService {
       }),
     );
   }
-  private ref(now: Date) {
-    const d = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Phnom_Penh',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    })
-      .format(now)
-      .replaceAll('-', '');
-    return `VIR-${d}-${randomBytes(6).toString('hex').toUpperCase()}`;
-  }
   private referenceConflict(e: unknown) {
     const x =
       (
@@ -436,8 +452,6 @@ export class ApplicationWorkflowService {
       throw this.unfinishedApplicationExists();
     }
 
-    await this.assertRenewalEligibility(manager, vehicle.inspectionExpiryDate);
-
     const application = await applications.save(
       applications.create({
         ...(applicationId === undefined ? {} : { id: applicationId }),
@@ -449,6 +463,7 @@ export class ApplicationWorkflowService {
         vehicleSnapshot: null,
         preferredInspectionDate: null,
         preferredInspectionStationId: null,
+        optionalOversizeServiceSelected: false,
         submittedAt: null,
       }),
     );
@@ -500,35 +515,16 @@ export class ApplicationWorkflowService {
       vehicle.classificationVerifiedBy !== null
     );
   }
+}
 
-  private async assertRenewalEligibility(
-    manager: EntityManager,
-    inspectionExpiryDate: string,
-  ): Promise<void> {
-    const [eligibility] = await manager.query<{ daysUntilExpiry: number }[]>(
-      `
-        SELECT
-          ($1::date - (now() AT TIME ZONE 'Asia/Phnom_Penh')::date)::integer
-            AS "daysUntilExpiry"
-      `,
-      [inspectionExpiryDate],
-    );
-
-    if (eligibility === undefined) {
-      throw new Error(
-        'Renewal eligibility calculation did not return a result',
-      );
-    }
-
-    if (
-      eligibility.daysUntilExpiry >
-      inspectionPolicy.renewalEligibility.advanceWindowDays
-    ) {
-      throw new DomainException(
-        ApiErrorCode.VEHICLE_NOT_YET_ELIGIBLE_FOR_RENEWAL,
-        HttpStatus.CONFLICT,
-        'Vehicle is not yet eligible for renewal',
-      );
-    }
-  }
+export function generateApplicationReferenceNumber(now: Date): string {
+  const date = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Phnom_Penh',
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(now)
+    .replaceAll('-', '');
+  return `MPWT-${date}-${randomBytes(3).toString('hex').toUpperCase()}`;
 }

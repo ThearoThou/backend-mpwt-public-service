@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Query, UseGuards } from '@nestjs/common';
 
 import { AccessTokenGuard } from '../common/auth/access-token.guard';
 import { CurrentActor } from '../common/auth/current-actor.decorator';
@@ -26,5 +26,13 @@ export class CitizenInspectionsController {
       input,
     );
     return createPaginatedResponse(result.data, result.meta);
+  }
+
+  @Get(':inspectionId')
+  async detail(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('inspectionId', new ParseUUIDPipe({ version: '4' })) inspectionId: string,
+  ) {
+    return this.reads.getCitizenInspectionDetail(actor.userId, inspectionId);
   }
 }

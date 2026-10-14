@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Get,
   Param,
@@ -23,7 +22,6 @@ import {
   CertificateReadsService,
   type CertificatePdfDownload,
 } from './certificate-reads.service';
-import { CertificateNumberDto } from './dto/certificate-number.dto';
 
 @Controller('admin/applications')
 @UseGuards(AccessTokenGuard, RolesGuard)
@@ -39,10 +37,9 @@ export class AdminCertificatesController {
     @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
     applicationId: string,
     @CurrentActor() actor: AuthenticatedActor,
-    @Body() input: CertificateNumberDto,
   ) {
     return createDataResponse(
-      await this.issuance.issue(applicationId, actor.userId, input),
+      await this.issuance.issue(applicationId, actor.userId),
     );
   }
 

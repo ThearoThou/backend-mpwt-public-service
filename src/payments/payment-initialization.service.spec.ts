@@ -31,13 +31,11 @@ const CITIZEN_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_CITIZEN_ID = '22222222-2222-4222-8222-222222222222';
 
 describe('PaymentsService payment initialization', () => {
-  it('generates Cambodia-local invoice dates with six numeric digits, including leading zeroes', () => {
+  it('generates the shared 90L invoice/inspection-sheet number', () => {
     expect(generateInvoiceNumber('2026-08-12', () => 4821)).toBe(
-      'INV-20260812-004821',
+      '90L2608124821',
     );
-    expect(generateInvoiceNumber('2026-08-12', () => 7)).toMatch(
-      /^INV-\d{8}-\d{6}$/,
-    );
+    expect(generateInvoiceNumber('2026-08-12', () => 7)).toMatch(/^90L\d{10}$/);
   });
 
   it('locks, snapshots authoritative values, stores one invoice, and creates a pending payment', async () => {
@@ -78,7 +76,7 @@ describe('PaymentsService payment initialization', () => {
         lateFee: '0.00',
         totalAmount: '25000.00',
         currency: 'KHR',
-        invoiceNumber: expect.stringMatching(/^INV-20260812-\d{6}$/) as unknown,
+        invoiceNumber: expect.stringMatching(/^90L260812\d{4}$/) as unknown,
       }),
     );
     expect(fixture.files.savePaymentArtifact).toHaveBeenCalledWith(
@@ -213,6 +211,9 @@ describe('PaymentsService payment initialization', () => {
       lateFee: '0.00',
       totalAmount: '25000.00',
       currency: 'KHR',
+      optionalServiceEligible: false,
+      optionalServiceSelected: false,
+      optionalServiceFeeKhr: '0.00',
     });
     expect(fixture.query).toHaveBeenCalledWith(
       expect.stringContaining('Asia/Phnom_Penh'),
@@ -464,9 +465,10 @@ describe('PaymentsService payment initialization', () => {
       vehicle: {
         registrationNumber: 'REG-001',
         chassisNumber: 'CHASSIS-001',
+        engineNumber: 'ENGINE-001',
       },
     });
-    expect(result.invoiceNumber).toMatch(/^INV-\d{8}-\d{6}$/);
+    expect(result.invoiceNumber).toMatch(/^90L\d{10}$/);
     expect(draft.status).toBe(ApplicationStatus.DRAFT);
   });
 
@@ -509,7 +511,7 @@ describe('PaymentsService payment initialization', () => {
     });
   });
 
-  it('restores an existing draft invoice without creating another payment or invoice number', async () => {
+  it('refreshes an existing draft invoice without creating another payment or invoice number', async () => {
     const fixture = createFixture();
     fixture.applicationRepository.findOne.mockResolvedValue(
       application(ApplicationStatus.DRAFT, CITIZEN_ID),
@@ -523,8 +525,10 @@ describe('PaymentsService payment initialization', () => {
       id: PAYMENT_ID,
       invoiceNumber: existing.invoiceNumber,
     });
-    expect(fixture.paymentPdf.generateInvoice).not.toHaveBeenCalled();
-    expect(fixture.paymentRepository.save).not.toHaveBeenCalled();
+    expect(fixture.paymentPdf.generateInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ invoiceNumber: existing.invoiceNumber }),
+    );
+    expect(fixture.paymentRepository.save).toHaveBeenCalledWith(existing);
     expect(fixture.appointmentRepository.find).not.toHaveBeenCalled();
   });
 
@@ -861,6 +865,7 @@ function vehicle(overrides: Partial<Vehicle> = {}): Vehicle {
     model: 'RAV4',
     manufactureYear: 2022,
     chassisNumber: 'CHASSIS-001',
+    engineNumber: 'ENGINE-001',
     inspectionExpiryDate: '2026-08-01',
     inspectionCategoryId: 'category-id',
     vehicleClass: VehicleClass.LIGHT,

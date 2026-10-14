@@ -360,6 +360,10 @@ class VehiclePaginationQueryDto extends BasePaginationQueryDto {
 
 export class ListCitizenVehiclesQueryDto extends VehiclePaginationQueryDto {
   @IsOptional()
+  @IsIn(['valid', 'expiring', 'expired'])
+  inspectionStatus?: 'valid' | 'expiring' | 'expired';
+
+  @IsOptional()
   @IsString()
   @MaxLength(100)
   @Transform(trimString)

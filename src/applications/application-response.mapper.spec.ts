@@ -7,6 +7,7 @@ import {
 import { mapRenewalApplicationStatusHistory } from './application-status-history-response.mapper';
 import { InspectionResult } from '../inspections/enums/inspection-result.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { getInitialApplicationExpiryDate } from './initial-application-expiry';
 
 describe('application response mappers', () => {
   it('maps a draft without a reference number or submission timestamp', () => {
@@ -41,6 +42,7 @@ describe('application response mappers', () => {
         preferredInspectionStationId: null,
         preferredInspectionDate: null,
         submittedAt: null,
+        applicationExpiryDate: null,
         status: ApplicationStatus.DRAFT,
       }),
     );
@@ -93,6 +95,9 @@ describe('application response mappers', () => {
     } as never);
     expect(mapped.referenceNumber).toMatch(/^VIR-/);
     expect(mapped.submittedAt).toBeInstanceOf(Date);
+    expect(mapped.applicationExpiryDate).toBe(
+      getInitialApplicationExpiryDate(mapped.submittedAt as Date),
+    );
     expect(mapped.currentRejectionReason).toBe(
       'The inspection result was rejected.',
     );
@@ -189,6 +194,7 @@ describe('application response mappers', () => {
       vehicleType: 'CAR',
       vehicleClass: 'LIGHT',
       inspectionCategoryId: 'category-id',
+      inspectionCategory: null,
       make: 'Toyota',
       model: 'Prius',
       manufactureYear: 2020,
@@ -217,6 +223,42 @@ describe('application response mappers', () => {
       heightMm: null,
     });
     expect(mapped.vehicleSnapshot).not.toHaveProperty('secret');
+  });
+
+  it('maps the application-cycle category rather than any live vehicle category', () => {
+    const category = {
+      id: 'category-1526',
+      code: 'MPWT0011526',
+      nameKh: 'ប្រភេទប្រវត្តិសាស្ត្រ',
+      nameEn: 'Family passenger vehicle, 5–9 seats, non-commercial',
+    };
+    const mapped = mapCitizenApplicationDetail(
+      {
+        id: 'application-id',
+        citizenId: 'citizen-id',
+        vehicleId: 'vehicle-id',
+        status: ApplicationStatus.SUBMITTED,
+        referenceNumber: null,
+        currentCorrectionReason: null,
+        currentRejectionReason: null,
+        preferredInspectionStationId: null,
+        preferredInspectionDate: null,
+        submittedAt: null,
+        reviewStartedAt: null,
+        readyForInspectionAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        cancellationReason: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        vehicleSnapshot: { inspectionCategoryId: 'category-1526' },
+        vehicle: { inspectionCategoryId: 'different-current-category' },
+      } as never,
+      category,
+    );
+
+    expect(mapped.vehicleSnapshot?.inspectionCategory).toEqual(category);
+    expect(mapped.vehicleSnapshot?.inspectionCategoryId).toBe('category-1526');
   });
 
   it('keeps a draft vehicle snapshot null and maps nullable list summaries', () => {
@@ -293,8 +335,13 @@ describe('application response mappers', () => {
       },
       payment: {
         status: PaymentStatus.CONFIRMED,
+        invoiceNumber: '90L-20260915-001',
         totalAmount: '25000.00',
         currency: 'KHR',
+      },
+      technicalInspectionCertificate: {
+        certificateNumber: 'CERT-2026-001',
+        issuedAt: new Date('2026-09-15T00:00:00.000Z'),
       },
       latestInspection: { result: InspectionResult.PASS },
     } as never);
@@ -303,9 +350,11 @@ describe('application response mappers', () => {
       vehicle: { registrationNumber: 'REG-001', manufactureYear: 2020 },
       payment: {
         status: PaymentStatus.CONFIRMED,
+        transactionNumber: '90L-20260915-001',
         totalAmount: '25000.00',
         currency: 'KHR',
       },
+      certificate: { certificateNumber: 'CERT-2026-001' },
       inspection: { result: InspectionResult.PASS },
     });
   });

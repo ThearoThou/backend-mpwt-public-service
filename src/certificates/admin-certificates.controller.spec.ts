@@ -9,7 +9,7 @@ import { UserRole } from '../users/enums/user-role.enum';
 import { AdminCertificatesController } from './admin-certificates.controller';
 
 describe('AdminCertificatesController', () => {
-  it('is ADMIN-only and delegates the official entered number and actor', async () => {
+  it('is ADMIN-only and delegates system-number issuance for the actor', async () => {
     const response = {
       issued: true,
       certificateNumber: 'MPWT-001',
@@ -32,16 +32,10 @@ describe('AdminCertificatesController', () => {
       role: UserRole.ADMIN,
       sessionId: 'session-id',
     };
-    const input = { certificateNumber: 'MPWT-001' };
-
-    await expect(
-      controller.issue('application-id', actor, input),
-    ).resolves.toEqual({ data: response });
-    expect(issuance.issue).toHaveBeenCalledWith(
-      'application-id',
-      'admin-id',
-      input,
-    );
+    await expect(controller.issue('application-id', actor)).resolves.toEqual({
+      data: response,
+    });
+    expect(issuance.issue).toHaveBeenCalledWith('application-id', 'admin-id');
     expect(Reflect.getMetadata(ROLES_KEY, AdminCertificatesController)).toEqual(
       [UserRole.ADMIN],
     );

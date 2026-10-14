@@ -1,4 +1,5 @@
 import {
+  IsEnum,
   IsIn,
   IsOptional,
   IsString,
@@ -11,6 +12,7 @@ import {
 import { BasePaginationQueryDto } from '../../common/pagination/base-pagination-query.dto';
 import type { SortOrder } from '../../common/pagination/base-pagination-query.dto';
 import { isCalendarDateOnly } from '../../vehicles/vehicle-date';
+import { InspectionResult } from '../enums/inspection-result.enum';
 
 export const ADMIN_INSPECTION_QUEUE_VIEWS = [
   'PENDING',
@@ -45,6 +47,22 @@ export class AdminInspectionQueueQueryDto extends BasePaginationQueryDto {
 
 export class CitizenInspectionHistoryQueryDto extends BasePaginationQueryDto {
   @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
   @IsUUID('4')
   vehicleId?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  applicationId?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  inspectionId?: string;
+
+  @IsOptional()
+  @IsEnum(InspectionResult)
+  result?: InspectionResult;
 }

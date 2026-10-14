@@ -17,10 +17,7 @@ import { createDataResponse } from '../common/http/api-response';
 import type { ApiDataResponse } from '../common/http/api-contracts';
 import { UpdateCitizenProfileRequestDto } from './dto/user-request.dtos';
 import { UserRole } from './enums/user-role.enum';
-import type {
-  CitizenProfileResponse,
-  CurrentUserResponse,
-} from './user-response.mapper';
+import type { CurrentUserResponse } from './user-response.mapper';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -44,7 +41,7 @@ export class UsersController {
   async updateCurrentCitizenProfile(
     @CurrentActor() actor: AuthenticatedActor,
     @Body() input: UpdateCitizenProfileRequestDto,
-  ): Promise<ApiDataResponse<CitizenProfileResponse>> {
+  ): Promise<ApiDataResponse<CurrentUserResponse>> {
     return createDataResponse(
       await this.usersService.updateCurrentCitizenProfile(actor.userId, input),
     );

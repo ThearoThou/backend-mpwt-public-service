@@ -1,5 +1,6 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { DataSource, QueryFailedError, type EntityManager } from 'typeorm';
+import { randomInt } from 'node:crypto';
 
 import { ApplicationTimelineEvent } from '../activity/entities/application-timeline-event.entity';
 import { TimelineEventType } from '../activity/enums/timeline-event-type.enum';
@@ -16,6 +17,7 @@ import { InspectionResult } from '../inspections/enums/inspection-result.enum';
 import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
 import { Payment } from '../payments/entities/payment.entity';
 import { Sticker } from '../stickers/entities/sticker.entity';
+import { Vehicle } from '../vehicles/entities/vehicle.entity';
 import {
   CertificatePdfService,
   type CertificatePdfInput,
@@ -24,8 +26,8 @@ import {
   mapTechnicalInspectionCertificateResponse,
   type TechnicalInspectionCertificateResponse,
 } from './certificate-response.mapper';
-import type { CertificateNumberDto } from './dto/certificate-number.dto';
 import { TechnicalInspectionCertificate } from './entities/technical-inspection-certificate.entity';
+import type { CertificateNumberDto } from './dto/certificate-number.dto';
 
 const APPLICATION_EXPIRED = Symbol('APPLICATION_EXPIRED');
 export const TECHNICAL_CERTIFICATE_ISSUED_REASON =
@@ -44,9 +46,12 @@ export class CertificateIssuanceService {
   async issue(
     applicationId: string,
     adminUserId: string,
-    input: CertificateNumberDto,
+    legacyInput?: CertificateNumberDto,
   ): Promise<TechnicalInspectionCertificateResponse> {
-    const certificateNumber = input.certificateNumber.trim();
+    // Public issuance never supplies a number. The optional argument remains
+    // only for backward-compatible internal callers while they migrate.
+    const certificateNumber =
+      legacyInput?.certificateNumber.trim() ?? generateCertificateNumber();
     const artifact = { fileKey: null as string | null };
 
     try {
@@ -126,6 +131,17 @@ export class CertificateIssuanceService {
           throw this.notReady();
         }
         const inspection = primaryInspection as Inspection;
+        const vehicle = await manager.getRepository(Vehicle).findOne({
+          where: { id: application.vehicleId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (vehicle === null) {
+          throw new DomainException(
+            ApiErrorCode.VEHICLE_NOT_FOUND,
+            HttpStatus.NOT_FOUND,
+            'Vehicle not found',
+          );
+        }
         const pdfInput = this.pdfInput(
           application,
           inspection,
@@ -148,6 +164,12 @@ export class CertificateIssuanceService {
           artifactFileKey: artifact.fileKey,
         });
         await certificates.save(certificate);
+
+        vehicle.lastInspectionDate = cambodiaCalendarDate(
+          inspection.completedAt as Date,
+        );
+        vehicle.inspectionExpiryDate = inspection.validUntil as string;
+        await manager.getRepository(Vehicle).save(vehicle);
 
         application.status = ApplicationStatus.COMPLETED;
         application.completedAt = issuedAt;
@@ -340,6 +362,13 @@ export class CertificateIssuanceService {
   }
 }
 
+export function generateCertificateNumber(
+  nextNumber: () => number = () =>
+    randomInt(1_000_000_000_000, 10_000_000_000_000),
+): string {
+  return nextNumber().toString().padStart(13, '0');
+}
+
 function snapshotText(
   snapshot: RenewalApplication['vehicleSnapshot'],
   key: string,
@@ -354,4 +383,13 @@ function snapshotNumber(
 ): number | null {
   const value = snapshot?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function cambodiaCalendarDate(value: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Phnom_Penh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(value);
 }

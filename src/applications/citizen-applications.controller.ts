@@ -29,6 +29,7 @@ import {
   type RenewalApplicationResponse,
 } from './application-response.mapper';
 import type { RenewalApplicationStatusHistoryResponse } from './application-status-history-response.mapper';
+import type { CitizenApplicationTimelineEventResponse } from './application-timeline-event-response.mapper';
 import { ApplicationWorkflowService } from './application-workflow.service';
 import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
 import { RenewAgainService } from './renew-again.service';
@@ -195,6 +196,20 @@ export class CitizenApplicationsController {
     );
 
     return createPaginatedResponse(result.data, result.meta);
+  }
+
+  @Get(':applicationId/timeline-events')
+  async listTimelineEvents(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('applicationId', new ParseUUIDPipe({ version: '4' }))
+    applicationId: string,
+  ): Promise<ApiDataResponse<CitizenApplicationTimelineEventResponse[]>> {
+    return createDataResponse(
+      await this.applicationsService.listCitizenTimelineEvents(
+        actor.userId,
+        applicationId,
+      ),
+    );
   }
 
   @Get(':applicationId')

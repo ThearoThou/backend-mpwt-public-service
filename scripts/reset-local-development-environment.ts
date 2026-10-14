@@ -4,6 +4,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { relative, resolve, sep } from 'node:path';
 import type { DataSource } from 'typeorm';
+import { seedRealisticDevelopmentDataset } from './seed-realistic-development';
 
 const EXPECTED_NODE_ENV = 'development';
 const EXPECTED_DB_NAME = 'mpwt_vehicle_inspection_renewal';
@@ -34,9 +35,9 @@ function assertLocalResetTarget(): ResetTarget {
     );
   }
 
-  if (process.env.ALLOW_LOCAL_DEMO_RESET !== RESET_CONFIRMATION) {
+  if (process.env.ALLOW_REALISTIC_DEVELOPMENT_RESET !== RESET_CONFIRMATION) {
     throw new Error(
-      'Set ALLOW_LOCAL_DEMO_RESET=true to explicitly allow the local development reset. No data was removed.',
+      'Set ALLOW_REALISTIC_DEVELOPMENT_RESET=true to explicitly allow the canonical development reset. No data was removed.',
     );
   }
 
@@ -87,13 +88,57 @@ async function main(): Promise<void> {
   await dataSource().initialize();
 
   try {
-    await dataSource().query('DROP SCHEMA IF EXISTS "public" CASCADE');
-    await dataSource().query('CREATE SCHEMA "public"');
-    await dataSource().query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"');
     const migrations = await dataSource().runMigrations();
+
+    await dataSource().transaction(async (manager) => {
+      await manager.query(
+        'ALTER TABLE "inspections" DISABLE TRIGGER "trg_guard_completed_inspection_immutable"',
+      );
+      await manager.query(
+        'ALTER TABLE "renewal_application_status_history" DISABLE TRIGGER "trg_guard_renewal_application_status_history_immutable"',
+      );
+      try {
+        for (const table of [
+          'technical_inspection_certificates',
+          'stickers',
+          'inspections',
+          'payment_status_history',
+          'payments',
+          'application_documents',
+          'appointments',
+          'renewal_application_status_history',
+          'application_timeline_events',
+          'notifications',
+          'audit_logs',
+          'vehicle_classification_history',
+          'renewal_applications',
+          'vehicles',
+          'appointment_slots',
+          'inspection_station_daily_capacities',
+          'verification_codes',
+          'password_reset_authorizations',
+          'refresh_sessions',
+          'citizen_profiles',
+          'users',
+        ]) {
+          await manager.query(`DELETE FROM "${table}"`);
+        }
+        await manager.query(
+          `DELETE FROM "inspection_vehicle_categories" WHERE "code" IN ('LOCAL-DEMO-LIGHT', 'LOCAL-DEMO-HEAVY')`,
+        );
+      } finally {
+        await manager.query(
+          'ALTER TABLE "renewal_application_status_history" ENABLE TRIGGER "trg_guard_renewal_application_status_history_immutable"',
+        );
+        await manager.query(
+          'ALTER TABLE "inspections" ENABLE TRIGGER "trg_guard_completed_inspection_immutable"',
+        );
+      }
+    });
 
     await rm(target.storageRoot, { recursive: true, force: true });
     await mkdir(target.storageRoot, { recursive: true });
+    const seedCounts = await seedRealisticDevelopmentDataset(dataSource());
 
     if (await dataSource().showMigrations()) {
       throw new Error('Local reset left pending migrations.');
@@ -107,6 +152,7 @@ async function main(): Promise<void> {
           storageRoot: target.storageRoot,
           migrationsApplied: migrations.map((migration) => migration.name),
           storageRecreated: true,
+          seedCounts,
         },
         null,
         2,

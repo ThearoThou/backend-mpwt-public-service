@@ -6,6 +6,7 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
@@ -26,9 +27,13 @@ import {
   RegisterRequestDto,
   ResendVerificationRequestDto,
   VerifyAccountRequestDto,
+  ChangePasswordRequestDto,
 } from './dto/auth-request.dtos';
 import { createDataResponse } from '../common/http/api-response';
 import type { ApiDataResponse } from '../common/http/api-contracts';
+import { AccessTokenGuard } from '../common/auth/access-token.guard';
+import type { AuthenticatedActor } from '../common/auth/authenticated-actor';
+import { CurrentActor } from '../common/auth/current-actor.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -93,6 +98,24 @@ export class AuthController {
     return createDataResponse(
       await this.authService.requestPasswordReset(input),
     );
+  }
+
+  @Post('change-password')
+  @UseGuards(AccessTokenGuard)
+  @HttpCode(HttpStatus.OK)
+  async changePassword(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body() input: ChangePasswordRequestDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<ApiDataResponse<AuthTokenResponse>> {
+    const result = await this.authService.changePassword(actor.userId, input);
+    this.refreshCookieHelper.setRefreshToken(
+      response,
+      result.refreshToken,
+      result.refreshExpiresAt,
+    );
+
+    return createDataResponse(result.response);
   }
 
   @Post('password-reset/confirm')

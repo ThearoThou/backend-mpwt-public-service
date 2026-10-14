@@ -14,6 +14,7 @@ import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
 import { Payment } from '../payments/entities/payment.entity';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import { Sticker } from '../stickers/entities/sticker.entity';
+import { Vehicle } from '../vehicles/entities/vehicle.entity';
 import type { CertificatePdfInput } from './certificate-pdf.service';
 import { CertificateIssuanceService } from './certificate-issuance.service';
 import { TechnicalInspectionCertificate } from './entities/technical-inspection-certificate.entity';
@@ -58,6 +59,13 @@ describe('CertificateIssuanceService', () => {
     });
     expect(fixture.application.status).toBe(ApplicationStatus.COMPLETED);
     expect(fixture.application.completedAt).toBe(DATABASE_TIME);
+    expect(fixture.vehicles.findOne).toHaveBeenCalledWith({
+      where: { id: VEHICLE_ID },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(fixture.vehicle.lastInspectionDate).toBe('2026-09-09');
+    expect(fixture.vehicle.inspectionExpiryDate).toBe('2030-09-09');
+    expect(fixture.vehicles.save).toHaveBeenCalledWith(fixture.vehicle);
     expect(fixture.history.create).toHaveBeenCalledWith({
       applicationId: APPLICATION_ID,
       previousStatus: ApplicationStatus.APPROVED,
@@ -105,6 +113,22 @@ describe('CertificateIssuanceService', () => {
     expect(vehicle.make).toBe('HYUNDAI');
     expect(vehicle.engineNumber).toBe('ENGINE-ORIGINAL');
     expect(JSON.stringify(vehicle)).not.toContain('CHANGED LIVE');
+  });
+
+  it('fails before artifact generation when the application vehicle no longer exists', async () => {
+    const fixture = createFixture();
+    fixture.vehicles.findOne.mockResolvedValue(null);
+
+    await expectCode(
+      fixture.service.issue(APPLICATION_ID, ADMIN_ID, {
+        certificateNumber: 'CERT-VEHICLE-MISSING',
+      }),
+      ApiErrorCode.VEHICLE_NOT_FOUND,
+      HttpStatus.NOT_FOUND,
+    );
+    expect(fixture.pdf.generate).not.toHaveBeenCalled();
+    expect(fixture.files.saveCertificateArtifact).not.toHaveBeenCalled();
+    expect(fixture.certificates.save).not.toHaveBeenCalled();
   });
 
   it('permits issuance through the end of Cambodia Day 30', async () => {
@@ -347,6 +371,56 @@ describe('CertificateIssuanceService', () => {
     expect(fixture.files.deleteIfExists).toHaveBeenCalledWith(ARTIFACT_KEY);
   });
 
+  it('promotes a renewal inspection over an expired vehicle summary without changing an older certificate', async () => {
+    const fixture = createFixture();
+    fixture.vehicle.lastInspectionDate = '2024-09-09';
+    fixture.vehicle.inspectionExpiryDate = '2025-09-09';
+    const oldCertificate = {
+      applicationId: 'previous-application-id',
+      inspectionId: 'previous-inspection-id',
+      certificateNumber: 'CERT-OLD',
+      artifactFileKey: 'certificate-artifacts/previous/artifact.pdf',
+    };
+
+    await fixture.service.issue(APPLICATION_ID, ADMIN_ID, {
+      certificateNumber: 'CERT-NEW',
+    });
+
+    expect(fixture.vehicle).toMatchObject({
+      lastInspectionDate: '2026-09-09',
+      inspectionExpiryDate: fixture.inspection.validUntil,
+    });
+    expect(oldCertificate).toEqual({
+      applicationId: 'previous-application-id',
+      inspectionId: 'previous-inspection-id',
+      certificateNumber: 'CERT-OLD',
+      artifactFileKey: 'certificate-artifacts/previous/artifact.pdf',
+    });
+    expect(fixture.certificates.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        applicationId: APPLICATION_ID,
+        certificateNumber: 'CERT-NEW',
+      }),
+    );
+  });
+
+  it('cleans the artifact and leaves application completion unpersisted when vehicle persistence fails', async () => {
+    const fixture = createFixture();
+    const original = new Error('vehicle save failed');
+    fixture.vehicles.save.mockRejectedValue(original);
+
+    await expect(
+      fixture.service.issue(APPLICATION_ID, ADMIN_ID, {
+        certificateNumber: 'CERT-1',
+      }),
+    ).rejects.toBe(original);
+
+    expect(fixture.applications.save).not.toHaveBeenCalled();
+    expect(fixture.history.save).not.toHaveBeenCalled();
+    expect(fixture.events.save).not.toHaveBeenCalled();
+    expect(fixture.files.deleteIfExists).toHaveBeenCalledWith(ARTIFACT_KEY);
+  });
+
   it('does not replace the original DB error when cleanup also fails', async () => {
     const fixture = createFixture();
     const original = new Error('completion event insert failed');
@@ -459,12 +533,14 @@ const APPLICATION_ID = '00000000-0000-4000-8000-000000000001';
 const OTHER_APPLICATION_ID = '00000000-0000-4000-8000-000000000002';
 const INSPECTION_ID = '00000000-0000-4000-8000-000000000003';
 const ADMIN_ID = '00000000-0000-4000-8000-000000000004';
+const VEHICLE_ID = '00000000-0000-4000-8000-000000000005';
 const ARTIFACT_KEY = `certificate-artifacts/${APPLICATION_ID}/artifact.pdf`;
 const DATABASE_TIME = new Date('2026-09-09T10:00:00.000Z');
 
 function createFixture() {
   const application = {
     id: APPLICATION_ID,
+    vehicleId: VEHICLE_ID,
     status: ApplicationStatus.APPROVED,
     submittedAt: new Date('2026-09-01T03:00:00.000Z'),
     readyForInspectionAt: new Date('2026-09-02T03:00:00.000Z'),
@@ -506,6 +582,12 @@ function createFixture() {
   const payments = repository();
   const inspections = repository();
   const stickers = repository();
+  const vehicle = {
+    id: VEHICLE_ID,
+    lastInspectionDate: '2024-09-09',
+    inspectionExpiryDate: '2025-09-09',
+  } as Vehicle;
+  const vehicles = repository();
   const history = repository();
   const events = repository();
   const certificates = repository();
@@ -533,6 +615,8 @@ function createFixture() {
     payments,
     inspections,
     stickers,
+    vehicle,
+    vehicles,
     history,
     events,
     certificates,
@@ -556,6 +640,7 @@ function createFixture() {
   stickers.findOne.mockImplementation(() =>
     Promise.resolve(fixture.stickerValue),
   );
+  vehicles.findOne.mockResolvedValue(vehicle);
   events.findOne.mockImplementation(() => Promise.resolve(fixture.eventValue));
   certificates.findOne.mockImplementation(
     (options: { where: Record<string, unknown> }) => {
@@ -587,6 +672,7 @@ function createFixture() {
       if (entity === Payment) return payments;
       if (entity === Inspection) return inspections;
       if (entity === Sticker) return stickers;
+      if (entity === Vehicle) return vehicles;
       if (entity === RenewalApplicationStatusHistory) return history;
       if (entity === ApplicationTimelineEvent) return events;
       if (entity === TechnicalInspectionCertificate) return certificates;
@@ -647,6 +733,7 @@ function vehicleSnapshot(): RenewalApplication['vehicleSnapshot'] {
 async function expectCode(
   promise: Promise<unknown>,
   code: string,
+  status = HttpStatus.CONFLICT,
 ): Promise<void> {
   let thrown: unknown;
   try {
@@ -656,7 +743,7 @@ async function expectCode(
   }
   expect(thrown).toBeInstanceOf(DomainException);
   expect((thrown as DomainException).code).toBe(code);
-  expect((thrown as DomainException).getStatus()).toBe(HttpStatus.CONFLICT);
+  expect((thrown as DomainException).getStatus()).toBe(status);
 }
 
 function uniqueViolation(constraint: string): QueryFailedError {

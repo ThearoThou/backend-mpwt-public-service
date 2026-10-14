@@ -6,10 +6,14 @@ import { DomainException } from '../common/errors/domain.exception';
 import { CitizenPreferredSchedulingService } from '../scheduling/citizen-preferred-scheduling.service';
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { ApplicationStatus } from './enums/application-status.enum';
+import { Vehicle } from '../vehicles/entities/vehicle.entity';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
+import { isOptionalOversizeServiceEligible } from '../payments/optional-oversize-service';
 
 export interface CitizenInspectionPreferenceInput {
   preferredInspectionStationId?: string | null;
   preferredInspectionDate: string;
+  optionalOversizeServiceSelected?: boolean;
 }
 
 @Injectable()
@@ -36,8 +40,38 @@ export class CitizenSchedulingPreferenceService {
         stationId,
       );
 
+      let optionalServiceEligible = false;
+      if (input.optionalOversizeServiceSelected !== undefined) {
+        const vehicle = await manager.getRepository(Vehicle).findOne({
+          where: { id: application.vehicleId },
+        });
+        const category = vehicle?.inspectionCategoryId
+          ? await manager.getRepository(InspectionVehicleCategory).findOne({
+              where: { id: vehicle.inspectionCategoryId },
+            })
+          : null;
+        optionalServiceEligible =
+          vehicle !== null &&
+          vehicle !== undefined &&
+          category !== null &&
+          isOptionalOversizeServiceEligible(vehicle, category.code);
+      }
+      if (
+        input.optionalOversizeServiceSelected === true &&
+        !optionalServiceEligible
+      ) {
+        throw new DomainException(
+          ApiErrorCode.CONFLICT,
+          HttpStatus.CONFLICT,
+          'The optional oversize marking service is not available for this vehicle',
+        );
+      }
+
       application.preferredInspectionStationId = stationId;
       application.preferredInspectionDate = input.preferredInspectionDate;
+      application.optionalOversizeServiceSelected =
+        optionalServiceEligible &&
+        (input.optionalOversizeServiceSelected ?? false);
       return manager.getRepository(RenewalApplication).save(application);
     });
   }

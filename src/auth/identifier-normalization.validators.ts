@@ -92,11 +92,17 @@ class KhmerNameConstraint implements ValidatorConstraintInterface {
 @ValidatorConstraint({ name: 'isEnglishName', async: false })
 class EnglishNameConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
-    return typeof value === 'string' && /^[a-z][a-z .'-]*$/i.test(value);
+    const namePart = `[a-z]+(?:[.'-][a-z]+)*`;
+    return (
+      typeof value === 'string' &&
+      new RegExp(String.raw`^${namePart}(?:\s+${namePart})+$`, 'i').test(
+        value.trim(),
+      )
+    );
   }
 
   defaultMessage(): string {
-    return 'nameEn must use English letters';
+    return 'nameEn must contain at least two Latin name parts separated by a space';
   }
 }
 

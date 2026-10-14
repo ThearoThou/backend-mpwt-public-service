@@ -65,7 +65,7 @@ describe('CertificatePdfService', () => {
       '10-09-2026',
       '09-12-2030',
       'HYUNDAI',
-      'PASSENGER_VAN',
+      'Passenger van',
       'White',
       '2022',
       'Left',
@@ -86,8 +86,8 @@ describe('CertificatePdfService', () => {
       expect(html).toContain(value);
     }
     expect(html).toContain('class="note-value"></div>');
-    expect(html).not.toContain('qr-code');
-    expect(html).not.toContain('verification-url');
+    expect(html).toContain('Certificate verification QR placement');
+    expect(html).toContain('CERTIFICATE OF VEHICLE TECHNICAL INSPECTION');
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
@@ -143,7 +143,7 @@ describe('certificate PDF formatting', () => {
 
   it('isolates the current Mark and vehicle-type assumptions', () => {
     expect(formatPrintedMark('HYUNDAI', 'STARIA')).toBe('HYUNDAI');
-    expect(formatVehicleType('PASSENGER_VAN')).toBe('PASSENGER_VAN');
+    expect(formatVehicleType('PASSENGER_VAN')).toBe('Passenger van');
   });
 });
 

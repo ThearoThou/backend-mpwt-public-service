@@ -256,14 +256,10 @@ export class InspectionExpiryService {
           cambodiaDate(appointment.bookedAt) <= deadline,
       );
       if (replacement) return false;
-      await this.transition(
-        manager,
-        state.application,
-        ApplicationStatus.CANCELLED,
-        'NO_SHOW_REBOOKING_DEADLINE_EXPIRED',
-        state.recordedAt,
-      );
-      return true;
+      // A missed legacy appointment is not an application cancellation in the
+      // MVP. The authoritative application-expiry rule remains responsible for
+      // ending inactive applications.
+      return false;
     });
   }
 

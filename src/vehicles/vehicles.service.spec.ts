@@ -196,7 +196,7 @@ describe('VehiclesService', () => {
     });
   });
 
-  it('preserves unfiltered citizen lists with pagination and sorting', async () => {
+  it('preserves unfiltered citizen lists with globally prioritized pagination', async () => {
     const repository = createRepository();
     const query = createListQuery();
     repository.createQueryBuilder.mockReturnValue(query);
@@ -213,16 +213,18 @@ describe('VehiclesService', () => {
       'vehicle.linkedCitizenId = :citizenId',
       { citizenId: CITIZEN_ID },
     );
-    expect(query.orderBy).toHaveBeenCalledWith(
-      'vehicle.registrationNumber',
-      'ASC',
+    const [priority, order] = query.orderBy.mock.calls[0] as [string, string];
+    expect(order).toBe('ASC');
+    expect(priority).toBe('citizen_vehicle_priority');
+    expect(query.addSelect).toHaveBeenCalledWith(
+      expect.stringContaining("'CORRECTION_REQUIRED'"),
+      'citizen_vehicle_priority',
     );
     expect(query.skip).toHaveBeenCalledWith(10);
     expect(query.take).toHaveBeenCalledWith(10);
     expect(query.select).toHaveBeenCalledWith(
       expect.not.arrayContaining(['vehicle.engineNumber']),
     );
-    expect(query.addSelect).not.toHaveBeenCalled();
     expect(result.meta).toEqual({
       page: 2,
       limit: 10,
@@ -231,7 +233,7 @@ describe('VehiclesService', () => {
     });
   });
 
-  it('orders citizen vehicles by inspection expiry with an updatedAt tie-break', async () => {
+  it('orders citizen vehicles by priority, upcoming preferred date, relevant update, and id', async () => {
     const repository = createRepository();
     const query = createListQuery();
     repository.createQueryBuilder.mockReturnValue(query);
@@ -244,15 +246,31 @@ describe('VehiclesService', () => {
       sortBy: 'inspectionExpiryDate',
     });
 
-    expect(query.orderBy).toHaveBeenNthCalledWith(
-      1,
-      'vehicle.inspectionExpiryDate',
+    const [priority] = query.orderBy.mock.calls[0] as [string];
+    const [upcomingDateExpression, upcomingDate] = query.addSelect.mock
+      .calls[1] as [string, string];
+    const [relevantUpdatedExpression] = query.addSelect.mock.calls[2] as [
+      string,
+      string,
+    ];
+    expect(priority).toBe('citizen_vehicle_priority');
+    expect(query.addOrderBy.mock.calls[0]).toEqual([
+      'citizen_vehicle_upcoming_inspection_date',
       'ASC',
-    );
-    expect(query.addOrderBy).toHaveBeenCalledWith('vehicle.updatedAt', 'DESC');
+      'NULLS LAST',
+    ]);
+    expect(upcomingDate).toBe('citizen_vehicle_upcoming_inspection_date');
+    expect(upcomingDateExpression).toContain('preferred_inspection_date');
+    expect(upcomingDateExpression).toContain('ELSE NULL');
+    expect(query.addOrderBy.mock.calls[1]).toEqual([
+      'citizen_vehicle_relevant_updated_at',
+      'DESC',
+    ]);
+    expect(relevantUpdatedExpression).toContain('COALESCE');
+    expect(query.addOrderBy).toHaveBeenLastCalledWith('vehicle.id', 'ASC');
   });
 
-  it('orders citizen vehicles directly by updatedAt without an expiry tie-break', async () => {
+  it('uses the authoritative active cycle when calculating the global priority', async () => {
     const repository = createRepository();
     const query = createListQuery();
     repository.createQueryBuilder.mockReturnValue(query);
@@ -265,8 +283,40 @@ describe('VehiclesService', () => {
       sortBy: 'updatedAt',
     });
 
-    expect(query.orderBy).toHaveBeenCalledWith('vehicle.updatedAt', 'DESC');
-    expect(query.addOrderBy).not.toHaveBeenCalled();
+    const [priority] = query.addSelect.mock.calls[0] as [string];
+    expect(priority).toContain(
+      "CASE WHEN application.status IN ('DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'CORRECTION_REQUIRED', 'APPROVED') THEN 0 ELSE 1 END ASC",
+    );
+    expect(priority).toContain('application.updated_at DESC');
+  });
+
+  it('maps every citizen-facing card state to the global priority before pagination', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 5,
+      sortOrder: 'asc',
+      sortBy: 'registrationNumber',
+    });
+
+    const [priority] = query.addSelect.mock.calls[0] as [string];
+    expect(priority).toContain("IN ('CORRECTION_REQUIRED', 'DRAFT')");
+    expect(priority).toContain('payment.status\n      FROM payments payment');
+    expect(priority).toContain("IN ('REJECTED') THEN 1");
+    expect(priority).toContain("IN ('CANCELLED', 'EXPIRED') THEN 6");
+    expect(priority).toContain("IN ('INSPECTION_FAILED', 'REJECTED') THEN 4");
+    expect(priority).toContain(
+      "IN ('SUBMITTED', 'UNDER_REVIEW', 'APPROVED') THEN 3",
+    );
+    expect(priority).toContain('vehicle.inspection_expiry_date <=');
+    expect(priority).toContain('THEN 2 ELSE 5 END');
+    expect(query.orderBy.mock.invocationCallOrder[0]).toBeLessThan(
+      query.skip.mock.invocationCallOrder[0],
+    );
   });
 
   it('does not apply the updatedAt tie-break to admin vehicle lists', async () => {
@@ -306,7 +356,7 @@ describe('VehiclesService', () => {
     expect(query.orderBy.mock.invocationCallOrder[0]).toBeLessThan(
       query.addOrderBy.mock.invocationCallOrder[0],
     );
-    expect(query.addOrderBy.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(query.addOrderBy.mock.invocationCallOrder.at(-1)).toBeLessThan(
       query.skip.mock.invocationCallOrder[0],
     );
     expect(query.skip.mock.invocationCallOrder[0]).toBeLessThan(
@@ -365,13 +415,79 @@ describe('VehiclesService', () => {
       });
 
       expect(query.andWhere).toHaveBeenCalledWith(
-        '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+        expect.stringContaining(
+          'vehicle.plateNumber ILIKE :searchText0 OR vehicle.plateProvince ILIKE :searchText0',
+        ),
         parameters,
       );
       expect(query.skip).toHaveBeenCalledWith(0);
       expect(query.take).toHaveBeenCalledWith(20);
     },
   );
+
+  it.each(['90L2609211408', '260921', '3174286541093', '86541093'])(
+    'searches only the displayed current cycle for identifier %s',
+    async (search) => {
+      const repository = createRepository();
+      const query = createListQuery();
+      repository.createQueryBuilder.mockReturnValue(query);
+      const service = createService(repository);
+
+      await service.listCitizenVehicles(CITIZEN_ID, {
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc',
+        sortBy: 'createdAt',
+        search,
+      });
+
+      const searchCalls = query.andWhere.mock.calls as unknown as Array<
+        [string, Record<string, string>]
+      >;
+      const [searchClause, searchParameters] = searchCalls[1] ?? ['', {}];
+      expect(searchClause).toEqual(
+        expect.stringContaining(
+          'current_payment.invoice_number ILIKE :searchText0',
+        ),
+      );
+      expect(searchClause).toEqual(
+        expect.stringContaining(
+          'current_certificate.certificate_number ILIKE :searchText0',
+        ),
+      );
+      expect(searchParameters).toEqual({
+        searchText0: `%${search}%`,
+        searchYear0: search,
+      });
+    },
+  );
+
+  it('selects one authoritative card cycle before joining identifiers, excluding historical-only matches', async () => {
+    const repository = createRepository();
+    const query = createListQuery();
+    repository.createQueryBuilder.mockReturnValue(query);
+    const service = createService(repository);
+
+    await service.listCitizenVehicles(CITIZEN_ID, {
+      page: 1,
+      limit: 20,
+      sortOrder: 'desc',
+      sortBy: 'createdAt',
+      search: '90L-OLD',
+    });
+
+    const searchCalls = query.andWhere.mock.calls as unknown as Array<
+      [string, Record<string, string>]
+    >;
+    const searchClause = searchCalls[1]?.[0] ?? '';
+    expect(searchClause).toContain('CASE WHEN application.status IN');
+    expect(searchClause).toContain('application.updated_at DESC');
+    expect(searchClause).toContain('LIMIT 1');
+    expect(searchClause.indexOf('LIMIT 1')).toBeLessThan(
+      searchClause.indexOf('LEFT JOIN payments current_payment'),
+    );
+    expect(searchClause).toContain('application.citizen_id = :citizenId');
+  });
 
   it.each([
     ['Toyota 2021', '%Toyota%', 'Toyota', '%2021%', '2021'],
@@ -399,12 +515,12 @@ describe('VehiclesService', () => {
       );
       expect(query.andWhere).toHaveBeenNthCalledWith(
         2,
-        '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+        expect.stringContaining('vehicle.make ILIKE :searchText0'),
         { searchText0: firstText, searchYear0: firstYear },
       );
       expect(query.andWhere).toHaveBeenNthCalledWith(
         3,
-        '(vehicle.plateNumber ILIKE :searchText1 OR vehicle.registrationNumber ILIKE :searchText1 OR vehicle.make ILIKE :searchText1 OR vehicle.model ILIKE :searchText1 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear1)',
+        expect.stringContaining('vehicle.model ILIKE :searchText1'),
         { searchText1: secondText, searchYear1: secondYear },
       );
     },
@@ -456,7 +572,9 @@ describe('VehiclesService', () => {
     );
     expect(query.andWhere).toHaveBeenNthCalledWith(
       2,
-      '(vehicle.plateNumber ILIKE :searchText0 OR vehicle.registrationNumber ILIKE :searchText0 OR vehicle.make ILIKE :searchText0 OR vehicle.model ILIKE :searchText0 OR CAST(vehicle.manufactureYear AS TEXT) = :searchYear0)',
+      expect.stringContaining(
+        'CAST(vehicle.manufactureYear AS TEXT) = :searchYear0',
+      ),
       { searchText0: '%2021%', searchYear0: '2021' },
     );
     expect(result.data).toEqual([]);

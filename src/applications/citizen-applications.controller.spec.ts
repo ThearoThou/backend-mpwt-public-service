@@ -12,6 +12,7 @@ describe('CitizenApplicationsController', () => {
       listCitizenApplications: jest.fn(),
       getCitizenApplication: jest.fn(),
       listCitizenStatusHistory: jest.fn(),
+      listCitizenTimelineEvents: jest.fn(),
     };
     const workflow = {
       createDraft: jest.fn().mockResolvedValue({ id: 'draft' }),
@@ -82,6 +83,12 @@ describe('CitizenApplicationsController', () => {
       listCitizenStatusHistory: jest
         .fn()
         .mockResolvedValue({ data: [], meta: {} }),
+      listCitizenTimelineEvents: jest.fn().mockResolvedValue([
+        {
+          eventType: 'DOCUMENTS_APPROVED',
+          occurredAt: '2026-09-10T04:30:00.000Z',
+        },
+      ]),
     };
     const controller = new CitizenApplicationsController(
       applications as never,
@@ -99,6 +106,16 @@ describe('CitizenApplicationsController', () => {
     await controller.listApplications(actor(), query);
     await controller.getApplication(actor(), APPLICATION_ID);
     await controller.listStatusHistory(actor(), APPLICATION_ID, query);
+    await expect(
+      controller.listTimelineEvents(actor(), APPLICATION_ID),
+    ).resolves.toEqual({
+      data: [
+        {
+          eventType: 'DOCUMENTS_APPROVED',
+          occurredAt: '2026-09-10T04:30:00.000Z',
+        },
+      ],
+    });
 
     expect(applications.listCitizenApplications).toHaveBeenCalledWith(
       CITIZEN_ID,
@@ -112,6 +129,10 @@ describe('CitizenApplicationsController', () => {
       CITIZEN_ID,
       APPLICATION_ID,
       query,
+    );
+    expect(applications.listCitizenTimelineEvents).toHaveBeenCalledWith(
+      CITIZEN_ID,
+      APPLICATION_ID,
     );
   });
 

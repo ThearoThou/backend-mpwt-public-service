@@ -274,6 +274,95 @@ describe('ApplicationDocumentsService upload preflight', () => {
     },
   );
 
+  it('allows a pending correction replacement to be changed again and preserves every version', async () => {
+    const fixture = draftReplacementFixture();
+    fixture.application.status = ApplicationStatus.CORRECTION_REQUIRED;
+    fixture.documents[0].status = DocumentStatus.REJECTED;
+    fixture.documents[0].rejectionReason = 'Replace this document.';
+
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.VEHICLE_REGISTRATION_CARD,
+      file('png', 'image/png'),
+    );
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.VEHICLE_REGISTRATION_CARD,
+      file('png', 'image/png'),
+    );
+
+    expect(fixture.documents).toHaveLength(3);
+    expect(fixture.documents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          versionNumber: 1,
+          status: DocumentStatus.REJECTED,
+          isCurrent: false,
+        }),
+        expect.objectContaining({
+          versionNumber: 2,
+          status: DocumentStatus.PENDING,
+          isCurrent: false,
+          replacesDocumentId: 'registration-document',
+        }),
+        expect.objectContaining({
+          versionNumber: 3,
+          status: DocumentStatus.PENDING,
+          isCurrent: true,
+          replacesDocumentId: 'document-1',
+        }),
+      ]),
+    );
+  });
+
+  it.each([DocumentStatus.PENDING, DocumentStatus.APPROVED])(
+    'keeps an unrelated %s correction document locked',
+    async (status) => {
+      const fixture = draftReplacementFixture();
+      fixture.application.status = ApplicationStatus.CORRECTION_REQUIRED;
+      fixture.documents[0].status = status;
+
+      await expect(
+        fixture.service.upload(
+          citizenId,
+          applicationId,
+          DocumentType.VEHICLE_REGISTRATION_CARD,
+          file(),
+        ),
+      ).rejects.toMatchObject({
+        code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED',
+      });
+      expect(fixture.documents).toHaveLength(1);
+    },
+  );
+
+  it('locks a pending replacement after resubmission returns the application to review', async () => {
+    const fixture = draftReplacementFixture();
+    fixture.application.status = ApplicationStatus.CORRECTION_REQUIRED;
+    fixture.documents[0].status = DocumentStatus.REJECTED;
+    await fixture.service.upload(
+      citizenId,
+      applicationId,
+      DocumentType.VEHICLE_REGISTRATION_CARD,
+      file(),
+    );
+    fixture.application.status = ApplicationStatus.UNDER_REVIEW;
+
+    await expect(
+      fixture.service.upload(
+        citizenId,
+        applicationId,
+        DocumentType.VEHICLE_REGISTRATION_CARD,
+        file(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED',
+    });
+    expect(fixture.documents).toHaveLength(2);
+  });
+
   it('canonically expires a correction upload on Day 31 before storing a file', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-10-06T17:00:00.000Z'));
@@ -468,7 +557,7 @@ describe('ApplicationDocumentsService upload preflight', () => {
     },
   );
 
-  it('serializes concurrent citizen/admin replacement to one current next version', async () => {
+  it('serializes concurrent correction replacements into consecutive versions', async () => {
     const fixture = draftReplacementFixture();
     fixture.application.status = ApplicationStatus.CORRECTION_REQUIRED;
     fixture.documents[0].status = DocumentStatus.REJECTED;
@@ -496,23 +585,20 @@ describe('ApplicationDocumentsService upload preflight', () => {
 
     expect(
       results.filter((result) => result.status === 'fulfilled'),
-    ).toHaveLength(1);
-    expect(
-      results.find((result) => result.status === 'rejected'),
-    ).toMatchObject({
-      status: 'rejected',
-      reason: { code: 'APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED' },
-    });
+    ).toHaveLength(2);
     expect(fixture.documents.filter((document) => document.isCurrent)).toEqual([
       expect.objectContaining({
-        versionNumber: 2,
+        versionNumber: 3,
         status: DocumentStatus.PENDING,
       }),
     ]);
     expect(
       fixture.documents.filter((document) => document.versionNumber === 2),
     ).toHaveLength(1);
-    expect(fixture.files.deleteIfExists).toHaveBeenCalledTimes(1);
+    expect(
+      fixture.documents.filter((document) => document.versionNumber === 3),
+    ).toHaveLength(1);
+    expect(fixture.files.deleteIfExists).not.toHaveBeenCalled();
   });
 });
 function dataSource(application: unknown) {

@@ -8,6 +8,7 @@ import {
   RefreshSessionRevocationReason,
   RefreshSessionService,
 } from '../auth/refresh-session.service';
+import { EmailDomainValidationService } from '../auth/email-domain-validation.service';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
@@ -54,6 +55,7 @@ export class UsersService {
     private readonly citizenProfiles: Repository<CitizenProfile>,
     private readonly dataSource: DataSource,
     private readonly refreshSessionService: RefreshSessionService,
+    private readonly emailDomainValidationService: EmailDomainValidationService,
   ) {}
 
   async createPendingCitizen(
@@ -153,7 +155,10 @@ export class UsersService {
     return manager.getRepository(User).findOne({
       where: { id: userId },
       lock: { mode: 'pessimistic_write' },
-      select: this.safeUserSelect(),
+      select: {
+        ...this.safeUserSelect(),
+        passwordHash: true,
+      },
     });
   }
 
@@ -215,28 +220,36 @@ export class UsersService {
   async updateCurrentCitizenProfile(
     userId: string,
     input: UpdateCitizenProfileRequestDto,
-  ): Promise<CitizenProfileResponse> {
-    const patch = this.editableCitizenProfilePatch(input);
-
-    if (Object.keys(patch).length === 0) {
-      return this.getCitizenProfileResponse(userId);
-    }
-
-    try {
-      const result = await this.citizenProfiles.update({ userId }, patch);
-
-      if (result.affected === 0) {
-        throw this.userNotFound();
+  ): Promise<CurrentUserResponse> {
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.getRepository(User).findOne({
+        where: { id: userId, role: UserRole.CITIZEN },
+        lock: { mode: 'pessimistic_write' },
+        select: this.safeUserSelect(),
+      });
+      if (user === null) throw this.userNotFound();
+      const profile = await manager.getRepository(CitizenProfile).findOne({
+        where: { userId }, lock: { mode: 'pessimistic_write' }, select: this.safeCitizenProfileSelect(),
+      });
+      if (profile === null) throw this.userNotFound();
+      const phoneChanged = input.phone !== undefined && input.phone !== user.phone;
+      if (input.email !== undefined && input.email !== null && input.email !== user.email && !(await this.emailDomainValidationService.hasMailDomain(input.email))) {
+        throw new DomainException(ApiErrorCode.EMAIL_DOMAIN_INVALID, HttpStatus.BAD_REQUEST, 'Email domain cannot receive mail');
       }
-    } catch (error) {
-      if (this.isUniqueConstraintViolation(error)) {
-        throw this.citizenProfileConflict();
+      Object.assign(user, {
+        ...(input.phone === undefined ? {} : { phone: input.phone, phoneVerifiedAt: phoneChanged ? null : user.phoneVerifiedAt }),
+        ...(input.email === undefined ? {} : { email: input.email }),
+      });
+      Object.assign(profile, this.editableCitizenProfilePatch(input));
+      try {
+        await manager.getRepository(User).save(user);
+        await manager.getRepository(CitizenProfile).save(profile);
+      } catch (error) {
+        if (this.isUniqueConstraintViolation(error)) throw this.citizenProfileConflict();
+        throw error;
       }
-
-      throw error;
-    }
-
-    return this.getCitizenProfileResponse(userId);
+      return mapCurrentUser(user, profile);
+    });
   }
 
   async listUsers(input: ListUsersQueryDto): Promise<{
@@ -471,14 +484,11 @@ export class UsersService {
   private editableCitizenProfilePatch(
     input: UpdateCitizenProfileRequestDto,
   ): Partial<
-    Pick<CitizenProfile, 'nameKh' | 'nameEn' | 'nationalIdNumber' | 'address'>
+    Pick<CitizenProfile, 'nameKh' | 'nameEn' | 'address'>
   > {
     return {
       ...(input.nameKh === undefined ? {} : { nameKh: input.nameKh }),
       ...(input.nameEn === undefined ? {} : { nameEn: input.nameEn }),
-      ...(input.nationalIdNumber === undefined
-        ? {}
-        : { nationalIdNumber: input.nationalIdNumber }),
       ...(input.address === undefined ? {} : { address: input.address }),
     };
   }

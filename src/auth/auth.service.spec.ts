@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { DataSource, EntityManager } from 'typeorm';
 
 import { AuthHashingService } from './auth-hashing.service';
+import { EmailDomainValidationService } from './email-domain-validation.service';
 import { AuthService } from './auth.service';
 import { AuthTokenService } from './auth-token.service';
 import { VerificationPurpose } from './enums/verification-purpose.enum';
@@ -95,6 +96,7 @@ describe('AuthService', () => {
       | 'consumeAuthorization'
     >
   >;
+  let emailDomains: jest.Mocked<Pick<EmailDomainValidationService, 'hasMailDomain'>>;
   let service: AuthService;
   let nodeEnvironment: string;
   let exposeDevelopmentCode: boolean;
@@ -165,6 +167,7 @@ describe('AuthService', () => {
       validateLockedAuthorization: jest.fn(),
       consumeAuthorization: jest.fn(),
     };
+    emailDomains = { hasMailDomain: jest.fn().mockResolvedValue(true) };
     const config = {
       getOrThrow: jest.fn((name: string) => {
         if (name === 'NODE_ENV') {
@@ -188,6 +191,7 @@ describe('AuthService', () => {
       sessions as RefreshSessionService,
       resetAuthorizations as PasswordResetAuthorizationService,
       config,
+      emailDomains,
     );
   });
 
@@ -833,6 +837,39 @@ describe('AuthService', () => {
       expect.any(Object),
       manager,
     );
+  });
+
+  it('changes the password, revokes old sessions, and issues a fresh current session', async () => {
+    const user = createUser();
+    users.findLockedUserById.mockResolvedValue(user);
+    users.replacePassword.mockResolvedValue(user);
+
+    const result = await service.changePassword(USER_ID, {
+      currentPassword: 'password1',
+      newPassword: 'new-password',
+    });
+
+    expect(hashing.verifySecret).toHaveBeenCalledWith(
+      user.passwordHash,
+      'password1',
+    );
+    expect(users.replacePassword).toHaveBeenCalledWith(
+      user,
+      'argon2id-hash',
+      manager,
+    );
+    expect(sessions.revokeAllActiveSessions).toHaveBeenCalledWith(
+      USER_ID,
+      RefreshSessionRevocationReason.PASSWORD_RESET,
+      manager,
+      expect.any(Date),
+    );
+    expect(sessions.persistSession).toHaveBeenCalledWith(
+      expect.any(Object),
+      manager,
+    );
+    expect(result.response.accessToken).toBe('access-token');
+    expect(result.refreshToken).toBe('refresh-token');
   });
 
   it('performs Argon2id verification for known wrong and unknown identifiers without issuing credentials', async () => {

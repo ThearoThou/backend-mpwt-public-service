@@ -11,9 +11,9 @@ or payment-state mutation occurs. NO_SHOW does not cancel, reset, or reject it.
 Step 4 implements the MVP `PAY_AT_STATION` invoice workflow for an owned
 `DRAFT` application. The citizen initializes an invoice before final
 submission; this creates a `PENDING` payment but does not collect money, reserve
-capacity, create an appointment, or generate a VIR application reference.
+capacity, create an appointment, or generate an MPWT application reference.
 Final submission then requires that pending station payment and performs the
-existing `DRAFT → SUBMITTED` transition, including the VIR reference and
+existing `DRAFT → SUBMITTED` transition, including the MPWT reference and
 snapshots.
 
 Scheduling remains the owner of its reservation transaction. Review-pass and
@@ -108,7 +108,7 @@ runtime available. Invoice, receipt, and inspection-sheet Khmer rendering have
 been manually verified.
 
 An invoice PDF can be generated while the application is still `DRAFT`; it
-omits the application-reference row until final submission creates the VIR
+omits the application-reference row until final submission creates the MPWT
 reference. It remains identified by the invoice number and application ID.
 
 If a draft/submitted application is cancelled, the existing `PENDING`

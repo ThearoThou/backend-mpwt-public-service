@@ -35,6 +35,7 @@ export interface AdminApplicationDetailResponse {
   completedAt: Date | null;
   cancelledAt: Date | null;
   cancellationReason: string | null;
+  optionalOversizeServiceSelected: boolean;
   createdAt: Date;
   updatedAt: Date;
   applicantSnapshot: ApplicationSnapshot;
@@ -93,6 +94,8 @@ export function mapAdminApplicationDetail(
     completedAt: application.completedAt,
     cancelledAt: application.cancelledAt,
     cancellationReason: application.cancellationReason,
+    optionalOversizeServiceSelected:
+      application.optionalOversizeServiceSelected ?? false,
     createdAt: application.createdAt,
     updatedAt: application.updatedAt,
     applicantSnapshot: application.applicantSnapshot,

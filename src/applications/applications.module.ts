@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplicationTimelineEvent } from '../activity/entities/application-timeline-event.entity';
 import { CommonAuthModule } from '../common/auth/common-auth.module';
 import { FilesModule } from '../files/files.module';
 import { PaymentsModule } from '../payments/payments.module';
@@ -23,6 +24,7 @@ import { SchedulingModule } from '../scheduling/scheduling.module';
 import { CitizenSchedulingPreferenceService } from './citizen-scheduling-preference.service';
 import { RenewAgainService } from './renew-again.service';
 import { ApplyAgainService } from './apply-again.service';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 
 @Module({
   imports: [
@@ -30,7 +32,9 @@ import { ApplyAgainService } from './apply-again.service';
       RenewalApplication,
       ApplicationDocument,
       RenewalApplicationStatusHistory,
+      ApplicationTimelineEvent,
       User,
+      InspectionVehicleCategory,
     ]),
     CommonAuthModule,
     FilesModule,

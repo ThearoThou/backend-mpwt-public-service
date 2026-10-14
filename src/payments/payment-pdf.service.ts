@@ -1,4 +1,9 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -38,7 +43,7 @@ export interface ReceiptPdfData {
 }
 
 export interface InspectionSheetPdfData {
-  receiptNumber: string;
+  invoiceNumber: string;
   applicationReferenceNumber: string;
   vehiclePlate: string;
   vehicleMakeModel?: string | null;
@@ -52,8 +57,20 @@ const PDF_FONT_FILE = 'NotoSansKhmer-Regular.ttf';
 const requirePuppeteer = createRequire(__filename);
 
 @Injectable()
-export class PaymentPdfService implements OnModuleDestroy {
+export class PaymentPdfService implements OnModuleDestroy, OnModuleInit {
+  private readonly logger = new Logger(PaymentPdfService.name);
   private browserPromise: Promise<Browser> | null = null;
+  private fontData: string | null = null;
+
+  onModuleInit(): void {
+    // Warm the shared renderer after startup without delaying readiness. A
+    // failed warm-up clears the promise so normal generation can retry later.
+    void this.getBrowser().catch((error: unknown) => {
+      this.logger.warn(
+        `Payment PDF browser warm-up failed; generation will retry on demand: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
 
   async onModuleDestroy(): Promise<void> {
     if (this.browserPromise === null) {
@@ -67,10 +84,10 @@ export class PaymentPdfService implements OnModuleDestroy {
 
   async generateInvoice(data: InvoicePdfData): Promise<Buffer> {
     return this.generateDocument({
-      title: 'MPWT Demo Invoice',
+      title: 'MPWT Invoice',
       heading: 'វិក្កយបត្រ / Invoice',
       rows: [
-        ['Invoice number', data.invoiceNumber],
+        ['Transaction No.', data.invoiceNumber],
         ['Issued date', data.issuedDate],
         ...optionalRow(
           'Application reference',
@@ -93,11 +110,11 @@ export class PaymentPdfService implements OnModuleDestroy {
 
   async generateReceipt(data: ReceiptPdfData): Promise<Buffer> {
     return this.generateDocument({
-      title: 'MPWT Demo Receipt',
+      title: 'MPWT Receipt',
       heading: 'បង្កាន់ដៃទទួលប្រាក់',
       rows: [
         ['Receipt number', data.receiptNumber],
-        ['Invoice number', data.invoiceNumber],
+        ['Transaction No.', data.invoiceNumber],
         ['Payment date', data.confirmedDate],
         ['Application reference', data.applicationReferenceNumber],
         ['Vehicle plate', data.vehiclePlate],
@@ -117,10 +134,10 @@ export class PaymentPdfService implements OnModuleDestroy {
 
   async generateInspectionSheet(data: InspectionSheetPdfData): Promise<Buffer> {
     return this.generateDocument({
-      title: 'MPWT Demo Inspection Sheet',
+      title: 'MPWT Inspection Sheet',
       heading: 'ប័ណ្ណត្រួតពិនិត្យយានយន្ត',
       rows: [
-        ['Receipt number', data.receiptNumber],
+        ['Transaction No.', data.invoiceNumber],
         ['Application reference', data.applicationReferenceNumber],
         ['Vehicle plate', data.vehiclePlate],
         ...optionalRow('Vehicle', data.vehicleMakeModel),
@@ -181,7 +198,11 @@ export class PaymentPdfService implements OnModuleDestroy {
 
   private getBrowser(): Promise<Browser> {
     if (this.browserPromise === null) {
-      this.browserPromise = this.getPuppeteer().launch({ headless: true });
+      const launch = this.getPuppeteer().launch({ headless: true });
+      this.browserPromise = launch;
+      void launch.catch(() => {
+        if (this.browserPromise === launch) this.browserPromise = null;
+      });
     }
 
     return this.browserPromise;
@@ -204,7 +225,7 @@ export class PaymentPdfService implements OnModuleDestroy {
     inspectionRecord: boolean;
     showDemoNotice: boolean;
   }): string {
-    const fontData = readFileSync(this.fontPath()).toString('base64');
+    const fontData = this.getFontData();
     const details = rows
       .map(
         ([label, value]) =>
@@ -276,6 +297,13 @@ export class PaymentPdfService implements OnModuleDestroy {
     throw new Error(
       `Payment PDF Khmer font asset was not found: ${PDF_FONT_FILE}`,
     );
+  }
+
+  private getFontData(): string {
+    if (this.fontData === null) {
+      this.fontData = readFileSync(this.fontPath()).toString('base64');
+    }
+    return this.fontData;
   }
 
   protected getPuppeteer(): Pick<typeof import('puppeteer'), 'launch'> {

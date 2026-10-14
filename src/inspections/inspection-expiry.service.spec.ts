@@ -366,8 +366,6 @@ describe('InspectionExpiryService', () => {
     ApplicationStatus.EXPIRED,
     ApplicationStatus.INSPECTION_FAILED,
     ApplicationStatus.COMPLETED,
-    ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-    ApplicationStatus.REINSPECTION_REQUIRED,
   ])('does not expire excluded status %s', async (status) => {
     const fixture = fixtureFor({
       today: '2026-10-01',

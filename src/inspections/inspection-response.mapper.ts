@@ -85,8 +85,11 @@ export interface CitizenInspectionStatusResponse {
 }
 
 export interface CitizenInspectionHistoryResponse {
+  inspectionId: string;
   applicationId: string;
   referenceNumber: string | null;
+  /** Payment.invoiceNumber is the stored official-facing 90L Transaction No. */
+  transactionNumber: string | null;
   attemptNumber: number;
   result: InspectionResult;
   inspectedAt: Date;
@@ -94,8 +97,18 @@ export interface CitizenInspectionHistoryResponse {
   validUntil: string | null;
   validityRule: InspectionValidityRule | null;
   station: { id: string; nameKh: string; nameEn: string } | null;
+  inspectionCategory: {
+    id: string;
+    code: string;
+    nameKh: string;
+    nameEn: string;
+  } | null;
   vehicle: AdminInspectionQueueResponse['vehicle'] & {
     plateCategory: string | null;
     plateProvince: string | null;
+    manufactureYear: string | null;
+    chassisNumber: string | null;
+    engineNumber: string | null;
+    vehicleType: string | null;
   };
 }

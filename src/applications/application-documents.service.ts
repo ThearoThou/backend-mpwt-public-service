@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { DataSource, type EntityManager } from 'typeorm';
+import { DataSource, type EntityManager, type Repository } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
@@ -219,12 +219,12 @@ export class ApplicationDocumentsService {
     });
     if (
       application.status === ApplicationStatus.CORRECTION_REQUIRED &&
-      current?.status !== DocumentStatus.REJECTED
+      !(await this.isEditableCorrectionDocument(documents, current))
     ) {
       throw new DomainException(
         ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
         HttpStatus.CONFLICT,
-        'Only rejected documents can be replaced while correction is required',
+        'Only correction documents can be replaced while correction is required',
       );
     }
     if (current !== null) {
@@ -350,7 +350,10 @@ export class ApplicationDocumentsService {
           .findOne({
             where: { applicationId, documentType, isCurrent: true },
           });
-        return current?.status === DocumentStatus.REJECTED
+        return (await this.isEditableCorrectionDocument(
+          manager.getRepository(ApplicationDocument),
+          current,
+        ))
           ? ('ALLOWED' as const)
           : ('NOT_REJECTED' as const);
       });
@@ -359,10 +362,39 @@ export class ApplicationDocumentsService {
         throw new DomainException(
           ApiErrorCode.APPLICATION_DOCUMENT_UPLOAD_NOT_ALLOWED,
           HttpStatus.CONFLICT,
-          'Only rejected documents can be replaced while correction is required',
+          'Only correction documents can be replaced while correction is required',
         );
       }
     }
+  }
+  private async isEditableCorrectionDocument(
+    documents: Repository<ApplicationDocument>,
+    current: ApplicationDocument | null,
+  ): Promise<boolean> {
+    if (current?.status === DocumentStatus.REJECTED) return true;
+    if (
+      current?.status !== DocumentStatus.PENDING ||
+      current.replacesDocumentId === null
+    ) {
+      return false;
+    }
+
+    const visited = new Set<string>([current.id]);
+    let predecessorId: string | null = current.replacesDocumentId;
+    while (predecessorId !== null && !visited.has(predecessorId)) {
+      visited.add(predecessorId);
+      const predecessor: ApplicationDocument | null = await documents.findOne({
+        where: {
+          id: predecessorId,
+          applicationId: current.applicationId,
+          documentType: current.documentType,
+        },
+      });
+      if (predecessor === null) return false;
+      if (predecessor.status === DocumentStatus.REJECTED) return true;
+      predecessorId = predecessor.replacesDocumentId;
+    }
+    return false;
   }
   private isDocumentUniqueConflict(error: unknown): boolean {
     if (typeof error !== 'object' || error === null) return false;

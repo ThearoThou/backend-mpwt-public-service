@@ -214,7 +214,7 @@ documents, citizen profile, classified vehicle, and valid normal-renewal
 preferred station/date. It idempotently creates or returns the single
 `PENDING` `PAY_AT_STATION` Payment/invoice, including its authoritative frozen
 fee snapshot. It does not reserve capacity, create an appointment, submit the
-application, or generate its VIR reference.
+application, or generate its MPWT reference.
 
 `POST /applications/:applicationId/submit` requires that pending Step-4
 payment/invoice; otherwise it returns `PAYMENT_STEP_FOUR_REQUIRED`. Review-pass

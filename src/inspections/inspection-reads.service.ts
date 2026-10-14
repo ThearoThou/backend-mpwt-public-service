@@ -289,12 +289,30 @@ export class InspectionReadsService {
       input.vehicleId === undefined
         ? ''
         : ` AND application."vehicle_id" = $${parameters.push(input.vehicleId)}`;
+    const applicationCondition =
+      input.applicationId === undefined
+        ? ''
+        : ` AND application."id" = $${parameters.push(input.applicationId)}`;
+    const inspectionCondition =
+      input.inspectionId === undefined
+        ? ''
+        : ` AND inspection."id" = $${parameters.push(input.inspectionId)}`;
+    const resultCondition =
+      input.result === undefined
+        ? ''
+        : ` AND inspection."result" = $${parameters.push(input.result)}::"public"."inspection_result"`;
+    const searchCondition =
+      input.search === undefined
+        ? ''
+        : ` AND (payment."invoice_number" ILIKE $${parameters.push(`%${input.search}%`)} OR application."vehicle_snapshot" ->> 'plateNumber' ILIKE $${parameters.length} OR application."vehicle_snapshot" ->> 'plateProvince' ILIKE $${parameters.length} OR CONCAT_WS(' ', application."vehicle_snapshot" ->> 'plateProvince', application."vehicle_snapshot" ->> 'plateNumber') ILIKE $${parameters.length} OR application."vehicle_snapshot" ->> 'make' ILIKE $${parameters.length} OR application."vehicle_snapshot" ->> 'model' ILIKE $${parameters.length} OR CONCAT_WS(' ', application."vehicle_snapshot" ->> 'make', application."vehicle_snapshot" ->> 'model') ILIKE $${parameters.length} OR application."vehicle_snapshot" ->> 'manufactureYear' ILIKE $${parameters.length})`;
     parameters.push(input.limit, (input.page - 1) * input.limit);
     const rows = await this.dataSource.query<CitizenHistoryRow[]>(
       `
-      SELECT inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'plateCategory' AS "plateCategory", application."vehicle_snapshot" ->> 'plateProvince' AS "plateProvince", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", COUNT(*) OVER()::int AS "total"
+      SELECT inspection."id" AS "inspectionId", inspection."application_id" AS "applicationId", application."reference_number" AS "referenceNumber", payment."invoice_number" AS "transactionNumber", inspection."attempt_number" AS "attemptNumber", inspection."result" AS "result", inspection."completed_at" AS "inspectedAt", inspection."failure_reason" AS "failureReason", inspection."valid_until"::text AS "validUntil", inspection."validity_rule" AS "validityRule", station."id" AS "stationId", station."name_kh" AS "stationNameKh", station."name_en" AS "stationNameEn", category."id" AS "categoryId", category."code" AS "categoryCode", category."name_kh" AS "categoryNameKh", category."name_en" AS "categoryNameEn", application."vehicle_snapshot" ->> 'registrationNumber' AS "registrationNumber", application."vehicle_snapshot" ->> 'chassisNumber' AS "chassisNumber", application."vehicle_snapshot" ->> 'engineNumber' AS "engineNumber", application."vehicle_snapshot" ->> 'vehicleType' AS "vehicleType", application."vehicle_snapshot" ->> 'plateNumber' AS "plateNumber", application."vehicle_snapshot" ->> 'plateCategory' AS "plateCategory", application."vehicle_snapshot" ->> 'plateProvince' AS "plateProvince", application."vehicle_snapshot" ->> 'make' AS "make", application."vehicle_snapshot" ->> 'model' AS "model", application."vehicle_snapshot" ->> 'manufactureYear' AS "manufactureYear", COUNT(*) OVER()::int AS "total"
       FROM "inspections" inspection
       INNER JOIN "renewal_applications" application ON application."id" = inspection."application_id" AND application."citizen_id" = $1
+      LEFT JOIN "payments" payment ON payment."application_id" = application."id"
+      LEFT JOIN "inspection_vehicle_categories" category ON category."id"::text = application."vehicle_snapshot" ->> 'inspectionCategoryId'
       LEFT JOIN "inspection_stations" actual_station ON actual_station."id" = inspection."actual_station_id"
       LEFT JOIN "appointments" appointment ON appointment."id" = inspection."appointment_id"
       LEFT JOIN "inspection_station_daily_capacities" capacity ON capacity."id" = appointment."daily_capacity_id"
@@ -302,7 +320,7 @@ export class InspectionReadsService {
       LEFT JOIN "inspection_stations" capacity_station ON capacity_station."id" = capacity."station_id"
       LEFT JOIN "inspection_stations" slot_station ON slot_station."id" = slot."station_id"
       LEFT JOIN "inspection_stations" station ON station."id" = COALESCE(actual_station."id", capacity_station."id", slot_station."id")
-      WHERE inspection."status" = 'COMPLETED'::"public"."inspection_status"${vehicleCondition}
+      WHERE inspection."status" = 'COMPLETED'::"public"."inspection_status"${vehicleCondition}${applicationCondition}${inspectionCondition}${resultCondition}${searchCondition}
       ORDER BY inspection."completed_at" ${order}, inspection."id" ${order}
       LIMIT $${parameters.length - 1} OFFSET $${parameters.length}
       `,
@@ -310,8 +328,10 @@ export class InspectionReadsService {
     );
     return {
       data: rows.map((row) => ({
+        inspectionId: row.inspectionId,
         applicationId: row.applicationId,
         referenceNumber: row.referenceNumber,
+        transactionNumber: row.transactionNumber,
         attemptNumber: Number(row.attemptNumber),
         result: row.result,
         inspectedAt: row.inspectedAt,
@@ -331,17 +351,54 @@ export class InspectionReadsService {
                 nameKh: row.stationNameKh,
                 nameEn: row.stationNameEn,
               },
+        inspectionCategory:
+          row.categoryId === null ||
+          row.categoryCode === null ||
+          row.categoryNameKh === null ||
+          row.categoryNameEn === null
+            ? null
+            : {
+                id: row.categoryId,
+                code: row.categoryCode,
+                nameKh: row.categoryNameKh,
+                nameEn: row.categoryNameEn,
+              },
         vehicle: {
           registrationNumber: row.registrationNumber,
+          chassisNumber: row.chassisNumber,
+          engineNumber: row.engineNumber,
+          vehicleType: row.vehicleType,
           plateNumber: row.plateNumber,
           plateCategory: row.plateCategory,
           plateProvince: row.plateProvince,
           make: row.make,
           model: row.model,
+          manufactureYear: row.manufactureYear,
         },
       })),
       meta: createPaginationMeta(input.page, input.limit, rows[0]?.total ?? 0),
     };
+  }
+
+  async getCitizenInspectionDetail(
+    citizenId: string,
+    inspectionId: string,
+  ): Promise<CitizenInspectionHistoryResponse> {
+    const result = await this.listCitizenInspectionHistory(citizenId, {
+      page: 1,
+      limit: 1,
+      sortOrder: 'desc',
+      inspectionId,
+    });
+    const inspection = result.data[0];
+    if (inspection === undefined) {
+      throw new DomainException(
+        ApiErrorCode.APPLICATION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Inspection not found',
+      );
+    }
+    return inspection;
   }
 
   private async assertCitizenOwnsVehicle(
@@ -597,8 +654,10 @@ interface CitizenStatusRow {
   today: string;
 }
 interface CitizenHistoryRow {
+  inspectionId: string;
   applicationId: string;
   referenceNumber: string | null;
+  transactionNumber: string | null;
   attemptNumber: number;
   result: InspectionResult;
   inspectedAt: Date;
@@ -608,11 +667,19 @@ interface CitizenHistoryRow {
   stationId: string | null;
   stationNameKh: string | null;
   stationNameEn: string | null;
+  categoryId: string | null;
+  categoryCode: string | null;
+  categoryNameKh: string | null;
+  categoryNameEn: string | null;
   registrationNumber: string | null;
+  chassisNumber: string | null;
+  engineNumber: string | null;
+  vehicleType: string | null;
   plateNumber: string | null;
   plateCategory: string | null;
   plateProvince: string | null;
   make: string | null;
   model: string | null;
+  manufactureYear: string | null;
   total: number;
 }

@@ -4,13 +4,11 @@ import { randomUUID } from 'node:crypto';
 import type { EntitySubscriberInterface } from 'typeorm';
 
 import { AdminApplicationReviewService } from '../src/applications/admin-application-review.service';
-import { CitizenSchedulingPreferenceService } from '../src/applications/citizen-scheduling-preference.service';
 import { RenewalApplicationStatusHistory } from '../src/applications/entities/renewal-application-status-history.entity';
 import { RenewalApplication } from '../src/applications/entities/renewal-application.entity';
 import { ApplicationStatus } from '../src/applications/enums/application-status.enum';
 import dataSource from '../src/database/data-source';
 import { Appointment } from '../src/scheduling/entities/appointment.entity';
-import { CitizenSchedulingAvailabilityService } from '../src/scheduling/citizen-scheduling-availability.service';
 import { InspectionStationDailyCapacity } from '../src/scheduling/entities/inspection-station-daily-capacity.entity';
 import { InspectionStation } from '../src/scheduling/entities/inspection-station.entity';
 import { AppointmentStatus } from '../src/scheduling/enums/appointment-status.enum';
@@ -222,76 +220,5 @@ describe('Phase 4G review-pass rollback (PostgreSQL)', () => {
     expect(application.status).toBe(ApplicationStatus.UNDER_REVIEW);
     expect(scheduledAppointments).toBe(0);
     expect(approvedHistory).toBe(0);
-  });
-
-  it('rolls back the citizen replacement selection when a real appointment insert subscriber fails', async () => {
-    const originalDate = '2099-01-01';
-    await dataSource.getRepository(RenewalApplication).update(
-      { id: ids.applicationId },
-      {
-        status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-        preferredInspectionDate: originalDate,
-      },
-    );
-    const forcedFailure = new Error('force citizen appointment insert failure');
-    const subscriber: EntitySubscriberInterface<Appointment> = {
-      listen: () => Appointment,
-      afterInsert: () => {
-        throw forcedFailure;
-      },
-    };
-    dataSource.subscribers.push(subscriber);
-    const dailyCapacities = new InspectionStationDailyCapacityService(
-      dataSource.getRepository(InspectionStationDailyCapacity),
-      dataSource.getRepository(InspectionStation),
-    );
-    const service = new CitizenSchedulingPreferenceService(
-      dataSource,
-      new CitizenSchedulingAvailabilityService(
-        dataSource.getRepository(InspectionStation),
-        dataSource.getRepository(InspectionStationDailyCapacity),
-      ),
-      dailyCapacities,
-    );
-
-    try {
-      await expect(
-        service.reserveAppointmentSelection(ids.citizenId, ids.applicationId, {
-          stationId: ids.stationId,
-          capacityDate,
-        }),
-      ).rejects.toBe(forcedFailure);
-    } finally {
-      dataSource.subscribers.splice(
-        dataSource.subscribers.indexOf(subscriber),
-        1,
-      );
-    }
-
-    const capacity = await dataSource
-      .getRepository(InspectionStationDailyCapacity)
-      .findOneByOrFail({ id: ids.dailyCapacityId });
-    const application = await dataSource
-      .getRepository(RenewalApplication)
-      .findOneByOrFail({ id: ids.applicationId });
-    expect(capacity.reservedCount).toBe(0);
-    expect(application).toMatchObject({
-      status: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-      preferredInspectionStationId: ids.stationId,
-      preferredInspectionDate: originalDate,
-    });
-    await expect(
-      dataSource.getRepository(Appointment).countBy({
-        applicationId: ids.applicationId,
-        status: AppointmentStatus.SCHEDULED,
-      }),
-    ).resolves.toBe(0);
-    await expect(
-      dataSource.getRepository(RenewalApplicationStatusHistory).countBy({
-        applicationId: ids.applicationId,
-        previousStatus: ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
-        newStatus: ApplicationStatus.APPROVED,
-      }),
-    ).resolves.toBe(0);
   });
 });

@@ -5,6 +5,7 @@ import {
   RefreshSessionRevocationReason,
   RefreshSessionService,
 } from '../auth/refresh-session.service';
+import { EmailDomainValidationService } from '../auth/email-domain-validation.service';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { CitizenProfile } from './entities/citizen-profile.entity';
 import { User } from './entities/user.entity';
@@ -74,12 +75,14 @@ function createService(
   profiles: Partial<Repository<CitizenProfile>> = {},
   dataSource: Partial<DataSource> = {},
   sessions: Partial<RefreshSessionService> = {},
+  emailDomains: Partial<EmailDomainValidationService> = { hasMailDomain: jest.fn().mockResolvedValue(true) },
 ): UsersService {
   return new UsersService(
     users as Repository<User>,
     profiles as Repository<CitizenProfile>,
     dataSource as DataSource,
     sessions as RefreshSessionService,
+    emailDomains as EmailDomainValidationService,
   );
 }
 
@@ -96,6 +99,35 @@ describe('UsersService', () => {
     expect(manager.getRepository).toHaveBeenCalledWith(User);
     expect(loginRepository.findOne).toHaveBeenCalledWith({
       where: { email: 'citizen@example.com' },
+      lock: { mode: 'pessimistic_write' },
+      select: {
+        id: true,
+        role: true,
+        status: true,
+        phone: true,
+        email: true,
+        phoneVerifiedAt: true,
+        emailVerifiedAt: true,
+        lastLoginAt: true,
+        createdAt: true,
+        updatedAt: true,
+        passwordHash: true,
+      },
+    });
+  });
+
+  it('loads the password hash when locking a user for a password change', async () => {
+    const userRepository = { findOne: jest.fn().mockResolvedValue(null) };
+    const manager = {
+      getRepository: jest.fn(() => userRepository),
+    };
+    const service = createService();
+
+    await service.findLockedUserById(USER_ID, manager as never);
+
+    expect(manager.getRepository).toHaveBeenCalledWith(User);
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { id: USER_ID },
       lock: { mode: 'pessimistic_write' },
       select: {
         id: true,
@@ -145,64 +177,54 @@ describe('UsersService', () => {
     expect(response).not.toHaveProperty('citizenProfile.profileImageKey');
   });
 
-  it('updates only supplied approved citizen-profile fields atomically and returns the profile directly', async () => {
+  it('updates approved fields atomically', async () => {
+    const user = createUser();
     const profile = createCitizenProfile();
-    const profiles = {
-      findOne: jest.fn().mockResolvedValue(profile),
-      update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
-    const service = createService({}, profiles);
+    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockResolvedValue(user) };
+    const profiles = { findOne: jest.fn().mockResolvedValue(profile), save: jest.fn().mockResolvedValue(profile) };
+    const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
+    const dataSource = { transaction: jest.fn((work) => work(manager)) };
+    const service = createService({}, {}, dataSource);
 
     const response = await service.updateCurrentCitizenProfile(USER_ID, {
-      nameEn: 'Updated Name',
-      address: 'Updated address',
+      nameEn: 'Updated Name', phone: '+85512999999', address: 'Updated address',
     });
 
-    expect(profiles.update).toHaveBeenCalledWith(
-      { userId: USER_ID },
-      { nameEn: 'Updated Name', address: 'Updated address' },
-    );
-    expect(response).toMatchObject({
-      id: profile.id,
-      userId: USER_ID,
-      nameEn: profile.nameEn,
-      profileImageUrl: null,
-    });
-    expect(response).not.toHaveProperty('user');
-    expect(response).not.toHaveProperty('profileImageKey');
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(users.save).toHaveBeenCalledWith(expect.objectContaining({ phone: '+85512999999', phoneVerifiedAt: null }));
+    expect(profiles.save).toHaveBeenCalledWith(expect.objectContaining({ nameEn: 'Updated Name', address: 'Updated address', nationalIdNumber: 'NID-123' }));
+    expect(response).toMatchObject({ user: { id: USER_ID, phone: '+85512999999' }, citizenProfile: { id: profile.id, nameEn: 'Updated Name', profileImageUrl: null } });
+    expect(response).not.toHaveProperty('user.passwordHash');
+    expect(response).not.toHaveProperty('citizenProfile.profileImageKey');
   });
 
   it('persists a cleared optional English name as null', async () => {
+    const user = createUser();
     const profile = createCitizenProfile({ nameEn: null });
-    const profiles = {
-      findOne: jest.fn().mockResolvedValue(profile),
-      update: jest.fn().mockResolvedValue({ affected: 1 }),
-    };
-    const service = createService({}, profiles);
+    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockResolvedValue(user) };
+    const profiles = { findOne: jest.fn().mockResolvedValue(profile), save: jest.fn().mockResolvedValue(profile) };
+    const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
+    const service = createService({}, {}, { transaction: jest.fn((work) => work(manager)) });
 
     await service.updateCurrentCitizenProfile(USER_ID, { nameEn: null });
 
-    expect(profiles.update).toHaveBeenCalledWith(
-      { userId: USER_ID },
-      { nameEn: null },
-    );
+    expect(profiles.save).toHaveBeenCalledWith(expect.objectContaining({ nameEn: null }));
   });
 
-  it('returns the existing safe profile without a write when no editable fields are supplied', async () => {
-    const profile = createCitizenProfile();
-    const profiles = {
-      findOne: jest.fn().mockResolvedValue(profile),
-      update: jest.fn(),
-    };
-    const service = createService({}, profiles);
+  it('returns USER_NOT_FOUND before reading or saving a profile for a missing citizen', async () => {
+    const users = { findOne: jest.fn().mockResolvedValue(null) };
+    const profiles = { findOne: jest.fn(), save: jest.fn() };
+    const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
+    const service = createService({}, {}, { transaction: jest.fn((work) => work(manager)) });
 
-    const response = await service.updateCurrentCitizenProfile(USER_ID, {});
-
-    expect(profiles.update).not.toHaveBeenCalled();
-    expect(response).toMatchObject({ id: profile.id, userId: USER_ID });
+    await expect(service.updateCurrentCitizenProfile(USER_ID, {}))
+      .rejects.toMatchObject({ code: ApiErrorCode.USER_NOT_FOUND });
+    expect(profiles.findOne).not.toHaveBeenCalled();
+    expect(profiles.save).not.toHaveBeenCalled();
   });
 
-  it('returns USER_NOT_FOUND when the atomic profile update affects no row', async () => {
+  /* Obsolete: the endpoint now locks and reads the user/profile before saving. */
+  /*
     const profiles = {
       findOne: jest.fn(),
       update: jest.fn().mockResolvedValue({ affected: 0 }),
@@ -215,19 +237,18 @@ describe('UsersService', () => {
     expect(profiles.findOne).not.toHaveBeenCalled();
   });
 
-  it('maps only duplicate national-ID writes to the generic profile conflict', async () => {
-    const profiles = {
-      update: jest.fn().mockRejectedValue({
-        code: '23505',
-        constraint: 'UQ_aa30876112d7d4c1ab2d9e7c6c9',
-        detail: 'duplicate national ID',
-      }),
-    };
-    const service = createService({}, profiles);
+  */
+  it('maps duplicate phone or email writes to the generic profile conflict', async () => {
+    const user = createUser();
+    const profile = createCitizenProfile();
+    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockRejectedValue({ code: '23505', constraint: 'UQ_users_phone', detail: 'duplicate phone' }) };
+    const profiles = { findOne: jest.fn().mockResolvedValue(profile), save: jest.fn() };
+    const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
+    const service = createService({}, {}, { transaction: jest.fn((work) => work(manager)) });
 
     await expect(
       service.updateCurrentCitizenProfile(USER_ID, {
-        nationalIdNumber: 'NID-123',
+        phone: '+85512999999',
       }),
     ).rejects.toMatchObject({
       code: ApiErrorCode.CONFLICT,
@@ -238,10 +259,11 @@ describe('UsersService', () => {
 
   it('rethrows unrelated profile-update failures for the global sanitized handler', async () => {
     const databaseError = new Error('database connection lost');
-    const profiles = {
-      update: jest.fn().mockRejectedValue(databaseError),
-    };
-    const service = createService({}, profiles);
+    const user = createUser();
+    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockResolvedValue(user) };
+    const profiles = { findOne: jest.fn().mockResolvedValue(createCitizenProfile()), save: jest.fn().mockRejectedValue(databaseError) };
+    const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
+    const service = createService({}, {}, { transaction: jest.fn((work) => work(manager)) });
 
     await expect(
       service.updateCurrentCitizenProfile(USER_ID, { address: 'Phnom Penh' }),

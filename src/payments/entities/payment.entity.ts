@@ -33,6 +33,11 @@ export class Payment {
     length: 50,
     unique: true,
   })
+  /**
+   * Legacy internal name for the official 90L… Transaction No.  The same value
+   * is printed on the Invoice and Inspection Sheet; citizen APIs call it
+   * `transactionNumber`. Kept unchanged for database compatibility.
+   */
   invoiceNumber!: string;
 
   @Column({

@@ -58,7 +58,7 @@ function trimString(params: { value: unknown }): unknown {
 
 function normalizeOptionalEnglishName(params: { value: unknown }): unknown {
   if (typeof params.value !== 'string') return params.value;
-  const value = params.value.trim();
+  const value = params.value.trim().replace(/\s+/g, ' ');
   return value === '' ? null : value;
 }
 
@@ -80,16 +80,23 @@ export class UpdateCitizenProfileRequestDto {
 
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  @Transform(trimString)
-  nationalIdNumber?: string;
+  @MaxLength(20)
+  @Transform(normalizeWhenValid(normalizeCambodianPhone))
+  @IsCambodianPhone()
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(254)
+  @Transform(normalizeWhenValid(normalizeEmail))
+  @IsNormalizedEmail()
+  email?: string | null;
 
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   @Transform(trimString)
-  address?: string;
+  address?: string | null;
 }
 
 export class ListUsersQueryDto extends BasePaginationQueryDto {

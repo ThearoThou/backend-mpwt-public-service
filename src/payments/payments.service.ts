@@ -43,9 +43,13 @@ import { PaymentPdfService } from './payment-pdf.service';
 import { inspectionPolicy } from '../config/inspection-policy';
 import { maximumChargeableLateDays } from './late-penalty-policy';
 import { expireInitialApplicationIfDue } from '../applications/initial-application-expiry';
+import {
+  isOptionalOversizeServiceEligible,
+  OPTIONAL_OVERSIZE_SERVICE_FEE_KHR,
+} from './optional-oversize-service';
 
 const PAYMENT_CURRENCY = 'KHR';
-const CITIZEN_SERVICE_FEE_KHR = '0.00';
+const ZERO_SERVICE_FEE_KHR = '0.00';
 const MAX_INVOICE_NUMBER_ATTEMPTS = 3;
 const MAX_RECEIPT_NUMBER_ATTEMPTS = 3;
 const INITIAL_APPLICATION_EXPIRED = Symbol('INITIAL_APPLICATION_EXPIRED');
@@ -58,6 +62,9 @@ export interface CitizenFeeEstimateResponse {
   lateFee: string;
   totalAmount: string;
   currency: string;
+  optionalServiceEligible: boolean;
+  optionalServiceSelected: boolean;
+  optionalServiceFeeKhr: string;
 }
 
 export interface CitizenPaymentInvoiceResponse extends PaymentResponse {
@@ -74,6 +81,7 @@ export interface CitizenPaymentInvoiceResponse extends PaymentResponse {
     model: string;
     manufactureYear: number | null;
     chassisNumber: string;
+    engineNumber: string | null;
   };
   applicant: {
     nameKh: string | null;
@@ -101,6 +109,67 @@ export class PaymentsService {
 
   async initializePayment(applicationId: string): Promise<Payment> {
     return this.initializePaymentForApplication(applicationId);
+  }
+
+  async finalizeDraftInvoiceForSubmission(
+    manager: EntityManager,
+    application: RenewalApplication,
+  ): Promise<Payment> {
+    const payments = manager.getRepository(Payment);
+    const payment = await payments.findOne({
+      where: { applicationId: application.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (payment === null) throw this.paymentNotFound();
+    this.assertPendingStationPayment(payment);
+
+    const vehicle = await this.loadVehicle(manager, application.vehicleId);
+    const category = await this.loadActiveCategory(manager, vehicle);
+    const optionalServiceEligible = isOptionalOversizeServiceEligible(
+      vehicle,
+      category.code,
+    );
+    const snapshot = await this.calculateSnapshot(
+      manager,
+      vehicle.inspectionExpiryDate,
+      vehicle.vehicleClass,
+      category.inspectionFeeKhr,
+      optionalServiceEligible && application.optionalOversizeServiceSelected
+        ? OPTIONAL_OVERSIZE_SERVICE_FEE_KHR
+        : ZERO_SERVICE_FEE_KHR,
+    );
+    const invoice = await this.paymentPdf.generateInvoice({
+      invoiceNumber: payment.invoiceNumber,
+      issuedDate: snapshot.paymentDate,
+      applicationReferenceNumber: application.referenceNumber,
+      vehiclePlate: vehicle.plateNumber,
+      vehicleMakeModel: `${vehicle.make} ${vehicle.model}`,
+      previousInspectionExpiryDate: vehicle.inspectionExpiryDate,
+      inspectionFeeKhr: snapshot.inspectionFeeKhr,
+      serviceFeeKhr: snapshot.serviceFeeKhr,
+      baseAmount: snapshot.baseAmount,
+      lateDays: snapshot.lateDays,
+      lateFee: snapshot.lateFee,
+      totalAmount: snapshot.totalAmount,
+      currency: PAYMENT_CURRENCY,
+    });
+    const storedInvoice = await this.files.savePaymentArtifact(
+      application.id,
+      'invoice',
+      invoice,
+    );
+
+    payment.inspectionFeeKhr = snapshot.inspectionFeeKhr;
+    payment.serviceFeeKhr = snapshot.serviceFeeKhr;
+    payment.baseAmount = snapshot.baseAmount;
+    payment.previousInspectionExpiryDate = vehicle.inspectionExpiryDate;
+    payment.lateDays = snapshot.lateDays;
+    payment.lateFee = snapshot.lateFee;
+    payment.totalAmount = snapshot.totalAmount;
+    payment.currency = PAYMENT_CURRENCY;
+    payment.invoiceIssuedAt = snapshot.invoiceIssuedAt;
+    payment.invoiceFileKey = storedInvoice.storageKey;
+    return payments.save(payment);
   }
 
   async initializeCitizenDraftPayment(
@@ -151,6 +220,10 @@ export class PaymentsService {
           if (existing !== null) {
             if (citizenId !== undefined) {
               this.assertPendingStationPayment(existing);
+              return this.finalizeDraftInvoiceForSubmission(
+                manager,
+                application,
+              );
             }
             return existing;
           }
@@ -189,12 +262,19 @@ export class PaymentsService {
             throw this.notOwned();
           }
           const category = await this.loadActiveCategory(manager, vehicle);
+          const optionalServiceEligible = isOptionalOversizeServiceEligible(
+            vehicle,
+            category.code,
+          );
           const snapshot = await this.calculateSnapshot(
             manager,
             vehicle.inspectionExpiryDate,
             vehicle.vehicleClass,
             category.inspectionFeeKhr,
-            CITIZEN_SERVICE_FEE_KHR,
+            optionalServiceEligible &&
+              application.optionalOversizeServiceSelected
+              ? OPTIONAL_OVERSIZE_SERVICE_FEE_KHR
+              : ZERO_SERVICE_FEE_KHR,
           );
           const invoiceNumber = this.generateInvoiceNumber(
             snapshot.paymentDate,
@@ -347,7 +427,7 @@ export class PaymentsService {
           });
           const inspectionSheet = await this.paymentPdf.generateInspectionSheet(
             {
-              receiptNumber,
+              invoiceNumber: payment.invoiceNumber,
               applicationReferenceNumber:
                 this.applicationReference(application),
               vehiclePlate: vehicle.plateNumber,
@@ -514,12 +594,18 @@ export class PaymentsService {
 
       const vehicle = await this.loadVehicle(manager, application.vehicleId);
       const category = await this.loadActiveCategory(manager, vehicle);
+      const optionalServiceEligible = isOptionalOversizeServiceEligible(
+        vehicle,
+        category.code,
+      );
       const snapshot = await this.calculateSnapshot(
         manager,
         vehicle.inspectionExpiryDate,
         vehicle.vehicleClass,
         category.inspectionFeeKhr,
-        CITIZEN_SERVICE_FEE_KHR,
+        optionalServiceEligible && application.optionalOversizeServiceSelected
+          ? OPTIONAL_OVERSIZE_SERVICE_FEE_KHR
+          : ZERO_SERVICE_FEE_KHR,
       );
 
       return {
@@ -530,6 +616,13 @@ export class PaymentsService {
         lateFee: snapshot.lateFee,
         totalAmount: snapshot.totalAmount,
         currency: PAYMENT_CURRENCY,
+        optionalServiceEligible,
+        optionalServiceSelected:
+          optionalServiceEligible &&
+          application.optionalOversizeServiceSelected,
+        optionalServiceFeeKhr: optionalServiceEligible
+          ? OPTIONAL_OVERSIZE_SERVICE_FEE_KHR
+          : ZERO_SERVICE_FEE_KHR,
       };
     });
   }
@@ -579,6 +672,7 @@ export class PaymentsService {
           model: vehicle.model,
           manufactureYear: vehicle.manufactureYear,
           chassisNumber: vehicle.chassisNumber,
+          engineNumber: vehicle.engineNumber,
         },
         applicant: {
           nameKh: profile?.nameKh ?? null,
@@ -1164,11 +1258,11 @@ export class PaymentsService {
 
 export function generateInvoiceNumber(
   paymentDate: string,
-  nextNumericSuffix: () => number = () => randomInt(1_000_000),
+  nextNumericSuffix: () => number = () => randomInt(10_000),
 ): string {
-  return `INV-${paymentDate.replaceAll('-', '')}-${nextNumericSuffix()
+  return `90L${paymentDate.slice(2).replaceAll('-', '')}${nextNumericSuffix()
     .toString()
-    .padStart(6, '0')}`;
+    .padStart(4, '0')}`;
 }
 
 export function generateReceiptNumber(

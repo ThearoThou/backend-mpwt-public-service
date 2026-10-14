@@ -4,6 +4,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { Repository } from 'typeorm';
 
 import { ApiErrorCode } from '../common/errors/api-error-code';
+import { TimelineEventType } from '../activity/enums/timeline-event-type.enum';
 import { ApplicationStatus } from './enums/application-status.enum';
 import { ApplicationsService } from './applications.service';
 
@@ -12,6 +13,31 @@ const OTHER_CITIZEN_ID = '22222222-2222-4222-8222-222222222222';
 const APPLICATION_ID = '33333333-3333-4333-8333-333333333333';
 
 describe('ApplicationsService', () => {
+  it.each([
+    'MPWT-20260908-0EEC0FB79039',
+    'MPWT-20260908',
+    'MPWT-260908-0EEC0F',
+    'MPWT-260908',
+    '0EEC0F',
+  ])(
+    'keeps old, new, and partial application reference search compatible: %s',
+    async (search) => {
+      const fixture = createFixture();
+
+      await createService(fixture).listCitizenApplications(CITIZEN_ID, {
+        page: 1,
+        limit: 20,
+        sortOrder: 'desc',
+        search,
+      });
+
+      expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+        expect.stringContaining('application.referenceNumber ILIKE :search'),
+        { search: `%${search}%` },
+      );
+    },
+  );
+
   it('applies citizen ownership, multi-status, and grouped search before pagination', async () => {
     const fixture = createFixture();
     const service = createService(fixture);
@@ -56,17 +82,7 @@ describe('ApplicationsService', () => {
       { search: '%ABC123%' },
     );
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "application.vehicleSnapshot ->> 'registrationNumber' ILIKE :search",
-      ),
-      { search: '%ABC123%' },
-    );
-    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('application.vehicleSnapshot IS NULL'),
-      { search: '%ABC123%' },
-    );
-    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
-      expect.stringContaining('vehicle.registrationNumber ILIKE :search'),
       { search: '%ABC123%' },
     );
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
@@ -87,6 +103,12 @@ describe('ApplicationsService', () => {
     );
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
       expect.stringContaining(
+        "CONCAT_WS(' ', application.vehicleSnapshot ->> 'make', application.vehicleSnapshot ->> 'model') ILIKE :search",
+      ),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
         "application.vehicleSnapshot ->> 'manufactureYear' ILIKE :search",
       ),
       { search: '%ABC123%' },
@@ -97,6 +119,12 @@ describe('ApplicationsService', () => {
     );
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('vehicle.model ILIKE :search'),
+      { search: '%ABC123%' },
+    );
+    expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "CONCAT_WS(' ', vehicle.make, vehicle.model) ILIKE :search",
+      ),
       { search: '%ABC123%' },
     );
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
@@ -157,8 +185,16 @@ describe('ApplicationsService', () => {
     expect(searchClause).toContain(
       "application.vehicleSnapshot ->> 'make' ILIKE :search",
     );
+    expect(searchClause).toContain(
+      "CONCAT_WS(' ', application.vehicleSnapshot ->> 'make', application.vehicleSnapshot ->> 'model') ILIKE :search",
+    );
     expect(searchClause).toContain('application.vehicleSnapshot IS NULL AND (');
     expect(searchClause).toContain('vehicle.make ILIKE :search');
+    expect(searchClause).toContain(
+      "CONCAT_WS(' ', vehicle.make, vehicle.model) ILIKE :search",
+    );
+    expect(searchClause).not.toContain('payment.');
+    expect(searchClause).not.toContain('certificate');
     expect(fixture.applicationQuery.andWhere).toHaveBeenCalledWith(
       'application.status IN (:...statuses)',
       {
@@ -272,6 +308,67 @@ describe('ApplicationsService', () => {
     );
     expect(result.data).toEqual([]);
   });
+
+  it('returns only citizen-visible timeline event fields after ownership verification', async () => {
+    const fixture = createFixture();
+    fixture.applicationQuery.getOne.mockResolvedValue(application(CITIZEN_ID));
+    fixture.timelineQuery.getMany.mockResolvedValue([
+      {
+        id: 'event-id',
+        applicationId: APPLICATION_ID,
+        eventType: TimelineEventType.DOCUMENTS_APPROVED,
+        title: 'Internal title',
+        message: 'Internal message',
+        actorUserId: OTHER_CITIZEN_ID,
+        visibleToCitizen: true,
+        metadata: { internal: true },
+        occurredAt: new Date('2026-09-10T04:30:00.000Z'),
+      },
+    ]);
+
+    const result = await createService(fixture).listCitizenTimelineEvents(
+      CITIZEN_ID,
+      APPLICATION_ID,
+    );
+
+    expect(fixture.timelineQuery.select).toHaveBeenCalledWith([
+      'event.id',
+      'event.eventType',
+      'event.occurredAt',
+    ]);
+    expect(fixture.timelineQuery.where).toHaveBeenCalledWith(
+      'event.applicationId = :applicationId',
+      { applicationId: APPLICATION_ID },
+    );
+    expect(fixture.timelineQuery.andWhere).toHaveBeenCalledWith(
+      'event.visibleToCitizen = :visibleToCitizen',
+      { visibleToCitizen: true },
+    );
+    expect(result).toEqual([
+      {
+        eventType: TimelineEventType.DOCUMENTS_APPROVED,
+        occurredAt: '2026-09-10T04:30:00.000Z',
+      },
+    ]);
+  });
+
+  it('rejects timeline events outside the citizen ownership scope', async () => {
+    const fixture = createFixture();
+    fixture.applicationQuery.getOne.mockResolvedValue(
+      application(OTHER_CITIZEN_ID),
+    );
+
+    await expect(
+      createService(fixture).listCitizenTimelineEvents(
+        CITIZEN_ID,
+        APPLICATION_ID,
+      ),
+    ).rejects.toMatchObject({
+      code: ApiErrorCode.RESOURCE_NOT_OWNED,
+      status: HttpStatus.FORBIDDEN,
+    });
+    expect(fixture.timelineQuery.getMany).not.toHaveBeenCalled();
+  });
 });
 
 function createService(fixture: ReturnType<typeof createFixture>) {
@@ -281,6 +378,9 @@ function createService(fixture: ReturnType<typeof createFixture>) {
     } as unknown as Repository<never>,
     {
       createQueryBuilder: jest.fn().mockReturnValue(fixture.historyQuery),
+    } as unknown as Repository<never>,
+    {
+      createQueryBuilder: jest.fn().mockReturnValue(fixture.timelineQuery),
     } as unknown as Repository<never>,
   );
 }
@@ -293,8 +393,10 @@ function createFixture() {
   ]);
   const historyQuery = query();
   historyQuery.getManyAndCount.mockResolvedValue([[], 0]);
+  const timelineQuery = query();
+  timelineQuery.getMany.mockResolvedValue([]);
 
-  return { applicationQuery, historyQuery };
+  return { applicationQuery, historyQuery, timelineQuery };
 }
 
 function query() {
@@ -310,6 +412,7 @@ function query() {
     skip: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
     getManyAndCount: jest.fn(),
+    getMany: jest.fn(),
     getOne: jest.fn(),
   };
 }

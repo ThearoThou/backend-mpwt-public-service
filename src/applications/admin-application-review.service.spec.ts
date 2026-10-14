@@ -376,7 +376,6 @@ describe('AdminApplicationReviewService', () => {
     ApplicationStatus.DRAFT,
     ApplicationStatus.SUBMITTED,
     ApplicationStatus.APPROVED,
-    ApplicationStatus.APPOINTMENT_SELECTION_REQUIRED,
     ApplicationStatus.REJECTED,
   ])('does not reserve twice or pass review from %s', async (status) => {
     const fixture = createFixture({ status });

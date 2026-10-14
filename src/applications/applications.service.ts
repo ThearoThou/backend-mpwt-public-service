@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Repository } from 'typeorm';
 
+import { ApplicationTimelineEvent } from '../activity/entities/application-timeline-event.entity';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
@@ -16,6 +17,10 @@ import {
   type RenewalApplicationStatusHistoryResponse,
 } from './application-status-history-response.mapper';
 import {
+  mapCitizenApplicationTimelineEvent,
+  type CitizenApplicationTimelineEventResponse,
+} from './application-timeline-event-response.mapper';
+import {
   type ListCitizenApplicationsQueryDto,
   type RenewalApplicationStatusHistoryQueryDto,
 } from './dto/application-request.dtos';
@@ -23,6 +28,7 @@ import { RenewalApplicationStatusHistory } from './entities/renewal-application-
 import { RenewalApplication } from './entities/renewal-application.entity';
 import { Inspection } from '../inspections/entities/inspection.entity';
 import { InspectionStatus } from '../inspections/enums/inspection-status.enum';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
 
 @Injectable()
 export class ApplicationsService {
@@ -31,6 +37,10 @@ export class ApplicationsService {
     private readonly applications: Repository<RenewalApplication>,
     @InjectRepository(RenewalApplicationStatusHistory)
     private readonly statusHistory: Repository<RenewalApplicationStatusHistory>,
+    @InjectRepository(ApplicationTimelineEvent)
+    private readonly timelineEvents: Repository<ApplicationTimelineEvent>,
+    @InjectRepository(InspectionVehicleCategory)
+    private readonly inspectionCategories: Repository<InspectionVehicleCategory>,
   ) {}
 
   async listCitizenApplications(
@@ -63,16 +73,20 @@ export class ApplicationsService {
         `(application.referenceNumber ILIKE :search
           OR (application.vehicleSnapshot IS NOT NULL AND (
             application.vehicleSnapshot ->> 'plateNumber' ILIKE :search
-            OR application.vehicleSnapshot ->> 'registrationNumber' ILIKE :search
+            OR application.vehicleSnapshot ->> 'plateProvince' ILIKE :search
+            OR CONCAT_WS(' ', application.vehicleSnapshot ->> 'plateProvince', application.vehicleSnapshot ->> 'plateNumber') ILIKE :search
             OR application.vehicleSnapshot ->> 'make' ILIKE :search
             OR application.vehicleSnapshot ->> 'model' ILIKE :search
+            OR CONCAT_WS(' ', application.vehicleSnapshot ->> 'make', application.vehicleSnapshot ->> 'model') ILIKE :search
             OR application.vehicleSnapshot ->> 'manufactureYear' ILIKE :search
           ))
           OR (application.vehicleSnapshot IS NULL AND (
             vehicle.plateNumber ILIKE :search
-            OR vehicle.registrationNumber ILIKE :search
+            OR vehicle.plateProvince ILIKE :search
+            OR CONCAT_WS(' ', vehicle.plateProvince, vehicle.plateNumber) ILIKE :search
             OR vehicle.make ILIKE :search
             OR vehicle.model ILIKE :search
+            OR CONCAT_WS(' ', vehicle.make, vehicle.model) ILIKE :search
             OR CAST(vehicle.manufactureYear AS TEXT) ILIKE :search
           )))`,
         { search: `%${input.search}%` },
@@ -94,9 +108,21 @@ export class ApplicationsService {
     citizenId: string,
     applicationId: string,
   ): Promise<CitizenApplicationDetailResponse> {
-    return mapCitizenApplicationDetail(
-      await this.findCitizenApplication(citizenId, applicationId, true),
+    const application = await this.findCitizenApplication(
+      citizenId,
+      applicationId,
+      true,
     );
+    const categoryId =
+      application.vehicleSnapshot?.inspectionCategoryId ?? null;
+    const inspectionCategory =
+      categoryId === null
+        ? null
+        : await this.inspectionCategories.findOne({
+            select: { id: true, code: true, nameKh: true, nameEn: true },
+            where: { id: categoryId },
+          });
+    return mapCitizenApplicationDetail(application, inspectionCategory);
   }
 
   async listCitizenStatusHistory(
@@ -129,6 +155,26 @@ export class ApplicationsService {
     };
   }
 
+  async listCitizenTimelineEvents(
+    citizenId: string,
+    applicationId: string,
+  ): Promise<CitizenApplicationTimelineEventResponse[]> {
+    await this.findCitizenApplication(citizenId, applicationId);
+
+    const events = await this.timelineEvents
+      .createQueryBuilder('event')
+      .select(['event.id', 'event.eventType', 'event.occurredAt'])
+      .where('event.applicationId = :applicationId', { applicationId })
+      .andWhere('event.visibleToCitizen = :visibleToCitizen', {
+        visibleToCitizen: true,
+      })
+      .orderBy('event.occurredAt', 'ASC')
+      .addOrderBy('event.id', 'ASC')
+      .getMany();
+
+    return events.map(mapCitizenApplicationTimelineEvent);
+  }
+
   private applicationQuery() {
     return this.applications
       .createQueryBuilder('application')
@@ -158,6 +204,10 @@ export class ApplicationsService {
       .addSelect('application.vehicleSnapshot')
       .leftJoinAndSelect('application.vehicle', 'vehicle')
       .leftJoinAndSelect('application.payment', 'payment')
+      .leftJoinAndSelect(
+        'application.technicalInspectionCertificate',
+        'technicalInspectionCertificate',
+      )
       .leftJoinAndMapOne(
         'application.latestInspection',
         Inspection,
@@ -175,7 +225,9 @@ export class ApplicationsService {
   }
 
   private applicationDetailQuery() {
-    return this.applicationQuery().addSelect('application.vehicleSnapshot');
+    return this.applicationQuery()
+      .addSelect('application.vehicleSnapshot')
+      .leftJoinAndSelect('application.payment', 'payment');
   }
 
   private async findCitizenApplication(

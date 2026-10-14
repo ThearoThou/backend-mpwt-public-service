@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsDateString,
+  IsBoolean,
   IsNotEmpty,
   IsInt,
   IsOptional,
@@ -20,6 +21,10 @@ export class CitizenSchedulingPreferenceRequestDto {
   @IsDateString()
   @IsNotEmpty()
   preferredInspectionDate!: string;
+
+  @IsOptional()
+  @IsBoolean()
+  optionalOversizeServiceSelected?: boolean;
 }
 export class CreateInspectionStationDailyCapacityRequestDto {
   @IsUUID('4') stationId!: string;

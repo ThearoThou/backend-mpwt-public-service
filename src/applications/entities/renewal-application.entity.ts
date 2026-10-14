@@ -92,6 +92,13 @@ export class RenewalApplication {
   preferredInspectionDate!: string | null;
 
   @Column({
+    name: 'optional_oversize_service_selected',
+    type: 'boolean',
+    default: false,
+  })
+  optionalOversizeServiceSelected!: boolean;
+
+  @Column({
     name: 'submitted_at',
     type: 'timestamptz',
     nullable: true,

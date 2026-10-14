@@ -83,7 +83,7 @@ describe('PaymentPdfService', () => {
         paymentReference: 'COUNTER-123',
       }),
       service.generateInspectionSheet({
-        receiptNumber: 'RCP-20260812-123456',
+        invoiceNumber: '90L2608121234',
         applicationReferenceNumber: 'VIR-20260812-ABCDEF123456',
         vehiclePlate: '2A-3146',
         vehicleMakeModel: 'តូយ៉ូតា RAV4',

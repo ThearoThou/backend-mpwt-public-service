@@ -201,7 +201,7 @@ describe('PaymentsService transitions', () => {
     expect(fixture.applicationHistoryRepository.save).toHaveBeenCalledTimes(1);
   });
 
-  it.each([PaymentStatus.CONFIRMED, PaymentStatus.FAILED])(
+  it.each([PaymentStatus.CONFIRMED])(
     'rejects confirmation from %s after acquiring the lock',
     async (status) => {
       const fixture = createFixture(payment(status));
@@ -305,7 +305,6 @@ describe('PaymentsService transitions', () => {
     [PaymentStatus.PENDING, 'reopenPayment'],
     [PaymentStatus.CONFIRMED, 'rejectPayment'],
     [PaymentStatus.CONFIRMED, 'reopenPayment'],
-    [PaymentStatus.FAILED, 'rejectPayment'],
   ] as const)(
     'rejects illegal %s -> %s transitions',
     async (status, method) => {

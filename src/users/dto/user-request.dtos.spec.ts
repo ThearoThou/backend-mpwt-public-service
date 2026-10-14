@@ -33,4 +33,19 @@ describe('UpdateCitizenProfileRequestDto', () => {
     );
     await expect(validate(clearEnglishName)).resolves.toHaveLength(0);
   });
+
+  it('requires separate Latin name parts and normalizes repeated spaces', async () => {
+    const joinedName = plainToInstance(UpdateCitizenProfileRequestDto, {
+      nameEn: 'SokDara',
+    });
+    const separatedName = plainToInstance(UpdateCitizenProfileRequestDto, {
+      nameEn: '  Sok   Dara Neath  ',
+    });
+
+    await expect(validate(joinedName)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ property: 'nameEn' })]),
+    );
+    expect(separatedName.nameEn).toBe('Sok Dara Neath');
+    await expect(validate(separatedName)).resolves.toHaveLength(0);
+  });
 });

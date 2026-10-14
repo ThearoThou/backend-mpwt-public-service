@@ -4,6 +4,8 @@ import { Inspection } from '../inspections/entities/inspection.entity';
 import { InspectionResult } from '../inspections/enums/inspection-result.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
 import type { ApplicationVehicleTechnicalSnapshot } from './application-vehicle-snapshot';
+import { InspectionVehicleCategory } from '../inspection-categories/entities/inspection-vehicle-category.entity';
+import { getInitialApplicationExpiryDate } from './initial-application-expiry';
 
 export interface RenewalApplicationResponse {
   id: string;
@@ -15,7 +17,9 @@ export interface RenewalApplicationResponse {
   currentRejectionReason: string | null;
   preferredInspectionStationId: string | null;
   preferredInspectionDate: string | null;
+  optionalOversizeServiceSelected: boolean;
   submittedAt: Date | null;
+  applicationExpiryDate: string | null;
   reviewStartedAt: Date | null;
   readyForInspectionAt: Date | null;
   completedAt: Date | null;
@@ -37,8 +41,13 @@ export interface CitizenApplicationVehicleSummary {
 
 export interface CitizenApplicationPaymentSummary {
   status: PaymentStatus;
+  transactionNumber: string | null;
   totalAmount: string;
   currency: string;
+}
+
+export interface CitizenApplicationCertificateSummary {
+  certificateNumber: string;
 }
 
 export interface CitizenApplicationInspectionSummary {
@@ -48,6 +57,7 @@ export interface CitizenApplicationInspectionSummary {
 export interface CitizenApplicationListResponse extends RenewalApplicationResponse {
   vehicle: CitizenApplicationVehicleSummary | null;
   payment: CitizenApplicationPaymentSummary | null;
+  certificate: CitizenApplicationCertificateSummary | null;
   inspection: CitizenApplicationInspectionSummary | null;
 }
 
@@ -71,9 +81,14 @@ export interface CitizenApplicationVehicleSnapshotResponse extends ApplicationVe
   registeredOwnerNameKh: string | null;
   registeredOwnerNameEn: string | null;
   registeredOwnerPhone: string | null;
+  inspectionCategory: Pick<
+    InspectionVehicleCategory,
+    'id' | 'code' | 'nameKh' | 'nameEn'
+  > | null;
 }
 
 export interface CitizenApplicationDetailResponse extends RenewalApplicationResponse {
+  transactionNumber: string | null;
   vehicleSnapshot: CitizenApplicationVehicleSnapshotResponse | null;
 }
 
@@ -90,7 +105,13 @@ export function mapRenewalApplication(
     currentRejectionReason: application.currentRejectionReason,
     preferredInspectionStationId: application.preferredInspectionStationId,
     preferredInspectionDate: application.preferredInspectionDate,
+    optionalOversizeServiceSelected:
+      application.optionalOversizeServiceSelected ?? false,
     submittedAt: application.submittedAt,
+    applicationExpiryDate:
+      application.submittedAt === null
+        ? null
+        : getInitialApplicationExpiryDate(application.submittedAt),
     reviewStartedAt: application.reviewStartedAt,
     readyForInspectionAt: application.readyForInspectionAt,
     completedAt: application.completedAt,
@@ -109,6 +130,7 @@ export function mapCitizenApplicationList(
   );
   const vehicle = application.vehicle ?? null;
   const payment = application.payment ?? null;
+  const certificate = application.technicalInspectionCertificate ?? null;
   const inspection = application.latestInspection ?? null;
 
   return {
@@ -122,9 +144,14 @@ export function mapCitizenApplicationList(
         ? null
         : {
             status: payment.status,
+            transactionNumber: payment.invoiceNumber,
             totalAmount: payment.totalAmount,
             currency: payment.currency,
           },
+    certificate:
+      certificate === null || certificate.issuedAt === null
+        ? null
+        : { certificateNumber: certificate.certificateNumber },
     inspection:
       inspection === null || inspection.result === null
         ? null
@@ -134,15 +161,27 @@ export function mapCitizenApplicationList(
 
 export function mapCitizenApplicationDetail(
   application: RenewalApplication,
+  inspectionCategory: Pick<
+    InspectionVehicleCategory,
+    'id' | 'code' | 'nameKh' | 'nameEn'
+  > | null = null,
 ): CitizenApplicationDetailResponse {
   return {
     ...mapRenewalApplication(application),
-    vehicleSnapshot: mapVehicleSnapshot(application.vehicleSnapshot),
+    transactionNumber: application.payment?.invoiceNumber ?? null,
+    vehicleSnapshot: mapVehicleSnapshot(
+      application.vehicleSnapshot,
+      inspectionCategory,
+    ),
   };
 }
 
 function mapVehicleSnapshot(
   snapshot: Record<string, unknown> | null | undefined,
+  inspectionCategory: Pick<
+    InspectionVehicleCategory,
+    'id' | 'code' | 'nameKh' | 'nameEn'
+  > | null,
 ): CitizenApplicationVehicleSnapshotResponse | null {
   if (snapshot === null || snapshot === undefined) return null;
 
@@ -156,6 +195,7 @@ function mapVehicleSnapshot(
     vehicleType: snapshotString(snapshot, 'vehicleType'),
     vehicleClass: snapshotString(snapshot, 'vehicleClass'),
     inspectionCategoryId: snapshotString(snapshot, 'inspectionCategoryId'),
+    inspectionCategory,
     make: snapshotString(snapshot, 'make'),
     model: snapshotString(snapshot, 'model'),
     manufactureYear: snapshotNumber(snapshot, 'manufactureYear'),

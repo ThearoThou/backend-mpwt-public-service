@@ -77,7 +77,7 @@ export class CertificatePdfService implements OnModuleDestroy {
     const { certificate, vehicle, inspection } = input;
     const cell = (label: string, value: string) => `
       <div class="cell">
-        <div class="label">${escapeHtml(label)}</div>
+        <div class="label"><span>${escapeHtml(khmerLabel(label))}</span><small>${escapeHtml(label)}</small></div>
         <div class="value">${escapeHtml(value)}</div>
       </div>`;
 
@@ -95,13 +95,17 @@ export class CertificatePdfService implements OnModuleDestroy {
     .header { display: grid; grid-template-columns: 1fr 1.25fr 1fr; align-items: start; min-height: 35mm; }
     .ministry { font-size: 7.4pt; line-height: 1.35; padding-top: 9mm; }
     .kingdom { text-align: center; font-weight: 700; line-height: 1.45; font-size: 9.2pt; }
-    .asset-space { min-height: 28mm; }
+    .emblem-slot { border: .3mm solid #222; border-radius: 50%; height: 21mm; margin: 1mm auto 0; width: 21mm; }
+    .certificate-no { font-size: 8pt; margin: -6mm 0 2mm; text-align: left; }
     h1 { margin: 2mm 0 4mm; text-align: center; font-size: 12.5pt; line-height: 1.35; text-transform: uppercase; }
+    h1 small { display:block; font-size: 10pt; text-transform: none; }
     .identity { display: grid; grid-template-columns: 1.35fr 1fr 1fr; border: 0.35mm solid #111; border-bottom: 0; }
     .grid { display: grid; grid-template-columns: repeat(3, 1fr); border-left: 0.35mm solid #111; border-top: 0.35mm solid #111; }
     .cell { min-height: 20mm; border-right: 0.35mm solid #111; border-bottom: 0.35mm solid #111; padding: 2.2mm 2.5mm; text-align: center; overflow-wrap: anywhere; }
     .identity .cell { min-height: 18mm; }
     .label { min-height: 7mm; font-size: 7.6pt; line-height: 1.25; }
+    .label span, .label small { display:block; }
+    .label small { font-size: 6.8pt; font-weight: 600; }
     .value { margin-top: 1.2mm; font-size: 10.2pt; font-weight: 700; line-height: 1.25; }
     .compact .cell { min-height: 18mm; }
     .identifiers { grid-template-columns: 0.75fr 1.15fr 1.45fr; }
@@ -109,20 +113,23 @@ export class CertificatePdfService implements OnModuleDestroy {
     .note-copy { padding: 2.5mm; border-right: 0.35mm solid #111; }
     .note-label { font-weight: 700; margin-bottom: 2mm; }
     .note-value { white-space: pre-wrap; overflow-wrap: anywhere; }
-    .reserved-space { min-height: 26mm; }
-    .footer-line { margin-top: 5mm; border-top: 0.25mm solid #555; padding-top: 2mm; text-align: center; font-size: 7pt; color: #444; }
+    .qr-slot { align-items:center; display:flex; justify-content:center; min-height:26mm; }
+    .qr-frame { border:.35mm solid #111; height:22mm; width:22mm; }
   </style>
 </head>
 <body>
   <header class="header">
     <div class="ministry">
-      <strong>MINISTRY OF PUBLIC WORKS AND TRANSPORT</strong><br>
+      <strong>ក្រសួងសាធារណការ និងដឹកជញ្ជូន</strong><br>
+      MINISTRY OF PUBLIC WORKS AND TRANSPORT<br><br>
+      <strong>អគ្គនាយកដ្ឋានដឹកជញ្ជូនផ្លូវគោក</strong><br>
       GENERAL DEPARTMENT OF LAND TRANSPORT
     </div>
-    <div class="kingdom">KINGDOM OF CAMBODIA<br>NATION RELIGION KING</div>
-    <div class="asset-space" aria-hidden="true"></div>
+    <div class="kingdom">ព្រះរាជាណាចក្រកម្ពុជា<br>KINGDOM OF CAMBODIA<br>ជាតិ សាសនា ព្រះមហាក្សត្រ<br>NATION RELIGION KING</div>
+    <div class="emblem-slot" aria-label="Official emblem placement"></div>
   </header>
-  <h1>Certificate of Vehicle Technical Inspection</h1>
+  <div class="certificate-no">លេខ / Certificate No. ${escapeHtml(certificate.certificateNumber)}</div>
+  <h1>វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត<small>CERTIFICATE OF VEHICLE TECHNICAL INSPECTION</small></h1>
   <section class="identity">
     ${cell('Certificate Number', certificate.certificateNumber)}
     ${cell('Inspection Date', formatCambodiaDate(inspection.completedAt))}
@@ -133,7 +140,7 @@ export class CertificatePdfService implements OnModuleDestroy {
     ${cell('Type', formatVehicleType(vehicle.vehicleType))}
     ${cell('Colour', requiredText(vehicle.colour, 'vehicle.colour'))}
     ${cell('Year Made', String(requiredNumber(vehicle.manufactureYear, 'vehicle.manufactureYear')))}
-    ${cell('Steering', requiredText(vehicle.steering, 'vehicle.steering'))}
+    ${cell('Steering', formatVehicleEnum(vehicle.steering, 'vehicle.steering'))}
     ${cell('Cylinders / Displacement / Power', `${requiredNumber(vehicle.numberOfCylinders, 'vehicle.numberOfCylinders')} / ${formatIntegerUnit(vehicle.engineDisplacementCc, 'cc', 'vehicle.engineDisplacementCc')} / ${formatTextUnit(vehicle.enginePowerHp, 'HP', 'vehicle.enginePowerHp')}`)}
   </section>
   <section class="grid compact">
@@ -141,7 +148,7 @@ export class CertificatePdfService implements OnModuleDestroy {
     ${cell('Maximum Load', formatIntegerUnit(vehicle.maximumLoadKg, 'kg', 'vehicle.maximumLoadKg'))}
     ${cell('Maximum Gross Weight', formatIntegerUnit(vehicle.maximumGrossWeightKg, 'kg', 'vehicle.maximumGrossWeightKg'))}
     ${cell('Number of Seats', String(requiredNumber(vehicle.numberOfSeats, 'vehicle.numberOfSeats')))}
-    ${cell('Type of Fuel', requiredText(vehicle.fuelType, 'vehicle.fuelType'))}
+    ${cell('Type of Fuel', formatVehicleEnum(vehicle.fuelType, 'vehicle.fuelType'))}
     ${cell('Wheel Size', requiredText(vehicle.wheelSize, 'vehicle.wheelSize'))}
     ${cell('Length', `${formatMillimetresAsMetres(requiredNumber(vehicle.lengthMm, 'vehicle.lengthMm'))} m`)}
     ${cell('Width', `${formatMillimetresAsMetres(requiredNumber(vehicle.widthMm, 'vehicle.widthMm'))} m`)}
@@ -153,10 +160,9 @@ export class CertificatePdfService implements OnModuleDestroy {
     ${cell('Body / Chassis Number', vehicle.chassisNumber)}
   </section>
   <section class="note">
-    <div class="note-copy"><div class="note-label">Note</div><div class="note-value">${escapeHtml(input.note ?? '')}</div></div>
-    <div class="reserved-space" aria-hidden="true"></div>
+    <div class="note-copy"><div class="note-label">សម្គាល់ / Note</div><div class="note-value">${escapeHtml(input.note ?? '')}</div></div>
+    <div class="qr-slot" aria-label="Certificate verification QR placement"><div class="qr-frame"></div></div>
   </section>
-  <div class="footer-line">Issued ${escapeHtml(formatCambodiaDate(certificate.issuedAt))}</div>
 </body>
 </html>`;
   }
@@ -213,7 +219,23 @@ export function formatPrintedMark(make: string, model: string): string {
 }
 
 export function formatVehicleType(vehicleType: string): string {
-  return requiredText(vehicleType, 'vehicle.vehicleType');
+  const value = requiredText(vehicleType, 'vehicle.vehicleType');
+  return ({ FAMILY_PASSENGER: 'Family passenger', PASSENGER_VAN: 'Passenger van' } as Record<string, string>)[value] ?? value;
+}
+
+function formatVehicleEnum(value: string | null, field: string): string {
+  const normalized = requiredText(value, field);
+  return ({ LEFT: 'Left', RIGHT: 'Right', PETROL: 'Petrol', DIESEL: 'Diesel', ELECTRIC: 'Electric', HYBRID: 'Hybrid' } as Record<string, string>)[normalized] ?? normalized;
+}
+
+function khmerLabel(label: string): string {
+  return ({
+    'Certificate Number': 'លេខវិញ្ញាបនបត្រ', 'Inspection Date': 'កាលបរិច្ឆេទត្រួតពិនិត្យ', 'Expiry Date': 'កាលបរិច្ឆេទផុតកំណត់',
+    'Mark / Make': 'ម៉ាក', Type: 'ប្រភេទ', Colour: 'ពណ៌', 'Year Made': 'ឆ្នាំផលិត', Steering: 'ចង្កូត',
+    'Cylinders / Displacement / Power': 'ស៊ីឡាំង / ទំហំម៉ាស៊ីន / កម្លាំងម៉ាស៊ីន', 'Vehicle Weight': 'ទម្ងន់យានយន្ត', 'Maximum Load': 'ទម្ងន់ផ្ទុកអតិបរមា',
+    'Maximum Gross Weight': 'ទម្ងន់សរុបអតិបរមា', 'Number of Seats': 'ចំនួនកៅអី', 'Type of Fuel': 'ប្រភេទប្រេងឥន្ធនៈ', 'Wheel Size': 'ទំហំកង់',
+    Length: 'បណ្តោយ', Width: 'ទទឹង', Height: 'កម្ពស់', 'Number of Axles': 'ចំនួនអ័ក្ស', 'Engine Number': 'លេខម៉ាស៊ីន', 'Body / Chassis Number': 'លេខតួរថយន្ត',
+  } as Record<string, string>)[label] ?? label;
 }
 
 export function formatCambodiaDate(value: Date): string {

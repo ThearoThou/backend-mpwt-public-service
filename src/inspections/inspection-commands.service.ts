@@ -393,23 +393,6 @@ export class InspectionCommandsService {
       },
     });
     if (noShowCount > 2) throw this.inspectionConflict();
-    if (noShowCount === 2) {
-      application.status = ApplicationStatus.CANCELLED;
-      application.cancelledAt = timestamp.recordedAt;
-      application.cancelledByUserId = actorUserId;
-      application.cancellationReason = 'NO_SHOW_LIMIT_REACHED';
-      await manager.getRepository(RenewalApplication).save(application);
-      const history = manager.getRepository(RenewalApplicationStatusHistory);
-      await history.save(
-        history.create({
-          applicationId: application.id,
-          previousStatus: ApplicationStatus.APPROVED,
-          newStatus: ApplicationStatus.CANCELLED,
-          changedByUserId: actorUserId,
-          reason: 'NO_SHOW_LIMIT_REACHED',
-        }),
-      );
-    }
   }
 
   private async findAppointmentApplicationId(
