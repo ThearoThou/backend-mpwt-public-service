@@ -23,6 +23,8 @@ export interface EnvironmentVariables {
   PASSWORD_RESET_TOKEN_TTL_SECONDS: number;
   VERIFICATION_CODE_MAX_ATTEMPTS: number;
   EXPOSE_DEVELOPMENT_VERIFICATION_CODE: boolean;
+  RESEND_API_KEY: string | undefined;
+  EMAIL_FROM: string | undefined;
   ADMIN_BOOTSTRAP_ENABLED: boolean;
   ADMIN_BOOTSTRAP_PHONE: string | undefined;
   ADMIN_BOOTSTRAP_EMAIL: string | undefined;
@@ -229,6 +231,8 @@ export function validateEnvironment(
     environment,
     'ADMIN_BOOTSTRAP_PASSWORD',
   );
+  const RESEND_API_KEY = optionalEnvironmentString(environment, 'RESEND_API_KEY');
+  const EMAIL_FROM = optionalEnvironmentString(environment, 'EMAIL_FROM');
 
   if (NODE_ENV === 'production' && !REFRESH_COOKIE_SECURE) {
     throw new Error(
@@ -334,6 +338,8 @@ export function validateEnvironment(
       'EXPOSE_DEVELOPMENT_VERIFICATION_CODE',
       false,
     ),
+    RESEND_API_KEY,
+    EMAIL_FROM,
     ADMIN_BOOTSTRAP_ENABLED,
     ADMIN_BOOTSTRAP_PHONE,
     ADMIN_BOOTSTRAP_EMAIL,

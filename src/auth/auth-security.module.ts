@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule } from '../config/config.module';
 import { AuthHashingService } from './auth-hashing.service';
 import { EmailDomainValidationService } from './email-domain-validation.service';
+import { EmailOtpService } from './email-otp.service';
 import { AuthSessionPersistenceModule } from './auth-session-persistence.module';
 import { AuthTokenService } from './auth-token.service';
 import { RefreshCookieHelper } from './refresh-cookie.helper';
@@ -21,10 +22,11 @@ import { RefreshCookieHelper } from './refresh-cookie.helper';
     }),
     AuthSessionPersistenceModule,
   ],
-  providers: [AuthHashingService, AuthTokenService, RefreshCookieHelper, EmailDomainValidationService],
+  providers: [AuthHashingService, AuthTokenService, RefreshCookieHelper, EmailDomainValidationService, EmailOtpService],
   exports: [
     AuthHashingService,
     EmailDomainValidationService,
+    EmailOtpService,
     AuthTokenService,
     RefreshCookieHelper,
     AuthSessionPersistenceModule,

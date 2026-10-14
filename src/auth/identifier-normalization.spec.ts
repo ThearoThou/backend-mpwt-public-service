@@ -11,13 +11,16 @@ import {
 
 describe('identifier normalization', () => {
   it('trims and lowercases valid email identifiers', () => {
-    expect(normalizeEmail('  Citizen@Example.COM ')).toBe(
-      'citizen@example.com',
+    expect(normalizeEmail('  Citizen@Gmail.COM ')).toBe(
+      'citizen@gmail.com',
     );
   });
 
   it('rejects invalid or overlong email identifiers', () => {
     expect(() => normalizeEmail('not-an-email')).toThrow(
+      IdentifierNormalizationError,
+    );
+    expect(() => normalizeEmail('citizen@example.com')).toThrow(
       IdentifierNormalizationError,
     );
     expect(() => normalizeEmail(`${'a'.repeat(250)}@test.com`)).toThrow(
@@ -51,27 +54,27 @@ describe('identifier normalization', () => {
     expect(() =>
       normalizeRegistrationIdentifiers({
         phone: '012 345 678',
-        email: 'Citizen@Example.com',
+        email: 'Citizen@Gmail.com',
       }),
     ).toThrow(IdentifierNormalizationError);
     expect(() =>
       normalizeRegistrationIdentifiers({
         phone: '012 345 678',
-        email: 'Citizen@Example.com',
-        verificationIdentifier: 'other@example.com',
+        email: 'Citizen@Gmail.com',
+        verificationIdentifier: 'other@gmail.com',
       }),
     ).toThrow(IdentifierNormalizationError);
 
     expect(
       normalizeRegistrationIdentifiers({
         phone: '012 345 678',
-        email: 'Citizen@Example.com',
-        verificationIdentifier: ' CITIZEN@example.COM ',
+        email: 'Citizen@Gmail.com',
+        verificationIdentifier: ' CITIZEN@gmail.COM ',
       }),
     ).toEqual({
       phone: '+85512345678',
-      email: 'citizen@example.com',
-      verificationIdentifier: 'citizen@example.com',
+      email: 'citizen@gmail.com',
+      verificationIdentifier: 'citizen@gmail.com',
     });
   });
 
@@ -83,14 +86,14 @@ describe('identifier normalization', () => {
       nameEn: 'Citizen Name',
     });
     const missingPhone = plainToInstance(RegisterRequestDto, {
-      email: 'citizen@example.com',
+      email: 'citizen@gmail.com',
       password: 'password1',
       nameKh: 'ណាមខ្មែរ',
       nameEn: 'Citizen Name',
     });
     const missingSelection = plainToInstance(RegisterRequestDto, {
       phone: '012 345 678',
-      email: 'citizen@example.com',
+      email: 'citizen@gmail.com',
       password: 'password1',
       nameKh: 'ណាមខ្មែរ',
       nameEn: 'Citizen Name',

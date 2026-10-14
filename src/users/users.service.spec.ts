@@ -180,7 +180,7 @@ describe('UsersService', () => {
   it('updates approved fields atomically', async () => {
     const user = createUser();
     const profile = createCitizenProfile();
-    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockResolvedValue(user) };
+    const users = { findOne: jest.fn().mockResolvedValue(user), existsBy: jest.fn().mockResolvedValue(false), save: jest.fn().mockResolvedValue(user) };
     const profiles = { findOne: jest.fn().mockResolvedValue(profile), save: jest.fn().mockResolvedValue(profile) };
     const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
     const dataSource = { transaction: jest.fn((work) => work(manager)) };
@@ -241,7 +241,7 @@ describe('UsersService', () => {
   it('maps duplicate phone or email writes to the generic profile conflict', async () => {
     const user = createUser();
     const profile = createCitizenProfile();
-    const users = { findOne: jest.fn().mockResolvedValue(user), save: jest.fn().mockRejectedValue({ code: '23505', constraint: 'UQ_users_phone', detail: 'duplicate phone' }) };
+    const users = { findOne: jest.fn().mockResolvedValue(user), existsBy: jest.fn().mockResolvedValue(false), save: jest.fn().mockRejectedValue({ code: '23505', constraint: 'UQ_users_phone', detail: 'duplicate phone' }) };
     const profiles = { findOne: jest.fn().mockResolvedValue(profile), save: jest.fn() };
     const manager = { getRepository: jest.fn((entity) => entity === User ? users : profiles) };
     const service = createService({}, {}, { transaction: jest.fn((work) => work(manager)) });

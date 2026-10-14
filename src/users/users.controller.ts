@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Patch,
+  Post,
   UseGuards,
 } from '@nestjs/common';
 
@@ -15,7 +16,7 @@ import { Roles } from '../common/auth/roles.decorator';
 import { RolesGuard } from '../common/auth/roles.guard';
 import { createDataResponse } from '../common/http/api-response';
 import type { ApiDataResponse } from '../common/http/api-contracts';
-import { UpdateCitizenProfileRequestDto } from './dto/user-request.dtos';
+import { RequestEmailChangeDto, UpdateCitizenProfileRequestDto, VerifyEmailChangeDto } from './dto/user-request.dtos';
 import { UserRole } from './enums/user-role.enum';
 import type { CurrentUserResponse } from './user-response.mapper';
 import { UsersService } from './users.service';
@@ -45,5 +46,19 @@ export class UsersController {
     return createDataResponse(
       await this.usersService.updateCurrentCitizenProfile(actor.userId, input),
     );
+  }
+
+  @Post('me/email-change/request')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @Roles(UserRole.CITIZEN)
+  async requestEmailChange(@CurrentActor() actor: AuthenticatedActor, @Body() input: RequestEmailChangeDto): Promise<ApiDataResponse<{ expiresInSeconds: number }>> {
+    return createDataResponse(await this.usersService.requestEmailChange(actor.userId, input.email));
+  }
+
+  @Post('me/email-change/verify')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.CITIZEN)
+  async verifyEmailChange(@CurrentActor() actor: AuthenticatedActor, @Body() input: VerifyEmailChangeDto): Promise<ApiDataResponse<CurrentUserResponse>> {
+    return createDataResponse(await this.usersService.verifyEmailChange(actor.userId, input.email, input.code));
   }
 }

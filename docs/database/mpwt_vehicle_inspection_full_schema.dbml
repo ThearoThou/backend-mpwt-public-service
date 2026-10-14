@@ -1,6 +1,6 @@
 Project MPWT_Vehicle_Inspection_Renewal_Service {
   database_type: 'PostgreSQL'
-  Note: 'Cumulative current executed PostgreSQL schema after TypeORM migrations 1-12. The migrations are the executable source of truth.'
+  Note: 'Cumulative executed PostgreSQL schema through TypeORM migration 1792000000000. The migrations are the executable source of truth.'
 }
 
 Enum user_role {
@@ -29,6 +29,7 @@ Enum verification_purpose {
   REGISTER_ACCOUNT
   RESET_PASSWORD
   CHANGE_PHONE
+  CHANGE_EMAIL
 }
 
 Enum application_status {
@@ -36,11 +37,10 @@ Enum application_status {
   SUBMITTED
   UNDER_REVIEW
   CORRECTION_REQUIRED
-  APPOINTMENT_SELECTION_REQUIRED
   APPROVED
   REJECTED
-  REINSPECTION_REQUIRED
   INSPECTION_FAILED
+  EXPIRED
   CANCELLED
   COMPLETED
 }
@@ -89,7 +89,6 @@ Enum payment_method {
 Enum payment_status {
   PENDING
   CONFIRMED
-  FAILED
   REJECTED
 }
 
@@ -173,7 +172,7 @@ Table citizen_profiles {
   id uuid [pk]
   user_id uuid [not null, unique]
   name_kh varchar(150) [not null]
-  name_en varchar(150) [not null]
+  name_en varchar(150)
   national_id_number varchar(50) [unique]
   address text
   profile_image_key varchar(500)
@@ -217,6 +216,22 @@ Table refresh_sessions {
   Note: 'idx_refresh_sessions_user_active is partial where revoked_at IS NULL. Checks are chk_refresh_sessions_token_hash_not_blank, chk_refresh_sessions_expires_after_created, chk_refresh_sessions_last_used_after_created, chk_refresh_sessions_revoked_after_created, chk_refresh_sessions_reuse_detected_after_created, chk_refresh_sessions_reuse_requires_revocation, and chk_refresh_sessions_revocation_reason_pair.'
 }
 
+Table password_reset_authorizations {
+  id uuid [pk]
+  user_id uuid [not null]
+  token_hash varchar(64) [not null, unique]
+  expires_at timestamptz [not null]
+  used_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, expires_at) [name: 'idx_password_reset_authorizations_user_active']
+    expires_at [name: 'idx_password_reset_authorizations_expires_at']
+  }
+
+  Note: 'idx_password_reset_authorizations_user_active is partial where used_at IS NULL. Checks require a 64-character lowercase hexadecimal token hash, expires_at after created_at, and used_at NULL or no earlier than created_at.'
+}
+
 Table inspection_vehicle_categories {
   id uuid [pk]
   code varchar(50) [not null, unique]
@@ -247,6 +262,22 @@ Table vehicles {
   plate_province varchar(100)
   plate_type varchar(50) [not null]
   vehicle_type varchar(50) [not null]
+  colour varchar(50)
+  engine_number varchar(100)
+  number_of_cylinders smallint
+  engine_displacement_cc integer
+  engine_power_hp numeric(8,2)
+  fuel_type varchar(50)
+  number_of_seats smallint
+  number_of_axles smallint
+  steering varchar(20)
+  vehicle_weight_kg integer
+  maximum_load_kg integer
+  maximum_gross_weight_kg integer
+  wheel_size varchar(50)
+  length_mm integer
+  width_mm integer
+  height_mm integer
   make varchar(100) [not null]
   model varchar(100) [not null]
   manufacture_year smallint
@@ -271,7 +302,7 @@ Table vehicles {
     (inspection_category_id, vehicle_class) [name: 'idx_vehicles_inspection_category_class']
   }
 
-  Note: 'uq_vehicles_province_plate_identity is partial where plate_category = PROVINCE; uq_vehicles_personalized_plate_number is partial where plate_category = PERSONALIZED_CAMBODIA. chk_vehicles_plate_province_category enforces the plate-province pairing. chk_vehicles_classification_complete requires vehicle_class, inspection_category_id, classification_verified_at, and classification_verified_by to be either all NULL or all non-NULL.'
+  Note: 'uq_vehicles_province_plate_identity is partial where plate_category = PROVINCE; uq_vehicles_personalized_plate_number is partial where plate_category = PERSONALIZED_CAMBODIA. chk_vehicles_plate_province_category enforces the plate-province pairing. chk_vehicles_classification_complete requires vehicle_class, inspection_category_id, classification_verified_at, and classification_verified_by to be either all NULL or all non-NULL. chk_vehicles_technical_text requires supplied technical text to be nonblank and trimmed; chk_vehicles_technical_positive_values validates supplied technical measurements.'
 }
 
 Table vehicle_classification_history {
@@ -304,6 +335,7 @@ Table renewal_applications {
   current_rejection_reason text
   preferred_inspection_station_id uuid
   preferred_inspection_date date
+  optional_oversize_service_selected boolean [not null, default: false]
   submitted_at timestamptz
   review_started_at timestamptz
   ready_for_inspection_at timestamptz
@@ -321,7 +353,7 @@ Table renewal_applications {
     (preferred_inspection_station_id, preferred_inspection_date) [name: 'idx_renewal_applications_preferred_station_date']
   }
 
-  Note: 'reference_number, applicant_snapshot, vehicle_snapshot, and submitted_at are nullable. chk_renewal_applications_current_rejection_reason requires NULL or trimmed length 1-500. chk_renewal_applications_preferred_inspection_selection_pair requires both preferred inspection fields to be NULL or both non-NULL. uq_unfinished_application_per_vehicle is partial for DRAFT, SUBMITTED, UNDER_REVIEW, CORRECTION_REQUIRED, APPOINTMENT_SELECTION_REQUIRED, APPROVED, and REINSPECTION_REQUIRED.'
+  Note: 'reference_number, applicant_snapshot, vehicle_snapshot, and submitted_at are nullable. chk_renewal_applications_current_rejection_reason requires NULL or trimmed length 1-500. chk_renewal_applications_preferred_inspection_station_requires_date permits no preferred station, but requires a preferred date when a station is supplied. uq_unfinished_application_per_vehicle is partial for DRAFT, SUBMITTED, UNDER_REVIEW, CORRECTION_REQUIRED, and APPROVED.'
 }
 
 Table renewal_application_status_history {
@@ -376,6 +408,16 @@ Table inspection_stations {
   province varchar(100) [not null]
   address text [not null]
   phone varchar(20)
+  is_active boolean [not null, default: true]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+}
+
+Table inspection_service_closures {
+  id uuid [pk]
+  closure_date date [not null, unique]
+  reason_kh varchar(500) [not null]
+  reason_en varchar(500) [not null]
   is_active boolean [not null, default: true]
   created_at timestamptz [not null, default: `now()`]
   updated_at timestamptz [not null, default: `now()`]
@@ -446,13 +488,16 @@ Table appointments {
 Table inspections {
   id uuid [pk]
   application_id uuid [not null]
-  appointment_id uuid [not null, unique]
+  appointment_id uuid [unique]
+  actual_station_id uuid
   attempt_number smallint [not null]
   status inspection_status [not null, default: 'PENDING']
   result inspection_result
   recorded_by_user_id uuid
   started_at timestamptz
   completed_at timestamptz
+  valid_until date
+  validity_rule varchar(60)
   failure_reason text
   notes text
   created_at timestamptz [not null, default: `now()`]
@@ -465,7 +510,7 @@ Table inspections {
     result [name: 'idx_inspections_result']
   }
 
-  Note: 'chk_inspections_attempt_number permits only 1 or 2. chk_inspections_state_consistency and chk_inspections_result_failure_reason enforce pending/completed and PASS/FAIL fields. fn_guard_completed_inspection_immutable and trg_guard_completed_inspection_immutable reject UPDATE and DELETE after COMPLETED. Reinspection deadline and NO_SHOW count are derived, not persisted.'
+  Note: 'appointment_id is nullable for appointment-free inspections. idx_inspections_actual_station is partial where actual_station_id IS NOT NULL. chk_inspections_attempt_number permits only 1 or 2. chk_inspections_state_consistency and chk_inspections_result_failure_reason enforce pending/completed and PASS/FAIL fields. chk_inspections_validity_pair permits valid_until and validity_rule only together on a completed PASS inspection. fn_guard_completed_inspection_immutable and trg_guard_completed_inspection_immutable reject UPDATE and DELETE after COMPLETED. Reinspection deadline and NO_SHOW count are derived, not persisted.'
 }
 
 Table payments {
@@ -543,6 +588,19 @@ Table stickers {
   Note: 'chk_stickers_sticker_number_trimmed_nonempty requires sticker_number to be non-empty and already trimmed.'
 }
 
+Table technical_inspection_certificates {
+  id uuid [pk]
+  application_id uuid [not null, unique]
+  inspection_id uuid [not null, unique]
+  certificate_number varchar(100) [not null, unique]
+  issued_at timestamptz [not null]
+  issued_by_user_id uuid
+  artifact_file_key varchar(500) [not null, unique]
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'chk_technical_inspection_certificates_number_trimmed_nonempty requires certificate_number to be non-empty and already trimmed.'
+}
+
 Table notifications {
   id uuid [pk]
   recipient_user_id uuid [not null]
@@ -610,6 +668,7 @@ Table audit_logs {
 Ref: citizen_profiles.user_id - users.id [delete: restrict, update: no action]
 Ref: verification_codes.user_id > users.id [delete: set null, update: no action]
 Ref: refresh_sessions.user_id > users.id [delete: cascade, update: no action]
+Ref: password_reset_authorizations.user_id > users.id [delete: cascade, update: no action]
 Ref: vehicles.linked_citizen_id > users.id [delete: set null, update: no action]
 Ref: vehicles.(inspection_category_id, vehicle_class) > inspection_vehicle_categories.(id, vehicle_class) [delete: restrict, update: restrict]
 Ref: vehicles.classification_verified_by > users.id [delete: restrict, update: restrict]
@@ -637,6 +696,7 @@ Ref: appointments.no_show_marked_by_user_id > users.id [delete: set null, update
 Ref: inspections.application_id > renewal_applications.id [delete: restrict, update: no action]
 Ref: inspections.appointment_id > appointments.id [delete: restrict, update: no action]
 Ref: inspections.(appointment_id, application_id) > appointments.(id, application_id) [delete: restrict, update: no action]
+Ref: inspections.actual_station_id > inspection_stations.id [delete: restrict, update: no action]
 Ref: inspections.recorded_by_user_id > users.id [delete: set null, update: no action]
 Ref: payments.application_id - renewal_applications.id [delete: restrict, update: no action]
 Ref: payments.confirmed_by_user_id > users.id [delete: set null, update: no action]
@@ -646,6 +706,9 @@ Ref: payment_status_history.changed_by_user_id > users.id [delete: set null, upd
 Ref: stickers.application_id - renewal_applications.id [delete: restrict, update: no action]
 Ref: stickers.inspection_id - inspections.id [delete: restrict, update: no action]
 Ref: stickers.issued_by_user_id > users.id [delete: set null, update: no action]
+Ref: technical_inspection_certificates.application_id - renewal_applications.id [delete: restrict, update: restrict]
+Ref: technical_inspection_certificates.inspection_id - inspections.id [delete: restrict, update: restrict]
+Ref: technical_inspection_certificates.issued_by_user_id > users.id [delete: set null, update: restrict]
 Ref: notifications.recipient_user_id > users.id [delete: restrict, update: no action]
 Ref: notifications.application_id > renewal_applications.id [delete: set null, update: no action]
 Ref: notifications.created_by_user_id > users.id [delete: set null, update: no action]

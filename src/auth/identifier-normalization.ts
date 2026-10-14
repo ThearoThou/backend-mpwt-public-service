@@ -32,6 +32,10 @@ export function normalizeEmail(value: string): string {
     throw new IdentifierNormalizationError('Email has an invalid format.');
   }
 
+  if (!normalized.endsWith('@gmail.com')) {
+    throw new IdentifierNormalizationError('Email must use a Gmail address.');
+  }
+
   return normalized;
 }
 

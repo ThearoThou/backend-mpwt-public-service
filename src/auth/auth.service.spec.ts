@@ -4,6 +4,7 @@ import type { DataSource, EntityManager } from 'typeorm';
 
 import { AuthHashingService } from './auth-hashing.service';
 import { EmailDomainValidationService } from './email-domain-validation.service';
+import { EmailOtpService } from './email-otp.service';
 import { AuthService } from './auth.service';
 import { AuthTokenService } from './auth-token.service';
 import { VerificationPurpose } from './enums/verification-purpose.enum';
@@ -97,6 +98,7 @@ describe('AuthService', () => {
     >
   >;
   let emailDomains: jest.Mocked<Pick<EmailDomainValidationService, 'hasMailDomain'>>;
+  let emailOtp: jest.Mocked<Pick<EmailOtpService, 'send'>>;
   let service: AuthService;
   let nodeEnvironment: string;
   let exposeDevelopmentCode: boolean;
@@ -168,6 +170,7 @@ describe('AuthService', () => {
       consumeAuthorization: jest.fn(),
     };
     emailDomains = { hasMailDomain: jest.fn().mockResolvedValue(true) };
+    emailOtp = { send: jest.fn().mockResolvedValue(undefined) };
     const config = {
       getOrThrow: jest.fn((name: string) => {
         if (name === 'NODE_ENV') {
@@ -190,8 +193,8 @@ describe('AuthService', () => {
       tokens as AuthTokenService,
       sessions as RefreshSessionService,
       resetAuthorizations as PasswordResetAuthorizationService,
-      config,
       emailDomains,
+      emailOtp as EmailOtpService,
     );
   });
 
@@ -231,7 +234,7 @@ describe('AuthService', () => {
     },
   );
 
-  it('preserves optional development codes and generates a fresh reset code on resend', async () => {
+  it('never exposes reset codes and generates a fresh code on resend', async () => {
     users.findUserByIdentifier.mockResolvedValue(createUser());
     verificationCodes.createCode
       .mockResolvedValueOnce({ code: '012345', expiresAt: NOW })
@@ -242,14 +245,8 @@ describe('AuthService', () => {
     const resend = await service.requestPasswordReset({
       identifier: '012345678',
     });
-    expect(first.development).toEqual({
-      developmentCode: '012345',
-      purpose: VerificationPurpose.RESET_PASSWORD,
-    });
-    expect(resend.development).toEqual({
-      developmentCode: '987654',
-      purpose: VerificationPurpose.RESET_PASSWORD,
-    });
+    expect(first.development).toBeUndefined();
+    expect(resend.development).toBeUndefined();
     expect(resend.expiresInSeconds).toBe(120);
     expect(verificationCodes.createCode).toHaveBeenCalledTimes(2);
     expect(verificationCodes.createCode).toHaveBeenCalledWith({
@@ -382,10 +379,6 @@ describe('AuthService', () => {
     expect(response).toMatchObject({
       verificationRequired: true,
       expiresInSeconds: 120,
-      development: {
-        developmentCode: '012345',
-        purpose: VerificationPurpose.REGISTER_ACCOUNT,
-      },
     });
     expect(sessions.createSessionDraft).not.toHaveBeenCalled();
     expect(tokens.signAccessToken).not.toHaveBeenCalled();
@@ -398,7 +391,7 @@ describe('AuthService', () => {
     const pendingUser = createUser({
       status: UserStatus.PENDING_VERIFICATION,
       passwordHash: 'original-password-hash',
-      email: 'original@example.com',
+      email: 'original@gmail.com',
     });
     users.findLockedUserByIdentifier.mockResolvedValue(pendingUser);
     users.findUserByIdentifier.mockResolvedValue(null);
@@ -409,8 +402,8 @@ describe('AuthService', () => {
 
     const response = await service.register({
       phone: '012 345 678',
-      email: 'different@example.com',
-      verificationIdentifier: 'different@example.com',
+      email: 'different@gmail.com',
+      verificationIdentifier: 'different@gmail.com',
       password: 'different-password',
       nameKh: 'ឈ្មោះថ្មី',
       nameEn: 'Different Name',
@@ -420,17 +413,13 @@ describe('AuthService', () => {
 
     expect(response).toMatchObject({
       verificationRequired: true,
-      destinationHint: '+855******678',
+      destinationHint: 'o***@gmail.com',
       expiresInSeconds: 120,
-      development: {
-        developmentCode: '654321',
-        purpose: VerificationPurpose.REGISTER_ACCOUNT,
-      },
     });
     expect(verificationCodes.createCode).toHaveBeenCalledWith(
       {
         userId: USER_ID,
-        destination: '+85512345678',
+        destination: 'original@gmail.com',
         purpose: VerificationPurpose.REGISTER_ACCOUNT,
       },
       manager,
@@ -442,7 +431,7 @@ describe('AuthService', () => {
     expect(pendingUser).toMatchObject({
       passwordHash: 'original-password-hash',
       phone: '+85512345678',
-      email: 'original@example.com',
+      email: 'original@gmail.com',
       role: UserRole.CITIZEN,
       status: UserStatus.PENDING_VERIFICATION,
     });
@@ -606,12 +595,10 @@ describe('AuthService', () => {
     expect(first).toMatchObject({
       verificationRequired: true,
       expiresInSeconds: 120,
-      development: { developmentCode: '012345' },
     });
     expect(second).toMatchObject({
       verificationRequired: true,
       expiresInSeconds: 120,
-      development: { developmentCode: '987654' },
     });
     expect(verificationCodes.createCode).toHaveBeenCalledTimes(2);
     expect(verificationCodes.createCode).toHaveBeenLastCalledWith(

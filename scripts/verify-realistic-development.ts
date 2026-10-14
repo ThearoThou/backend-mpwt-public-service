@@ -228,7 +228,7 @@ async function main(): Promise<void> {
       FROM vehicles v
       JOIN users u ON u.id = v.linked_citizen_id
       LEFT JOIN renewal_applications a ON a.vehicle_id = v.id
-      WHERE u.email = 'citizen1@example.com'
+      WHERE u.email = 'citizen1@gmail.com'
       GROUP BY v.id
       ORDER BY v.plate_number
     `);
@@ -718,7 +718,7 @@ async function main(): Promise<void> {
       JOIN inspection_stations station ON station.id = inspection.actual_station_id
       JOIN inspection_vehicle_categories category ON category.id = v.inspection_category_id
       JOIN users citizen ON citizen.id = failed.citizen_id
-      WHERE citizen.email = 'citizen1@example.com' AND v.plate_number = '2AA-1011'
+      WHERE citizen.email = 'citizen1@gmail.com' AND v.plate_number = '2AA-1011'
         AND failed.status = 'INSPECTION_FAILED' AND inspection.result = 'FAIL'
     `);
     if (historicalFailFixture === undefined) {

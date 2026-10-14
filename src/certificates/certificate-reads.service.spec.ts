@@ -115,7 +115,8 @@ describe('CertificateReadsService', () => {
     expect(fixture.files.read).toHaveBeenCalledWith(ARTIFACT_KEY);
     expect(document).toEqual({
       content: PDF,
-      filename: 'technical-inspection-certificate-MPWT_2026_001.pdf',
+      filename:
+        'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត_MPWT_2026_001.pdf',
       mimeType: 'application/pdf',
     });
     expect(document).not.toHaveProperty('artifactFileKey');
@@ -134,6 +135,42 @@ describe('CertificateReadsService', () => {
     await expect(
       fixture.service.downloadAdminCertificate(APPLICATION_ID),
     ).resolves.toMatchObject({ content: PDF, mimeType: 'application/pdf' });
+  });
+
+  it('returns only safe validity facts for public certificate verification', async () => {
+    const fixture = createFixture();
+
+    await expect(
+      fixture.service.getPublicVerification('MPWT/2026:001'),
+    ).resolves.toEqual({
+      certificateNumber: 'MPWT/2026:001',
+      inspectionDate: new Date('2026-09-09T18:00:00.000Z'),
+      expiryDate: '2030-09-10',
+      issuedAt: new Date('2026-09-09T10:00:00.000Z'),
+      isValid: true,
+    });
+    expect(fixture.applications.findOne).not.toHaveBeenCalled();
+    expect(fixture.files.read).not.toHaveBeenCalled();
+    expect(fixture.certificates.save).not.toHaveBeenCalled();
+    expect(fixture.inspections.save).not.toHaveBeenCalled();
+  });
+
+  it('does not reveal missing or incoherent public certificate records', async () => {
+    const missing = createFixture();
+    missing.certificateValue = null;
+    await expectCode(
+      missing.service.getPublicVerification('MPWT/2026:001'),
+      ApiErrorCode.CERTIFICATE_NOT_AVAILABLE,
+      HttpStatus.NOT_FOUND,
+    );
+
+    const incoherent = createFixture();
+    incoherent.inspection.result = InspectionResult.FAIL;
+    await expectCode(
+      incoherent.service.getPublicVerification('MPWT/2026:001'),
+      ApiErrorCode.CERTIFICATE_NOT_AVAILABLE,
+      HttpStatus.NOT_FOUND,
+    );
   });
 
   it('rejects missing certificate and missing physical artifact safely', async () => {
@@ -231,17 +268,23 @@ describe('CertificateReadsService', () => {
 });
 
 describe('certificateDownloadFilename', () => {
+  it('uses a Khmer certificate title and the certificate number', () => {
+    expect(certificateDownloadFilename('MPWT-2026-001')).toBe(
+      'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត_MPWT-2026-001.pdf',
+    );
+  });
+
   it.each([
     [
       'CERT/2026\\01:*?"<>|',
-      'technical-inspection-certificate-CERT_2026_01.pdf',
+      'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត_CERT_2026_01.pdf',
     ],
     [
       'CERT\r\nInjected: header',
-      'technical-inspection-certificate-CERT_Injected_header.pdf',
+      'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត_CERT_Injected_header.pdf',
     ],
-    ['../../..', 'technical-inspection-certificate.pdf'],
-    ['វិញ្ញាបនបត្រ', 'technical-inspection-certificate.pdf'],
+    ['../../..', 'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត.pdf'],
+    ['វិញ្ញាបនបត្រ', 'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត.pdf'],
   ])(
     'sanitizes %p without traversal or header injection',
     (value, expected) => {

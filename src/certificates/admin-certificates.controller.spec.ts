@@ -86,7 +86,7 @@ describe('AdminCertificatesController', () => {
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
-      'attachment; filename="technical-inspection-certificate-MPWT-001.pdf"',
+      `attachment; filename="technical-inspection-certificate.pdf"; filename*=UTF-8''technical-inspection-certificate-MPWT-001.pdf`,
     );
     expect(streamed).toBeDefined();
   });

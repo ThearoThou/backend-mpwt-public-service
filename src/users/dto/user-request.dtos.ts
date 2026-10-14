@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  Matches,
   ValidateIf,
 } from 'class-validator';
 
@@ -97,6 +98,20 @@ export class UpdateCitizenProfileRequestDto {
   @IsNotEmpty()
   @Transform(trimString)
   address?: string | null;
+}
+
+export class RequestEmailChangeDto {
+  @IsString()
+  @MaxLength(254)
+  @Transform(normalizeWhenValid(normalizeEmail))
+  @IsNormalizedEmail()
+  email!: string;
+}
+
+export class VerifyEmailChangeDto extends RequestEmailChangeDto {
+  @IsString()
+  @Matches(/^\d{6}$/)
+  code!: string;
 }
 
 export class ListUsersQueryDto extends BasePaginationQueryDto {

@@ -9,6 +9,9 @@ import {
   RefreshSessionService,
 } from '../auth/refresh-session.service';
 import { EmailDomainValidationService } from '../auth/email-domain-validation.service';
+import { EmailOtpService } from '../auth/email-otp.service';
+import { VerificationCodeService } from '../auth/verification-code.service';
+import { VerificationPurpose } from '../auth/enums/verification-purpose.enum';
 import { ApiErrorCode } from '../common/errors/api-error-code';
 import { DomainException } from '../common/errors/domain.exception';
 import { createPaginationMeta } from '../common/pagination/pagination-meta';
@@ -56,6 +59,8 @@ export class UsersService {
     private readonly dataSource: DataSource,
     private readonly refreshSessionService: RefreshSessionService,
     private readonly emailDomainValidationService: EmailDomainValidationService,
+    private readonly verificationCodeService: VerificationCodeService,
+    private readonly emailOtpService: EmailOtpService,
   ) {}
 
   async createPendingCitizen(
@@ -233,12 +238,20 @@ export class UsersService {
       });
       if (profile === null) throw this.userNotFound();
       const phoneChanged = input.phone !== undefined && input.phone !== user.phone;
-      if (input.email !== undefined && input.email !== null && input.email !== user.email && !(await this.emailDomainValidationService.hasMailDomain(input.email))) {
+      const requestedEmail = input.email;
+      const emailChanged = requestedEmail !== undefined && requestedEmail !== user.email;
+      if (emailChanged && requestedEmail !== null && !(await this.emailDomainValidationService.hasMailDomain(requestedEmail))) {
         throw new DomainException(ApiErrorCode.EMAIL_DOMAIN_INVALID, HttpStatus.BAD_REQUEST, 'Email domain cannot receive mail');
+      }
+      if (phoneChanged && input.phone !== null && await manager.getRepository(User).existsBy({ phone: input.phone })) {
+        throw new DomainException(ApiErrorCode.USER_PHONE_CONFLICT, HttpStatus.CONFLICT, 'Phone number is already in use');
+      }
+      if (emailChanged && requestedEmail !== null && await manager.getRepository(User).existsBy({ email: requestedEmail })) {
+        throw new DomainException(ApiErrorCode.USER_EMAIL_CONFLICT, HttpStatus.CONFLICT, 'Email address is already in use');
       }
       Object.assign(user, {
         ...(input.phone === undefined ? {} : { phone: input.phone, phoneVerifiedAt: phoneChanged ? null : user.phoneVerifiedAt }),
-        ...(input.email === undefined ? {} : { email: input.email }),
+        ...(input.email === undefined ? {} : { email: input.email, emailVerifiedAt: emailChanged ? null : user.emailVerifiedAt }),
       });
       Object.assign(profile, this.editableCitizenProfilePatch(input));
       try {
@@ -250,6 +263,55 @@ export class UsersService {
       }
       return mapCurrentUser(user, profile);
     });
+  }
+
+  async requestEmailChange(
+    userId: string,
+    email: string,
+  ): Promise<{ expiresInSeconds: number }> {
+    if (!(await this.emailDomainValidationService.hasMailDomain(email))) {
+      throw new DomainException(ApiErrorCode.EMAIL_DOMAIN_INVALID, HttpStatus.BAD_REQUEST, 'Email domain cannot receive mail');
+    }
+    const user = await this.users.findOne({ where: { id: userId, role: UserRole.CITIZEN }, select: this.safeUserSelect() });
+    if (user === null) throw this.userNotFound();
+    if (user.email !== email && await this.users.existsBy({ email })) throw this.citizenProfileConflict();
+    const expiresInSeconds = this.verificationCodeService.getTtlSeconds(VerificationPurpose.CHANGE_EMAIL);
+    const generated = await this.verificationCodeService.createCode({ userId, destination: email, purpose: VerificationPurpose.CHANGE_EMAIL });
+    await this.emailOtpService.send(email, generated.code, VerificationPurpose.CHANGE_EMAIL, expiresInSeconds);
+    return { expiresInSeconds };
+  }
+
+  async verifyEmailChange(userId: string, email: string, code: string): Promise<CurrentUserResponse> {
+    const now = new Date();
+    return this.dataSource.transaction(async (manager) => {
+      const user = await manager.getRepository(User).findOne({ where: { id: userId, role: UserRole.CITIZEN }, lock: { mode: 'pessimistic_write' }, select: this.safeUserSelect() });
+      if (user === null) throw this.userNotFound();
+      const validation = await this.verificationCodeService.validateLockedCode(userId, email, VerificationPurpose.CHANGE_EMAIL, code, manager, now);
+      if (validation.kind !== 'valid') throw this.emailChangeCodeException(validation.kind);
+      if (user.email !== email && await manager.getRepository(User).existsBy({ email })) throw this.citizenProfileConflict();
+      user.email = email;
+      user.emailVerifiedAt = now;
+      try {
+        await manager.getRepository(User).save(user);
+      } catch (error) {
+        if (this.isUniqueConstraintViolation(error)) throw this.citizenProfileConflict();
+        throw error;
+      }
+      await this.verificationCodeService.consumeCode(validation.verificationCode, manager, now);
+      const profile = await manager.getRepository(CitizenProfile).findOne({ where: { userId }, select: this.safeCitizenProfileSelect() });
+      if (profile === null) throw this.userNotFound();
+      return mapCurrentUser(user, profile);
+    });
+  }
+
+  private emailChangeCodeException(kind: 'invalid' | 'expired' | 'attempts-exceeded'): DomainException {
+    if (kind === 'expired') {
+      return new DomainException(ApiErrorCode.AUTH_VERIFICATION_CODE_EXPIRED, HttpStatus.BAD_REQUEST, 'Verification code has expired');
+    }
+    if (kind === 'attempts-exceeded') {
+      return new DomainException(ApiErrorCode.AUTH_VERIFICATION_ATTEMPTS_EXCEEDED, HttpStatus.TOO_MANY_REQUESTS, 'Verification attempt limit has been reached');
+    }
+    return new DomainException(ApiErrorCode.AUTH_VERIFICATION_CODE_INVALID, HttpStatus.BAD_REQUEST, 'Verification code is invalid');
   }
 
   async listUsers(input: ListUsersQueryDto): Promise<{

@@ -58,7 +58,7 @@ export class CitizenCertificatesController {
     response.setHeader('Content-Type', document.mimeType);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${document.filename}"`,
+      `attachment; filename="technical-inspection-certificate.pdf"; filename*=UTF-8''${encodeURIComponent(document.filename)}`,
     );
     return new StreamableFile(document.content);
   }

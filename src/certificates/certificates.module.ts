@@ -12,6 +12,7 @@ import { AdminCertificatesController } from './admin-certificates.controller';
 import { CitizenCertificatesController } from './citizen-certificates.controller';
 import { CertificateIssuanceService } from './certificate-issuance.service';
 import { CertificateReadsService } from './certificate-reads.service';
+import { PublicCertificatesController } from './public-certificates.controller';
 
 @Module({
   imports: [
@@ -24,7 +25,11 @@ import { CertificateReadsService } from './certificate-reads.service';
       User,
     ]),
   ],
-  controllers: [AdminCertificatesController, CitizenCertificatesController],
+  controllers: [
+    AdminCertificatesController,
+    CitizenCertificatesController,
+    PublicCertificatesController,
+  ],
   providers: [
     CertificatePdfService,
     CertificateIssuanceService,

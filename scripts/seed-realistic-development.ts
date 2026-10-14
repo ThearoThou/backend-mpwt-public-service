@@ -12,6 +12,8 @@ import { AUTH_ARGON2ID_OPTIONS } from '../src/auth/auth-hashing.service';
 import { createApplicationVehicleSnapshot } from '../src/applications/application-vehicle-snapshot';
 import { ApplicationDocument } from '../src/applications/entities/application-document.entity';
 import { RenewalApplication } from '../src/applications/entities/renewal-application.entity';
+import { RenewalApplicationStatusHistory } from '../src/applications/entities/renewal-application-status-history.entity';
+import { ApplicationStatus } from '../src/applications/enums/application-status.enum';
 import { DocumentStatus } from '../src/applications/enums/document-status.enum';
 import { DocumentType } from '../src/applications/enums/document-type.enum';
 import { TechnicalInspectionCertificate } from '../src/certificates/entities/technical-inspection-certificate.entity';
@@ -87,6 +89,10 @@ function timestampDaysAgo(days: number, hour = 2): Date {
   return value;
 }
 
+function addMinutes(value: Date, minutes: number): Date {
+  return new Date(value.getTime() + minutes * 60 * 1000);
+}
+
 interface WorkflowMilestones {
   submitted: Date;
   payment: Date;
@@ -102,23 +108,25 @@ function workflowMilestones(
   category: InspectionVehicleCategory,
 ): WorkflowMilestones {
   if (workflow === 'PRIMARY_FAIL_TERMINAL') {
+    const payment = timestampDaysAgo(115, 2);
     return {
       submitted: timestampDaysAgo(120),
-      payment: timestampDaysAgo(117),
-      inspection: timestampDaysAgo(115),
-      sticker: timestampDaysAgo(114),
-      documents: timestampDaysAgo(113),
-      completed: timestampDaysAgo(112),
+      payment,
+      inspection: addMinutes(payment, 15),
+      sticker: addMinutes(payment, 25),
+      documents: addMinutes(payment, 35),
+      completed: addMinutes(payment, 45),
     };
   }
   if (workflow !== 'COMPLETED_WITH_CERTIFICATE') {
+    const payment = timestampDaysAgo(8, 2);
     return {
       submitted: timestampDaysAgo(13),
-      payment: timestampDaysAgo(10),
-      inspection: timestampDaysAgo(8),
-      sticker: timestampDaysAgo(7),
-      documents: timestampDaysAgo(6),
-      completed: timestampDaysAgo(5),
+      payment,
+      inspection: addMinutes(payment, 15),
+      sticker: addMinutes(payment, 25),
+      documents: addMinutes(payment, 35),
+      completed: addMinutes(payment, 45),
     };
   }
   const inspection = new Date(`${vehicle.inspectionExpiryDate}T02:00:00.000Z`);
@@ -130,11 +138,11 @@ function workflowMilestones(
   };
   return {
     submitted: shifted(-13),
-    payment: shifted(-10),
+    payment: addMinutes(inspection, -15),
     inspection,
-    sticker: shifted(1),
-    documents: shifted(2),
-    completed: shifted(3),
+    sticker: addMinutes(inspection, 10),
+    documents: addMinutes(inspection, 20),
+    completed: addMinutes(inspection, 30),
   };
 }
 
@@ -154,10 +162,7 @@ function seededApplicationReference(
 }
 
 function paymentStatus(scenario: WorkflowScenario): PaymentStatus {
-  if (
-    scenario === 'WAITING_PAYMENT_CONFIRMATION' ||
-    scenario === 'CANCELLED'
-  ) {
+  if (scenario === 'WAITING_PAYMENT_CONFIRMATION' || scenario === 'CANCELLED') {
     return PaymentStatus.PENDING;
   }
   return PaymentStatus.CONFIRMED;
@@ -283,6 +288,51 @@ async function createCanonicalWorkflowTimeline(
   await events.save(timeline);
 }
 
+async function createCanonicalStatusHistory(
+  manager: EntityManager,
+  application: RenewalApplication,
+  workflow: WorkflowScenario,
+  milestones: WorkflowMilestones,
+  admin: User,
+): Promise<void> {
+  if (workflow === 'DRAFT') return;
+  const status = WORKFLOW_APPLICATION_STATUS[workflow];
+  const previousStatus: Record<ApplicationStatus, ApplicationStatus | null> = {
+    [ApplicationStatus.DRAFT]: null,
+    [ApplicationStatus.SUBMITTED]: ApplicationStatus.DRAFT,
+    [ApplicationStatus.UNDER_REVIEW]: ApplicationStatus.APPROVED,
+    [ApplicationStatus.CORRECTION_REQUIRED]: ApplicationStatus.UNDER_REVIEW,
+    [ApplicationStatus.APPROVED]: ApplicationStatus.SUBMITTED,
+    [ApplicationStatus.REJECTED]: ApplicationStatus.UNDER_REVIEW,
+    [ApplicationStatus.INSPECTION_FAILED]: ApplicationStatus.APPROVED,
+    [ApplicationStatus.EXPIRED]: ApplicationStatus.SUBMITTED,
+    [ApplicationStatus.CANCELLED]: ApplicationStatus.SUBMITTED,
+    [ApplicationStatus.COMPLETED]: ApplicationStatus.APPROVED,
+  };
+  const occurredAt: Record<ApplicationStatus, Date> = {
+    [ApplicationStatus.DRAFT]: milestones.submitted,
+    [ApplicationStatus.SUBMITTED]: milestones.submitted,
+    [ApplicationStatus.UNDER_REVIEW]: milestones.documents,
+    [ApplicationStatus.CORRECTION_REQUIRED]: milestones.documents,
+    [ApplicationStatus.APPROVED]: milestones.payment,
+    [ApplicationStatus.REJECTED]: milestones.documents,
+    [ApplicationStatus.INSPECTION_FAILED]: milestones.inspection,
+    [ApplicationStatus.EXPIRED]: milestones.completed,
+    [ApplicationStatus.CANCELLED]: milestones.documents,
+    [ApplicationStatus.COMPLETED]: milestones.completed,
+  };
+  await manager.getRepository(RenewalApplicationStatusHistory).save(
+    manager.getRepository(RenewalApplicationStatusHistory).create({
+      applicationId: application.id,
+      previousStatus: previousStatus[status],
+      newStatus: status,
+      changedByUserId: admin.id,
+      reason: null,
+      createdAt: occurredAt[status],
+    }),
+  );
+}
+
 function hasPassedInspection(scenario: WorkflowScenario): boolean {
   return hasInspection(scenario) && scenario !== 'PRIMARY_FAIL_TERMINAL';
 }
@@ -392,7 +442,7 @@ async function createActors(manager: EntityManager) {
     users.create({
       role: UserRole.ADMIN,
       status: UserStatus.ACTIVE,
-      email: 'admin@example.com',
+      email: 'admin@gmail.com',
       phone: '01111111',
       passwordHash,
       phoneVerifiedAt: null,
@@ -404,7 +454,7 @@ async function createActors(manager: EntityManager) {
     users.create({
       role: UserRole.CITIZEN,
       status: UserStatus.ACTIVE,
-      email: 'citizen1@example.com',
+      email: 'citizen1@gmail.com',
       phone: '+85512345678',
       passwordHash,
       phoneVerifiedAt: now,
@@ -414,7 +464,7 @@ async function createActors(manager: EntityManager) {
     users.create({
       role: UserRole.CITIZEN,
       status: UserStatus.ACTIVE,
-      email: 'citizen2@example.com',
+      email: 'citizen2@gmail.com',
       phone: '+85512345679',
       passwordHash,
       phoneVerifiedAt: now,
@@ -736,7 +786,7 @@ async function createInspectionArtifacts(
       status: InspectionStatus.COMPLETED,
       result: passed ? InspectionResult.PASS : InspectionResult.FAIL,
       recordedByUserId: admin.id,
-      startedAt: new Date(completedAt.getTime() - 60 * 60 * 1000),
+      startedAt: addMinutes(completedAt, -15),
       completedAt,
       validUntil,
       validityRule: passed
@@ -767,6 +817,8 @@ async function createInspectionArtifacts(
     vehicle: {
       make: vehicle.make,
       model: vehicle.model,
+      plateProvince: vehicle.plateProvince ?? '',
+      plateNumber: vehicle.plateNumber,
       manufactureYear: vehicle.manufactureYear,
       vehicleType: vehicle.vehicleType,
       colour: vehicle.colour,
@@ -809,7 +861,9 @@ export async function seedRealisticDevelopmentDataset(
   dataSource: DataSource,
 ): Promise<RealisticSeedCounts> {
   const paymentPdf = new PaymentPdfService();
-  const certificatePdf = new CertificatePdfService();
+  const certificatePdf = new CertificatePdfService(
+    new ConfigService({ ...process.env }),
+  );
   const files = new FilesService(
     new ConfigService({
       ...process.env,
@@ -942,6 +996,13 @@ export async function seedRealisticDevelopmentDataset(
                     : null,
               }),
             );
+          await createCanonicalStatusHistory(
+            manager,
+            application,
+            workflow,
+            milestones,
+            admin,
+          );
           await createDocuments(
             manager,
             files,
@@ -1007,8 +1068,8 @@ export async function verifyRealisticDevelopmentDataset(
       (SELECT COUNT(*)::int FROM users WHERE role = 'ADMIN') AS "administrators",
       (SELECT COUNT(*)::int FROM users WHERE role = 'CITIZEN') AS "citizens",
       (SELECT COUNT(*)::int FROM vehicles) AS "vehicles",
-      (SELECT COUNT(*)::int FROM vehicles v JOIN users u ON u.id = v.linked_citizen_id WHERE u.email = 'citizen1@example.com') AS "citizenOneVehicles",
-      (SELECT COUNT(*)::int FROM vehicles v JOIN users u ON u.id = v.linked_citizen_id WHERE u.email = 'citizen2@example.com') AS "citizenTwoVehicles",
+      (SELECT COUNT(*)::int FROM vehicles v JOIN users u ON u.id = v.linked_citizen_id WHERE u.email = 'citizen1@gmail.com') AS "citizenOneVehicles",
+      (SELECT COUNT(*)::int FROM vehicles v JOIN users u ON u.id = v.linked_citizen_id WHERE u.email = 'citizen2@gmail.com') AS "citizenTwoVehicles",
       (SELECT COUNT(*)::int FROM renewal_applications) AS "applications",
       (SELECT COUNT(*)::int FROM inspections) AS "inspections",
       (SELECT COUNT(*)::int FROM stickers) AS "stickers",
@@ -1066,7 +1127,7 @@ export async function verifyRealisticDevelopmentDataset(
         (SELECT COUNT(*) FROM renewal_applications failed
           JOIN vehicles v ON v.id = failed.vehicle_id
           JOIN users u ON u.id = failed.citizen_id
-          WHERE u.email = 'citizen1@example.com' AND v.plate_number = '2AA-1011'
+          WHERE u.email = 'citizen1@gmail.com' AND v.plate_number = '2AA-1011'
             AND failed.status = 'INSPECTION_FAILED') = 1
         AND EXISTS (
           SELECT 1 FROM renewal_applications failed

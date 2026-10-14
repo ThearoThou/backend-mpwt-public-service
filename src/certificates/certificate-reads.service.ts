@@ -21,6 +21,14 @@ export interface CertificatePdfDownload {
   mimeType: 'application/pdf';
 }
 
+export interface PublicCertificateVerification {
+  certificateNumber: string;
+  inspectionDate: Date;
+  expiryDate: string;
+  issuedAt: Date;
+  isValid: boolean;
+}
+
 interface IssuedCertificateFacts {
   certificate: TechnicalInspectionCertificate;
   inspection: Inspection;
@@ -66,6 +74,43 @@ export class CertificateReadsService {
   ): Promise<CertificatePdfDownload> {
     await this.requireApplication(applicationId);
     return this.download(applicationId);
+  }
+
+  async getPublicVerification(
+    certificateNumber: string,
+  ): Promise<PublicCertificateVerification> {
+    const normalizedNumber = certificateNumber.trim();
+    if (normalizedNumber === '' || normalizedNumber.length > 100) {
+      throw this.notAvailable();
+    }
+
+    const certificate = await this.certificates.findOne({
+      where: { certificateNumber: normalizedNumber },
+    });
+    if (certificate === null) throw this.notAvailable();
+
+    const inspection = await this.inspections.findOne({
+      where: { id: certificate.inspectionId },
+    });
+    if (
+      inspection === null ||
+      inspection.applicationId !== certificate.applicationId ||
+      inspection.attemptNumber !== 1 ||
+      inspection.status !== InspectionStatus.COMPLETED ||
+      inspection.result !== InspectionResult.PASS ||
+      inspection.completedAt === null ||
+      inspection.validUntil === null
+    ) {
+      throw this.notAvailable();
+    }
+
+    return {
+      certificateNumber: certificate.certificateNumber,
+      inspectionDate: inspection.completedAt,
+      expiryDate: inspection.validUntil,
+      issuedAt: certificate.issuedAt,
+      isValid: inspection.validUntil >= cambodiaToday(),
+    };
   }
 
   private async status(
@@ -186,12 +231,24 @@ export class CertificateReadsService {
   }
 }
 
+function cambodiaToday(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Phnom_Penh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
 export function certificateDownloadFilename(certificateNumber: string): string {
   const safeNumber = certificateNumber
     .replace(/[^A-Za-z0-9._-]+/g, '_')
     .replace(/_+/g, '_')
     .replace(/^[._-]+|[._-]+$/g, '');
   return safeNumber === ''
-    ? 'technical-inspection-certificate.pdf'
-    : `technical-inspection-certificate-${safeNumber}.pdf`;
+    ? 'វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត.pdf'
+    : `វិញ្ញាបនបត្រត្រួតពិនិត្យលក្ខណៈបច្ចេកទេសយានយន្ត_${safeNumber}.pdf`;
 }

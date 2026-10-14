@@ -33,7 +33,8 @@
     "seed:mpwt-inspection-category-reference": "node -r ts-node/register scripts/seed-mpwt-inspection-category-reference.ts",
     "reset:dev-pending-payment": "node -r ts-node/register scripts/reset-pending-payment-invoice.ts",
     "seed:local-inspection-stations": "node -r ts-node/register scripts/seed-local-inspection-stations.ts",
-    "seed:cambodia-public-holidays": "node -r ts-node/register scripts/seed-cambodia-public-holidays.ts"
+    "seed:cambodia-public-holidays": "node -r ts-node/register scripts/seed-cambodia-public-holidays.ts",
+    "refresh:issued-certificate-artifacts": "node -r ts-node/register scripts/refresh-issued-certificate-artifacts.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -43,6 +44,7 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.1.3",
     "@nestjs/typeorm": "^11.0.3",
+    "@types/qrcode": "^1.5.6",
     "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -50,6 +52,7 @@
     "dotenv": "^17.4.2",
     "pg": "^8.22.0",
     "puppeteer": "^25.6.0",
+    "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "typeorm": "^1.1.0"

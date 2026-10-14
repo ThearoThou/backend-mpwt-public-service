@@ -17,6 +17,7 @@ export function configureApiApplication(
   app.enableCors({
     origin: frontendOrigin,
     credentials: true,
+    exposedHeaders: ['Content-Disposition'],
   });
 
   app.setGlobalPrefix(normalizeApiPrefix(apiPrefix));

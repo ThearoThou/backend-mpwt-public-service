@@ -142,7 +142,7 @@ export class CertificateIssuanceService {
             'Vehicle not found',
           );
         }
-        const pdfInput = this.pdfInput(
+        const pdfInput = createCertificatePdfInput(
           application,
           inspection,
           certificateNumber,
@@ -258,46 +258,6 @@ export class CertificateIssuanceService {
     return clock.now;
   }
 
-  private pdfInput(
-    application: RenewalApplication,
-    inspection: Inspection,
-    certificateNumber: string,
-    issuedAt: Date,
-  ): CertificatePdfInput {
-    const snapshot = application.vehicleSnapshot;
-    return {
-      certificate: { certificateNumber, issuedAt },
-      inspection: {
-        completedAt: inspection.completedAt as Date,
-        validUntil: inspection.validUntil as string,
-      },
-      vehicle: {
-        make: snapshotText(snapshot, 'make') ?? '',
-        model: snapshotText(snapshot, 'model') ?? '',
-        manufactureYear: snapshotNumber(snapshot, 'manufactureYear'),
-        vehicleType: snapshotText(snapshot, 'vehicleType') ?? '',
-        colour: snapshotText(snapshot, 'colour'),
-        engineNumber: snapshotText(snapshot, 'engineNumber'),
-        chassisNumber: snapshotText(snapshot, 'chassisNumber') ?? '',
-        numberOfCylinders: snapshotNumber(snapshot, 'numberOfCylinders'),
-        engineDisplacementCc: snapshotNumber(snapshot, 'engineDisplacementCc'),
-        enginePowerHp: snapshotText(snapshot, 'enginePowerHp'),
-        fuelType: snapshotText(snapshot, 'fuelType'),
-        numberOfSeats: snapshotNumber(snapshot, 'numberOfSeats'),
-        numberOfAxles: snapshotNumber(snapshot, 'numberOfAxles'),
-        steering: snapshotText(snapshot, 'steering'),
-        vehicleWeightKg: snapshotNumber(snapshot, 'vehicleWeightKg'),
-        maximumLoadKg: snapshotNumber(snapshot, 'maximumLoadKg'),
-        maximumGrossWeightKg: snapshotNumber(snapshot, 'maximumGrossWeightKg'),
-        wheelSize: snapshotText(snapshot, 'wheelSize'),
-        lengthMm: snapshotNumber(snapshot, 'lengthMm'),
-        widthMm: snapshotNumber(snapshot, 'widthMm'),
-        heightMm: snapshotNumber(snapshot, 'heightMm'),
-      },
-      note: null,
-    };
-  }
-
   private mapError(error: unknown): never {
     if (error instanceof DomainException) throw error;
     if (error instanceof QueryFailedError) {
@@ -367,6 +327,48 @@ export function generateCertificateNumber(
     randomInt(1_000_000_000_000, 10_000_000_000_000),
 ): string {
   return nextNumber().toString().padStart(13, '0');
+}
+
+export function createCertificatePdfInput(
+  application: RenewalApplication,
+  inspection: Inspection,
+  certificateNumber: string,
+  issuedAt: Date,
+): CertificatePdfInput {
+  const snapshot = application.vehicleSnapshot;
+  return {
+    certificate: { certificateNumber, issuedAt },
+    inspection: {
+      completedAt: inspection.completedAt as Date,
+      validUntil: inspection.validUntil as string,
+    },
+    vehicle: {
+      make: snapshotText(snapshot, 'make') ?? '',
+      model: snapshotText(snapshot, 'model') ?? '',
+      plateProvince: snapshotText(snapshot, 'plateProvince') ?? '',
+      plateNumber: snapshotText(snapshot, 'plateNumber') ?? '',
+      manufactureYear: snapshotNumber(snapshot, 'manufactureYear'),
+      vehicleType: snapshotText(snapshot, 'vehicleType') ?? '',
+      colour: snapshotText(snapshot, 'colour'),
+      engineNumber: snapshotText(snapshot, 'engineNumber'),
+      chassisNumber: snapshotText(snapshot, 'chassisNumber') ?? '',
+      numberOfCylinders: snapshotNumber(snapshot, 'numberOfCylinders'),
+      engineDisplacementCc: snapshotNumber(snapshot, 'engineDisplacementCc'),
+      enginePowerHp: snapshotText(snapshot, 'enginePowerHp'),
+      fuelType: snapshotText(snapshot, 'fuelType'),
+      numberOfSeats: snapshotNumber(snapshot, 'numberOfSeats'),
+      numberOfAxles: snapshotNumber(snapshot, 'numberOfAxles'),
+      steering: snapshotText(snapshot, 'steering'),
+      vehicleWeightKg: snapshotNumber(snapshot, 'vehicleWeightKg'),
+      maximumLoadKg: snapshotNumber(snapshot, 'maximumLoadKg'),
+      maximumGrossWeightKg: snapshotNumber(snapshot, 'maximumGrossWeightKg'),
+      wheelSize: snapshotText(snapshot, 'wheelSize'),
+      lengthMm: snapshotNumber(snapshot, 'lengthMm'),
+      widthMm: snapshotNumber(snapshot, 'widthMm'),
+      heightMm: snapshotNumber(snapshot, 'heightMm'),
+    },
+    note: null,
+  };
 }
 
 function snapshotText(

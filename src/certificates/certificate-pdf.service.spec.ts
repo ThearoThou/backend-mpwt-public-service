@@ -4,6 +4,7 @@ import {
   formatCambodiaDate,
   formatFrozenDate,
   formatMillimetresAsMetres,
+  formatPrintedPlate,
   formatPrintedMark,
   formatVehicleType,
 } from './certificate-pdf.service';
@@ -32,7 +33,9 @@ describe('CertificatePdfService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     html = '';
-    service = new TestCertificatePdfService();
+    service = new TestCertificatePdfService({
+      getOrThrow: jest.fn().mockReturnValue('http://localhost:3001'),
+    } as never);
     launch.mockResolvedValue({ newPage, close: browserClose });
     newPage.mockResolvedValue({
       setContent,
@@ -61,10 +64,10 @@ describe('CertificatePdfService', () => {
     );
     expect(html).toContain('@page { size: A4 portrait;');
     for (const value of [
-      '2299922916447',
+      'Phnom Penh 2AB-1234',
       '10-09-2026',
       '09-12-2030',
-      'HYUNDAI',
+      'HYUNDAI STARIA',
       'Passenger van',
       'White',
       '2022',
@@ -91,14 +94,14 @@ describe('CertificatePdfService', () => {
     expect(pageClose).toHaveBeenCalledTimes(1);
   });
 
-  it('HTML-escapes dynamic values and renders an explicit Khmer note', () => {
+  it('HTML-escapes dynamic values and renders an explicit Khmer note', async () => {
     const input = realisticInput();
     input.certificate.certificateNumber = `A<&>"'`;
     input.vehicle.make = '<script>unsafe</script>';
     input.vehicle.vehicleType = 'Van & Bus';
     input.note = 'សម្គាល់ <ពិនិត្យ>';
 
-    const rendered = service.renderHtml(input);
+    const rendered = await service.renderHtml(input);
 
     expect(rendered).toContain('A&lt;&amp;&gt;&quot;&#39;');
     expect(rendered).toContain('&lt;script&gt;unsafe&lt;/script&gt;');
@@ -106,6 +109,8 @@ describe('CertificatePdfService', () => {
     expect(rendered).toContain('សម្គាល់ &lt;ពិនិត្យ&gt;');
     expect(rendered).not.toContain('<script>unsafe</script>');
     expect(rendered).toContain('data:font/ttf;base64,');
+    expect(rendered).toContain('data:font/woff2;base64,');
+    expect(rendered).toContain('Certificate verification QR placement');
   });
 
   it('rejects missing mandatory values before opening a browser', async () => {
@@ -142,7 +147,8 @@ describe('certificate PDF formatting', () => {
   });
 
   it('isolates the current Mark and vehicle-type assumptions', () => {
-    expect(formatPrintedMark('HYUNDAI', 'STARIA')).toBe('HYUNDAI');
+    expect(formatPrintedMark('HYUNDAI', 'STARIA')).toBe('HYUNDAI STARIA');
+    expect(formatPrintedPlate('ភ្នំពេញ', '2AA-1007')).toBe('ភ្នំពេញ 2AA-1007');
     expect(formatVehicleType('PASSENGER_VAN')).toBe('Passenger van');
   });
 });
@@ -160,6 +166,8 @@ export function realisticInput(): CertificatePdfInput {
     vehicle: {
       make: 'HYUNDAI',
       model: 'STARIA',
+      plateProvince: 'Phnom Penh',
+      plateNumber: '2AB-1234',
       manufactureYear: 2022,
       vehicleType: 'PASSENGER_VAN',
       colour: 'White',

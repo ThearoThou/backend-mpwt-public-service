@@ -78,7 +78,7 @@ describe('CitizenCertificatesController', () => {
     );
     expect(response.setHeader).toHaveBeenCalledWith(
       'Content-Disposition',
-      'attachment; filename="technical-inspection-certificate-CERT_unsafe.pdf"',
+      `attachment; filename="technical-inspection-certificate.pdf"; filename*=UTF-8''technical-inspection-certificate-CERT_unsafe.pdf`,
     );
     expect(streamed).toBeDefined();
   });

@@ -1,5 +1,4 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { DataSource, EntityManager } from 'typeorm';
@@ -16,6 +15,7 @@ import {
 import { AuthHashingService } from './auth-hashing.service';
 import { EmailDomainValidationService } from './email-domain-validation.service';
 import { AuthTokenService } from './auth-token.service';
+import { EmailOtpService } from './email-otp.service';
 import {
   LoginRequestDto,
   PasswordResetConfirmRequestDto,
@@ -71,8 +71,8 @@ export class AuthService {
     private readonly authTokenService: AuthTokenService,
     private readonly refreshSessionService: RefreshSessionService,
     private readonly passwordResetAuthorizationService: PasswordResetAuthorizationService,
-    private readonly configService: ConfigService,
     private readonly emailDomainValidationService: EmailDomainValidationService,
+    private readonly emailOtpService: EmailOtpService,
   ) {}
 
   async register(
@@ -126,7 +126,7 @@ export class AuthService {
           },
           manager,
         );
-        return this.issueRegistrationVerification(
+      return this.issueRegistrationVerification(
           user,
           identifiers.verificationIdentifier,
           expiresInSeconds,
@@ -308,13 +308,16 @@ export class AuthService {
       purpose: VerificationPurpose.RESET_PASSWORD,
     });
 
-    return {
-      ...createRegistrationResponse({
-        developmentCode: this.exposedDevelopmentCode(generatedCode.code),
-        purpose: VerificationPurpose.RESET_PASSWORD,
-      }),
-      expiresInSeconds,
-    };
+    if (identifier.includes('@')) {
+      await this.emailOtpService.send(
+        identifier,
+        generatedCode.code,
+        VerificationPurpose.RESET_PASSWORD,
+        expiresInSeconds,
+      );
+    }
+
+    return { ...createRegistrationResponse(), expiresInSeconds };
   }
 
   async changePassword(
@@ -715,9 +718,16 @@ export class AuthService {
       }
     }
 
+    const destination = user.email ?? submittedEmail ?? user.phone;
+
+    if (user.email === null && submittedEmail !== null) {
+      user.email = submittedEmail;
+      await manager.getRepository(User).save(user);
+    }
+
     return this.issueRegistrationVerification(
       user,
-      user.phone,
+      destination,
       expiresInSeconds,
       manager,
       true,
@@ -742,10 +752,18 @@ export class AuthService {
       now,
     );
 
+    if (destination.includes('@')) {
+      await this.emailOtpService.send(
+        destination,
+        generatedCode.code,
+        VerificationPurpose.REGISTER_ACCOUNT,
+        expiresInSeconds,
+      );
+    }
+
     return {
       ...createRegistrationResponse({
         destination: includeDestinationHint ? destination : null,
-        developmentCode: this.exposedDevelopmentCode(generatedCode.code),
       }),
       expiresInSeconds,
     };
@@ -773,15 +791,6 @@ export class AuthService {
 
       throw error;
     }
-  }
-
-  private exposedDevelopmentCode(code: string): string | undefined {
-    return this.configService.getOrThrow<string>('NODE_ENV') !== 'production' &&
-      this.configService.getOrThrow<boolean>(
-        'EXPOSE_DEVELOPMENT_VERIFICATION_CODE',
-      )
-      ? code
-      : undefined;
   }
 
   private getDummyPasswordHash(): Promise<string> {
